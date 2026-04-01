@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+.DS_Store
+*.log
+*.db
+Video Organizer.app/Contents/MacOS/
