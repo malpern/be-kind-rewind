@@ -6,14 +6,18 @@ struct AllVideosGridView: View {
     @Bindable var displaySettings: DisplaySettings
     @State private var sections: [TopicSection] = []
     @State private var allVideoIds: [String] = [] // Flat list for keyboard navigation
-    @State private var selectedVideoId: String?
+    private var selectedVideoId: String? {
+        get { store.selectedVideoId }
+        nonmutating set { store.selectedVideoId = newValue }
+    }
     @State private var containerWidth: CGFloat = 800
     @FocusState private var isFocused: Bool
 
     private var gridColumns: [GridItem] {
         let min = displaySettings.thumbnailSize
         let max = displaySettings.thumbnailSize + 60
-        return [GridItem(.adaptive(minimum: min, maximum: max), spacing: 16)]
+        let spacing: CGFloat = displaySettings.showMetadata ? 16 : 4
+        return [GridItem(.adaptive(minimum: min, maximum: max), spacing: spacing)]
     }
 
     /// Estimated number of columns based on container width and thumbnail size
@@ -83,13 +87,13 @@ struct AllVideosGridView: View {
     @ViewBuilder
     private func sectionView(_ section: TopicSection, proxy: ScrollViewProxy) -> some View {
         Section {
-            LazyVGrid(columns: gridColumns, spacing: 16) {
+            LazyVGrid(columns: gridColumns, spacing: displaySettings.showMetadata ? 16 : 4) {
                 ForEach(section.videos) { video in
-                    Button { selectVideo(video.id, proxy: proxy) } label: {
-                        VideoGridItem(video: video, isSelected: selectedVideoId == video.id, cacheDir: thumbnailCache.cacheDirURL, showChannel: displaySettings.showChannelName, showChannelIcon: displaySettings.showChannelIcon, size: displaySettings.thumbnailSize)
+                    VideoCardWrapper(video: video, isSelected: selectedVideoId == video.id, cacheDir: thumbnailCache.cacheDirURL, displaySettings: displaySettings, store: store) {
+                        selectVideo(video.id, proxy: proxy)
+                    } onDoubleClick: {
+                        openOnYouTube(video)
                     }
-                    .buttonStyle(.plain)
-                    .onDoubleClick { openOnYouTube(video) }
                     .id(video.id)
                     .contextMenu { videoContextMenu(for: video, topicId: section.topicId) }
                 }
@@ -136,7 +140,11 @@ struct AllVideosGridView: View {
                     id: v.videoId,
                     title: v.title,
                     channelName: v.channelName,
-                    thumbnailUrl: v.thumbnailUrl
+                    thumbnailUrl: v.thumbnailUrl,
+                    viewCount: v.viewCount,
+                    publishedAt: v.publishedAt,
+                    duration: v.duration,
+                    channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) }
                 )
             }
             if !videos.isEmpty {
@@ -257,17 +265,61 @@ private struct SectionHeaderView: View {
     }
 }
 
+// MARK: - Card Wrapper (owns hover state above the NSView overlay)
+
+private struct VideoCardWrapper: View {
+    let video: VideoGridItemModel
+    let isSelected: Bool
+    let cacheDir: URL
+    let displaySettings: DisplaySettings
+    let store: OrganizerStore
+    let onTap: () -> Void
+    let onDoubleClick: () -> Void
+
+    @State private var isHovering = false
+    @State private var hoverOffTask: Task<Void, Never>?
+
+    var body: some View {
+        VideoGridItem(video: video, isSelected: isSelected, isHovering: isHovering, cacheDir: cacheDir, showMetadata: displaySettings.showMetadata, size: displaySettings.thumbnailSize)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded { onDoubleClick() }
+            )
+            .simultaneousGesture(
+                TapGesture(count: 1).onEnded { onTap() }
+            )
+            .onHover { hovering in
+            if hovering {
+                hoverOffTask?.cancel()
+                hoverOffTask = nil
+                isHovering = true
+                store.hoveredVideoId = video.id
+            } else {
+                hoverOffTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        isHovering = false
+                    }
+                    if store.hoveredVideoId == video.id {
+                        store.hoveredVideoId = nil
+                    }
+                }
+            }
+        }
+        .cursor(.pointingHand)
+    }
+}
+
 // MARK: - Grid Item
 
 struct VideoGridItem: View {
     let video: VideoGridItemModel
     let isSelected: Bool
+    let isHovering: Bool
     let cacheDir: URL
-    let showChannel: Bool
-    let showChannelIcon: Bool
+    let showMetadata: Bool
     let size: Double
-
-    @State private var isHovering = false
 
     private var cachedImage: NSImage? {
         let path = cacheDir.appendingPathComponent("\(video.id).jpg")
@@ -289,61 +341,120 @@ struct VideoGridItem: View {
         return .subheadline
     }
 
-    private var titleHeight: CGFloat {
-        if size < 160 { return 22 }
-        if size < 220 { return 32 }
-        if size < 300 { return 38 }
-        return 44
+    private var cornerRadius: CGFloat {
+        if size < 160 { return 8 }
+        if size < 300 { return 10 }
+        return 12
     }
 
-    private var cornerRadius: CGFloat {
-        if size < 160 { return 4 }
-        if size < 300 { return 6 }
-        return 8
+    private var metadataFont: Font {
+        if size < 160 { return .system(size: 8) }
+        if size < 220 { return .caption2 }
+        if size < 300 { return .caption }
+        return .subheadline
+    }
+
+    private var metadataLine: String? {
+        var parts: [String] = []
+        if let views = video.viewCount {
+            parts.append(views)
+        }
+        if let date = video.publishedAt {
+            parts.append(date)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private var channelIconSize: CGFloat {
+        if size < 160 { return 16 }
+        if size < 220 { return 22 }
+        if size < 300 { return 28 }
+        return 32
+    }
+
+    private var cardPadding: CGFloat {
+        if size < 160 { return 6 }
+        if size < 220 { return 8 }
+        return 12
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: size < 200 ? 3 : 6) {
-            thumbnailView
-                .aspectRatio(16/9, contentMode: .fit)
-                .clipShape(.rect(cornerRadius: cornerRadius))
-                .overlay {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: cornerRadius)
-                            .stroke(Color.accentColor, lineWidth: size < 200 ? 2 : 3)
-                    } else if isHovering {
-                        RoundedRectangle(cornerRadius: cornerRadius)
-                            .stroke(Color.primary.opacity(0.3), lineWidth: 1.5)
-                    }
+        VStack(alignment: .leading, spacing: showMetadata ? (size < 200 ? 4 : 8) : 0) {
+            // Thumbnail with duration badge and compact hover overlay
+            ZStack(alignment: .bottomTrailing) {
+                thumbnailView
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .clipShape(.rect(cornerRadius: cornerRadius))
+                    .scaleEffect(isHovering ? 1.01 : 1.0)
+                if let duration = video.duration {
+                    Text(duration)
+                        .font(.system(size: size < 200 ? 8 : 10, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 3))
+                        .padding(size < 200 ? 3 : 5)
                 }
-                .shadow(color: isHovering ? .black.opacity(0.15) : .clear, radius: 4, y: 2)
-                .scaleEffect(isHovering ? 1.02 : 1.0)
+            }
 
-            Text(video.title)
-                .font(titleFont)
-                .lineLimit(2)
-                .frame(height: titleHeight, alignment: .top)
+            if showMetadata {
+                // YouTube-style: channel icon left, text block right
+                HStack(alignment: .top, spacing: size < 200 ? 6 : 10) {
+                    channelIconView
+                        .frame(width: channelIconSize, height: channelIconSize)
+                        .clipShape(Circle())
 
-            if showChannel, let channel = video.channelName {
-                HStack(spacing: 3) {
-                    if showChannelIcon {
-                        Image(systemName: "person.circle.fill")
-                            .font(channelFont)
-                            .foregroundStyle(.tertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(video.title)
+                            .font(titleFont)
+                            .lineLimit(2)
+
+                        if let channel = video.channelName {
+                            Text(channel)
+                                .font(channelFont)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        if let meta = metadataLine {
+                            Text(meta)
+                                .font(metadataFont)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
                     }
-                    Text(channel)
-                        .font(channelFont)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
             }
         }
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                isHovering = hovering
+        .padding(showMetadata ? cardPadding : 2)
+        .background(
+            RoundedRectangle(cornerRadius: showMetadata ? cornerRadius + 6 : cornerRadius + 2, style: .continuous)
+                .fill(Color.white.opacity(isHovering || isSelected ? 0.08 : 0))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: showMetadata ? cornerRadius + 6 : cornerRadius + 2, style: .continuous)
+                .stroke(Color.accentColor, lineWidth: isSelected ? 2 : 0)
+        )
+        .help(video.title)
+    }
+
+    @ViewBuilder
+    private var channelIconView: some View {
+        if let iconUrl = video.channelIconUrl {
+            AsyncImage(url: iconUrl) { phase in
+                if case .success(let image) = phase {
+                    image.resizable()
+                } else {
+                    Image(systemName: "person.circle.fill")
+                        .resizable()
+                        .foregroundStyle(.tertiary)
+                }
             }
+        } else {
+            Image(systemName: "person.circle.fill")
+                .resizable()
+                .foregroundStyle(.tertiary)
         }
-        .cursor(.pointingHand)
     }
 
     @ViewBuilder
@@ -399,6 +510,10 @@ struct VideoGridItemModel: Identifiable, Equatable {
     let title: String
     let channelName: String?
     let thumbnailUrl: URL?
+    let viewCount: String?
+    let publishedAt: String?
+    let duration: String?
+    let channelIconUrl: URL?
 }
 
 // MARK: - Double Click Modifier
@@ -429,11 +544,14 @@ private struct DoubleClickView: NSViewRepresentable {
 
 private class DoubleClickNSView: NSView {
     var action: (() -> Void)?
+    var singleClickAction: (() -> Void)?
 
     override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
         if event.clickCount == 2 {
             action?()
+        } else {
+            // Let the next responder (SwiftUI Button) handle single clicks
+            nextResponder?.mouseDown(with: event)
         }
     }
 }

@@ -14,7 +14,8 @@ final class OrganizerStore {
 
     // Selected state
     var selectedTopicId: Int64?
-    var selectedVideoIds: Set<String> = []
+    var selectedVideoId: String?
+    var hoveredVideoId: String?
 
     private let store: TopicStore
     private let suggester: TopicSuggester?
@@ -51,13 +52,63 @@ final class OrganizerStore {
                     channelName: $0.channelName,
                     videoUrl: $0.videoUrl,
                     sourceIndex: $0.sourceIndex,
-                    topicId: $0.topicId
+                    topicId: $0.topicId,
+                    viewCount: $0.viewCount,
+                    publishedAt: $0.publishedAt,
+                    duration: $0.duration,
+                    channelIconUrl: $0.channelIconUrl
                 )
             }
         } catch {
             errorMessage = error.localizedDescription
             return []
         }
+    }
+
+    /// The video currently shown in the inspector — hovered takes priority, else selected.
+    var inspectedVideoId: String? {
+        hoveredVideoId ?? selectedVideoId
+    }
+
+    /// Look up a video view model by ID.
+    func videoById(_ videoId: String) -> VideoViewModel? {
+        for topic in topics {
+            if let video = videosForTopic(topic.id).first(where: { $0.videoId == videoId }) {
+                return video
+            }
+        }
+        return nil
+    }
+
+    /// The video shown in the inspector.
+    var inspectedVideo: VideoViewModel? {
+        inspectedVideoId.flatMap { videoById($0) }
+    }
+
+    /// Topic name for a given video ID.
+    func topicNameForVideo(_ videoId: String) -> String? {
+        for topic in topics {
+            if videosForTopic(topic.id).contains(where: { $0.videoId == videoId }) {
+                return topic.name
+            }
+        }
+        return nil
+    }
+
+    /// Other videos from the same channel, within our library.
+    func moreFromChannel(videoId: String, limit: Int = 6) -> [VideoViewModel] {
+        guard let video = videoById(videoId),
+              let channel = video.channelName else { return [] }
+        var results: [VideoViewModel] = []
+        for topic in topics {
+            for v in videosForTopic(topic.id) {
+                if v.channelName == channel && v.videoId != videoId {
+                    results.append(v)
+                    if results.count >= limit { return results }
+                }
+            }
+        }
+        return results
     }
 
     // MARK: - Topic Operations
@@ -105,7 +156,7 @@ final class OrganizerStore {
             for vid in videoIds {
                 try store.assignVideo(videoId: vid, toTopic: toTopicId)
             }
-            selectedVideoIds = []
+            selectedVideoId = nil
             loadTopics()
         } catch {
             errorMessage = error.localizedDescription
@@ -168,6 +219,10 @@ struct VideoViewModel: Identifiable, Hashable {
     let videoUrl: String?
     let sourceIndex: Int
     let topicId: Int64?
+    let viewCount: String?
+    let publishedAt: String?
+    let duration: String?
+    let channelIconUrl: String?
 
     var id: String { videoId }
 

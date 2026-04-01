@@ -48,7 +48,7 @@ struct TopicSidebar: View {
             }
         }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Filter topics")
-        .navigationTitle("Video Organizer")
+        .navigationTitle("Be Kind, Rewind")
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button { showingSettings.toggle() } label: {
@@ -113,8 +113,7 @@ private struct SettingsPopover: View {
 
             Divider()
 
-            Toggle("Show channel name", isOn: $displaySettings.showChannelName)
-            Toggle("Show channel icon", isOn: $displaySettings.showChannelIcon)
+            Toggle("Show video metadata", isOn: $displaySettings.showMetadata.animation(.easeInOut(duration: 0.25)))
         }
         .padding(16)
         .frame(width: 260)

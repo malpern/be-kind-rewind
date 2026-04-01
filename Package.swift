@@ -30,7 +30,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "VideoOrganizer",
-            dependencies: ["TaggingKit"]
+            dependencies: ["TaggingKit"],
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "TaggingKitTests",

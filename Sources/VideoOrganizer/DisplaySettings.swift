@@ -5,6 +5,10 @@ import Observation
 @Observable
 final class DisplaySettings {
     var thumbnailSize: Double = 220
-    var showChannelName: Bool = true
-    var showChannelIcon: Bool = false
+    var showMetadata: Bool = true {
+        didSet {
+            if !showMetadata { showInspector = true }
+        }
+    }
+    var showInspector: Bool = false
 }

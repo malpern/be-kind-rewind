@@ -22,6 +22,10 @@ public final class TopicStore: Sendable {
     private let videoUrl = SQLite.Expression<String?>("video_url")
     private let videoSourceIndex = SQLite.Expression<Int>("source_index")
     private let videoTopicId = SQLite.Expression<Int64?>("topic_id")
+    private let videoViewCount = SQLite.Expression<String?>("view_count")
+    private let videoPublishedAt = SQLite.Expression<String?>("published_at")
+    private let videoDuration = SQLite.Expression<String?>("duration")
+    private let videoChannelIconUrl = SQLite.Expression<String?>("channel_icon_url")
 
     // Commit log columns
     private let commitId = SQLite.Expression<Int64>("id")
@@ -56,6 +60,22 @@ public final class TopicStore: Sendable {
             t.column(videoSourceIndex)
             t.column(videoTopicId, references: topics, topicId)
         })
+
+        // Migrate: add metadata columns if missing
+        let tableInfo = try db.prepare("PRAGMA table_info(videos)")
+        let existingColumns = Set(tableInfo.map { $0[1] as! String })
+        if !existingColumns.contains("view_count") {
+            try db.run("ALTER TABLE videos ADD COLUMN view_count TEXT")
+        }
+        if !existingColumns.contains("published_at") {
+            try db.run("ALTER TABLE videos ADD COLUMN published_at TEXT")
+        }
+        if !existingColumns.contains("duration") {
+            try db.run("ALTER TABLE videos ADD COLUMN duration TEXT")
+        }
+        if !existingColumns.contains("channel_icon_url") {
+            try db.run("ALTER TABLE videos ADD COLUMN channel_icon_url TEXT")
+        }
 
         try db.run(commitLog.create(ifNotExists: true) { t in
             t.column(commitId, primaryKey: .autoincrement)
@@ -153,7 +173,11 @@ public final class TopicStore: Sendable {
                 channelName: row[videoChannel],
                 videoUrl: row[videoUrl],
                 sourceIndex: row[videoSourceIndex],
-                topicId: row[videoTopicId]
+                topicId: row[videoTopicId],
+                viewCount: row[videoViewCount],
+                publishedAt: row[videoPublishedAt],
+                duration: row[videoDuration],
+                channelIconUrl: row[videoChannelIconUrl]
             )
         }
     }
@@ -169,7 +193,11 @@ public final class TopicStore: Sendable {
                 channelName: row[videoChannel],
                 videoUrl: row[videoUrl],
                 sourceIndex: row[videoSourceIndex],
-                topicId: row[videoTopicId]
+                topicId: row[videoTopicId],
+                viewCount: row[videoViewCount],
+                publishedAt: row[videoPublishedAt],
+                duration: row[videoDuration],
+                channelIconUrl: row[videoChannelIconUrl]
             )
         }
     }
@@ -198,6 +226,27 @@ public final class TopicStore: Sendable {
 
     public func totalVideoCount() throws -> Int {
         try db.scalar(videos.count)
+    }
+
+    // MARK: - Video Metadata
+
+    /// Returns video IDs that are missing metadata (view_count is NULL).
+    public func videoIdsMissingMetadata() throws -> [String] {
+        try db.prepare(videos.filter(videoViewCount == nil as String?).select(videoId)).map { $0[videoId] }
+    }
+
+    /// Returns all video IDs.
+    public func allVideoIds() throws -> [String] {
+        try db.prepare(videos.select(videoId)).map { $0[videoId] }
+    }
+
+    public func updateVideoMetadata(videoId vid: String, viewCount: String?, publishedAt: String?, duration: String?, channelIconUrl: String? = nil) throws {
+        try db.run(videos.filter(videoId == vid).update(
+            videoViewCount <- viewCount,
+            videoPublishedAt <- publishedAt,
+            videoDuration <- duration,
+            videoChannelIconUrl <- channelIconUrl
+        ))
     }
 
     // MARK: - Commit Table
@@ -247,6 +296,10 @@ public struct StoredVideo: Sendable {
     public let videoUrl: String?
     public let sourceIndex: Int
     public let topicId: Int64?
+    public let viewCount: String?
+    public let publishedAt: String?
+    public let duration: String?
+    public let channelIconUrl: String?
 }
 
 public struct SyncAction: Sendable {

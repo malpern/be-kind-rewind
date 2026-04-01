@@ -7,9 +7,10 @@ struct VideoOrganizerApp: App {
     @State private var thumbnailCache = ThumbnailCache()
     @State private var displaySettings = DisplaySettings()
     @State private var loadError: String?
+    @State private var showSplash = true
 
     var body: some Scene {
-        WindowGroup("Video Organizer") {
+        WindowGroup("Be Kind, Rewind: Video Organizer") {
             Group {
                 if let store {
                     OrganizerView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
@@ -24,14 +25,50 @@ struct VideoOrganizerApp: App {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    ProgressView("Loading…")
+                    Color.clear
                 }
             }
             .task {
                 await initializeStore()
             }
+            .onAppear {
+                showSplashWindow()
+            }
         }
         .defaultSize(width: 1200, height: 800)
+        Window("About Be Kind, Rewind", id: "about") {
+            AboutView()
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+    }
+
+    private func showSplashWindow() {
+        let splashWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 320),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        splashWindow.isOpaque = false
+        splashWindow.backgroundColor = .clear
+        splashWindow.hasShadow = true
+        splashWindow.level = .floating
+        splashWindow.center()
+        splashWindow.contentView = NSHostingView(rootView: SplashView())
+        splashWindow.makeKeyAndOrderFront(nil)
+
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            await MainActor.run {
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.4
+                    splashWindow.animator().alphaValue = 0
+                }, completionHandler: {
+                    splashWindow.orderOut(nil)
+                })
+            }
+        }
     }
 
     private func initializeStore() async {
@@ -42,7 +79,6 @@ struct VideoOrganizerApp: App {
             newStore.loadTopics()
             store = newStore
 
-            // Prefetch all thumbnails in the background
             let allVideoIds = newStore.topics.flatMap { topic in
                 newStore.videosForTopic(topic.id).compactMap { $0.videoId.isEmpty ? nil : $0.videoId }
             }

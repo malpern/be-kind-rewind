@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app-icon.png" width="128" height="128" alt="Be Kind Rewind app icon" />
+</p>
+
 # Be Kind Rewind 📼
 
 A macOS app for organizing your YouTube video library by topic. Like sorting your VHS collection, but with AI.

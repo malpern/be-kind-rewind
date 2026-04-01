@@ -8,7 +8,7 @@ struct VideoTaggerCommand: AsyncParsableCommand {
         commandName: "video-tagger",
         abstract: "Organize YouTube videos into topics using Claude AI.",
         version: "0.2.0",
-        subcommands: [Suggest.self, Reclassify.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self]
+        subcommands: [Suggest.self, Reclassify.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self]
     )
 }
 
@@ -342,6 +342,84 @@ struct Reclassify: AsyncParsableCommand {
 
         let remaining = try store.unassignedCount()
         print("Assigned \(assignedCount) videos. \(remaining) still unassigned.")
+    }
+}
+
+// MARK: - Backfill Metadata
+
+struct BackfillMetadata: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "backfill-metadata",
+        abstract: "Fetch view count, publish date, and duration from YouTube Data API."
+    )
+
+    @Option(name: .shortAndLong, help: "Path to the SQLite database.")
+    var db: String = "video-tagger.db"
+
+    @Option(name: .long, help: "YouTube/Google API key (or set YOUTUBE_API_KEY / GOOGLE_API_KEY env var).")
+    var apiKey: String?
+
+    @Flag(name: .long, help: "Re-fetch metadata for all videos, not just missing ones.")
+    var all = false
+
+    func run() async throws {
+        let store = try TopicStore(path: db)
+        let youtube: YouTubeClient
+        if let apiKey {
+            youtube = YouTubeClient(apiKey: apiKey)
+        } else {
+            youtube = try YouTubeClient()
+        }
+
+        let ids: [String]
+        if all {
+            ids = try store.allVideoIds()
+            print("Fetching metadata for all \(ids.count) videos...")
+        } else {
+            ids = try store.videoIdsMissingMetadata()
+            if ids.isEmpty {
+                print("All videos already have metadata.")
+                return
+            }
+            print("Fetching metadata for \(ids.count) videos missing metadata...")
+        }
+
+        let metadata = try await youtube.fetchAllVideoMetadata(ids: ids) { batch, total in
+            print("  Batch \(batch)/\(total)...")
+        }
+
+        // Collect unique channel IDs and fetch their icons
+        let channelIds = Array(Set(metadata.compactMap(\.channelId)))
+        var channelIcons: [String: String] = [:]
+        if !channelIds.isEmpty {
+            print("Fetching channel icons for \(channelIds.count) channels...")
+            let iconBatches = stride(from: 0, to: channelIds.count, by: 50).map {
+                Array(channelIds[$0..<min($0 + 50, channelIds.count)])
+            }
+            for batch in iconBatches {
+                let icons = try await youtube.fetchChannelThumbnails(channelIds: batch)
+                channelIcons.merge(icons) { _, new in new }
+            }
+        }
+
+        var updated = 0
+        for m in metadata {
+            let iconUrl = m.channelId.flatMap { channelIcons[$0] }
+            try store.updateVideoMetadata(
+                videoId: m.videoId,
+                viewCount: m.formattedViewCount,
+                publishedAt: m.formattedDate,
+                duration: m.formattedDuration,
+                channelIconUrl: iconUrl
+            )
+            updated += 1
+        }
+
+        let missing = ids.count - updated
+        print("Updated \(updated) videos with metadata and \(channelIcons.count) channel icons.")
+        if missing > 0 {
+            print("\(missing) videos had no YouTube data (possibly deleted/private).")
+        }
     }
 }
 

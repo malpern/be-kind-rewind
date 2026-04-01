@@ -11,6 +11,10 @@ struct OrganizerView: View {
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         } detail: {
             AllVideosGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
+                .inspector(isPresented: $displaySettings.showInspector) {
+                    VideoInspector(store: store, thumbnailCache: thumbnailCache)
+                        .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
+                }
                 .toolbar {
                     ToolbarItemGroup {
                         if store.isLoading {
@@ -25,6 +29,13 @@ struct OrganizerView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+
+                        Button {
+                            displaySettings.showInspector.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.trailing")
+                        }
+                        .help(displaySettings.showInspector ? "Hide Inspector" : "Show Inspector")
                     }
                 }
         }
