@@ -40,7 +40,7 @@ struct VideoInspector: View {
 
                 VStack(alignment: .leading, spacing: 16) {
                     // Title
-                    Text(video.title)
+                    HighlightedText(video.title, terms: store.parsedQuery.includeTerms)
                         .font(.title3.weight(.semibold))
                         .textSelection(.enabled)
 
@@ -58,7 +58,7 @@ struct VideoInspector: View {
                                 .frame(width: 28, height: 28)
                                 .clipShape(Circle())
                             }
-                            Text(channel)
+                            HighlightedText(channel, terms: store.parsedQuery.includeTerms)
                                 .font(.subheadline.weight(.medium))
                                 .foregroundStyle(.secondary)
                         }

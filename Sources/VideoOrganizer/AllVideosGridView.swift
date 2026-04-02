@@ -11,6 +11,8 @@ struct AllVideosGridView: View {
         nonmutating set { store.selectedVideoId = newValue }
     }
     @State private var containerWidth: CGFloat = 800
+    @State private var sectionProgressValues: [Int64: Double] = [:]
+    @State private var viewportHeight: CGFloat = 600
     @FocusState private var isFocused: Bool
 
     private var gridColumns: [GridItem] {
@@ -71,17 +73,29 @@ struct AllVideosGridView: View {
         .onChange(of: store.topics) { _, _ in
             loadSections()
         }
+        .onChange(of: store.searchText) { _, _ in
+            store.searchResultCount = filteredSections.reduce(0) { $0 + $1.videos.count }
+        }
     }
 
     @ViewBuilder
     private func scrollContent(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                ForEach(sections) { section in
+                ForEach(filteredSections) { section in
                     sectionView(section, proxy: proxy)
                 }
             }
         }
+        .coordinateSpace(name: "scroll")
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { viewportHeight = geo.size.height }
+                    .onChange(of: geo.size.height) { _, h in viewportHeight = h }
+            }
+        }
+        .onPreferenceChange(SectionProgressKey.self) { sectionProgressValues = $0 }
     }
 
     @ViewBuilder
@@ -100,12 +114,24 @@ struct AllVideosGridView: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
+            .background {
+                GeometryReader { geo in
+                    let frame = geo.frame(in: .named("scroll"))
+                    let scrolled = -frame.minY
+                    let scrollableDistance = max(frame.height - viewportHeight, 1)
+                    let progress = min(max(scrolled / scrollableDistance, 0), 1)
+                    Color.clear
+                        .preference(key: SectionProgressKey.self, value: [section.topicId: progress])
+                }
+            }
         } header: {
             SectionHeaderView(
                 name: section.topicName,
                 count: section.videos.count,
+                totalCount: section.totalCount,
                 topicId: section.topicId,
-                progress: sectionProgress(for: section)
+                progress: sectionProgressValues[section.topicId] ?? 0,
+                highlightTerms: store.parsedQuery.includeTerms
             )
             .id("header-\(section.topicId)")
         }
@@ -126,6 +152,32 @@ struct AllVideosGridView: View {
            let firstVideo = section.videos.first {
             selectedVideoId = firstVideo.id
         }
+    }
+
+    // MARK: - Search Filtering
+
+    private var filteredSections: [TopicSection] {
+        let query = store.parsedQuery
+        guard !query.isEmpty else { return sections }
+
+        var result: [TopicSection] = []
+        for section in sections {
+            if query.matches(fields: [section.topicName]) {
+                result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: section.videos, totalCount: section.videos.count))
+            } else {
+                let matching = section.videos.filter { video in
+                    query.matches(fields: [video.title, video.channelName ?? "", section.topicName])
+                }
+                if !matching.isEmpty {
+                    result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: matching, totalCount: section.videos.count))
+                }
+            }
+        }
+        return result
+    }
+
+    private var filteredVideoIds: [String] {
+        filteredSections.flatMap { $0.videos.map(\.id) }
     }
 
     // MARK: - Data Loading
@@ -165,10 +217,11 @@ struct AllVideosGridView: View {
     }
 
     private func navigate(by offset: Int, proxy: ScrollViewProxy) {
-        guard !allVideoIds.isEmpty else { return }
-        let currentIndex = selectedVideoId.flatMap { allVideoIds.firstIndex(of: $0) } ?? 0
-        let newIndex = max(0, min(allVideoIds.count - 1, currentIndex + offset))
-        let newId = allVideoIds[newIndex]
+        let ids = filteredVideoIds
+        guard !ids.isEmpty else { return }
+        let currentIndex = selectedVideoId.flatMap { ids.firstIndex(of: $0) } ?? 0
+        let newIndex = max(0, min(ids.count - 1, currentIndex + offset))
+        let newId = ids[newIndex]
         selectedVideoId = newId
         withAnimation {
             proxy.scrollTo(newId, anchor: .center)
@@ -176,25 +229,13 @@ struct AllVideosGridView: View {
     }
 
     private func jumpToEdge(first: Bool, proxy: ScrollViewProxy) {
-        guard !allVideoIds.isEmpty else { return }
-        let id = first ? allVideoIds.first! : allVideoIds.last!
+        let ids = filteredVideoIds
+        guard !ids.isEmpty else { return }
+        let id = first ? ids.first! : ids.last!
         selectedVideoId = id
         withAnimation {
             proxy.scrollTo(id, anchor: first ? .top : .bottom)
         }
-    }
-
-    private func sectionProgress(for section: TopicSection) -> Double {
-        guard let selectedId = selectedVideoId,
-              let index = section.videos.firstIndex(where: { $0.id == selectedId }),
-              section.videos.count > 1 else {
-            // If selection is in this section but no match, check if it's the active section
-            if store.selectedTopicId == section.topicId {
-                return 0
-            }
-            return 0
-        }
-        return Double(index + 1) / Double(section.videos.count)
     }
 
     private func openOnYouTube(_ video: VideoGridItemModel) {
@@ -224,21 +265,29 @@ struct AllVideosGridView: View {
 private struct SectionHeaderView: View {
     let name: String
     let count: Int
+    var totalCount: Int?
     let topicId: Int64
     let progress: Double
+    var highlightTerms: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text(name)
+                HighlightedText(name, terms: highlightTerms)
                     .font(.title3.bold())
 
-                Text("\(count)")
-                    .font(.caption.monospacedDigit().bold())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: Capsule())
+                Group {
+                    if let total = totalCount {
+                        Text("\(count) of \(total)")
+                    } else {
+                        Text("\(count)")
+                    }
+                }
+                .font(.caption.monospacedDigit().bold())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
 
                 Spacer()
             }
@@ -280,7 +329,7 @@ private struct VideoCardWrapper: View {
     @State private var hoverOffTask: Task<Void, Never>?
 
     var body: some View {
-        VideoGridItem(video: video, isSelected: isSelected, isHovering: isHovering, cacheDir: cacheDir, showMetadata: displaySettings.showMetadata, size: displaySettings.thumbnailSize)
+        VideoGridItem(video: video, isSelected: isSelected, isHovering: isHovering, cacheDir: cacheDir, showMetadata: displaySettings.showMetadata, size: displaySettings.thumbnailSize, highlightTerms: store.parsedQuery.includeTerms, forceShowTitle: !store.parsedQuery.isEmpty)
             .contentShape(Rectangle())
             .simultaneousGesture(
                 TapGesture(count: 2).onEnded { onDoubleClick() }
@@ -320,6 +369,8 @@ struct VideoGridItem: View {
     let cacheDir: URL
     let showMetadata: Bool
     let size: Double
+    var highlightTerms: [String] = []
+    var forceShowTitle: Bool = false
 
     private var cachedImage: NSImage? {
         let path = cacheDir.appendingPathComponent("\(video.id).jpg")
@@ -405,12 +456,12 @@ struct VideoGridItem: View {
                         .clipShape(Circle())
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(video.title)
+                        HighlightedText(video.title, terms: highlightTerms)
                             .font(titleFont)
                             .lineLimit(2)
 
                         if let channel = video.channelName {
-                            Text(channel)
+                            HighlightedText(channel, terms: highlightTerms)
                                 .font(channelFont)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -424,6 +475,12 @@ struct VideoGridItem: View {
                         }
                     }
                 }
+            } else if forceShowTitle {
+                // Compact mode during search: show title so user sees why it matched
+                HighlightedText(video.title, terms: highlightTerms)
+                    .font(titleFont)
+                    .lineLimit(2)
+                    .padding(.top, 2)
             }
         }
         .padding(showMetadata ? cardPadding : 2)
@@ -497,12 +554,20 @@ struct TopicSection: Identifiable {
     let topicId: Int64
     let topicName: String
     let videos: [VideoGridItemModel]
+    var totalCount: Int? // non-nil during search = original count
     var id: Int64 { topicId }
 }
 
 private struct ContainerWidthKey: PreferenceKey {
     static let defaultValue: CGFloat = 800
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct SectionProgressKey: PreferenceKey {
+    static let defaultValue: [Int64: Double] = [:]
+    static func reduce(value: inout [Int64: Double], nextValue: () -> [Int64: Double]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
 }
 
 struct VideoGridItemModel: Identifiable, Equatable {

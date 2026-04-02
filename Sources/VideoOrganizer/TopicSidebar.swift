@@ -3,34 +3,46 @@ import SwiftUI
 struct TopicSidebar: View {
     @Bindable var store: OrganizerStore
     @Bindable var displaySettings: DisplaySettings
-    @State private var searchText = ""
     @State private var showingSettings = false
 
     private var filteredTopics: [TopicViewModel] {
-        guard !searchText.isEmpty else { return store.topics }
-        return store.topics.filter { $0.name.localizedStandardContains(searchText) }
+        let query = store.parsedQuery
+        guard !query.isEmpty else { return store.topics }
+        return store.topics.filter { topic in
+            if query.matches(fields: [topic.name]) { return true }
+            let videos = store.videosForTopic(topic.id)
+            return videos.contains { v in
+                query.matches(fields: [v.title, v.channelName ?? "", topic.name])
+            }
+        }
     }
 
     var body: some View {
         List(selection: $store.selectedTopicId) {
             Section {
                 ForEach(filteredTopics) { topic in
-                    TopicRow(topic: topic)
+                    TopicRow(topic: topic, highlightTerms: store.parsedQuery.includeTerms)
                         .tag(topic.id)
                         .contextMenu { contextMenu(for: topic) }
                 }
             } header: {
                 HStack {
-                    Text("\(store.topics.count) Topics")
+                    Text("\(filteredTopics.count) Topics")
                         .font(.subheadline.weight(.medium))
                     Spacer()
-                    Text("\(store.totalVideoCount) videos")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    if store.parsedQuery.isEmpty {
+                        Text("\(store.totalVideoCount) videos")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Text("\(store.searchResultCount) results")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.accentColor)
+                    }
                 }
             }
 
-            if store.unassignedCount > 0 {
+            if store.unassignedCount > 0 && store.parsedQuery.isEmpty {
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "questionmark.folder")
@@ -47,7 +59,7 @@ struct TopicSidebar: View {
                 }
             }
         }
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Filter topics")
+        .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search videos & topics")
         .navigationTitle("Be Kind, Rewind")
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -124,6 +136,7 @@ private struct SettingsPopover: View {
 
 private struct TopicRow: View {
     let topic: TopicViewModel
+    var highlightTerms: [String] = []
 
     var body: some View {
         HStack(spacing: 10) {
@@ -132,7 +145,7 @@ private struct TopicRow: View {
                 .foregroundStyle(iconColor(for: topic.name))
                 .frame(width: 24)
 
-            Text(topic.name)
+            HighlightedText(topic.name, terms: highlightTerms)
                 .lineLimit(1)
 
             Spacer()

@@ -17,6 +17,11 @@ final class OrganizerStore {
     var selectedVideoId: String?
     var hoveredVideoId: String?
 
+    // Search
+    var searchText: String = ""
+    var parsedQuery: SearchQuery { SearchQuery(searchText) }
+    var searchResultCount: Int = 0
+
     private let store: TopicStore
     private let suggester: TopicSuggester?
 
