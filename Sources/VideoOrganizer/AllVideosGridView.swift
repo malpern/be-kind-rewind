@@ -12,8 +12,9 @@ struct AllVideosGridView: View {
         nonmutating set { store.selectedVideoId = newValue }
     }
     @State private var containerWidth: CGFloat = 800
-    @State private var sectionProgressValues: [Int64: Double] = [:]
+    @State private var sectionProgressValues: [String: Double] = [:]
     @State private var viewportHeight: CGFloat = 600
+    @State private var suppressSidebarSync = false
     @FocusState private var isFocused: Bool
 
     private var gridColumns: [GridItem] {
@@ -143,7 +144,7 @@ struct AllVideosGridView: View {
                     let scrollableDistance = max(frame.height - viewportHeight, 1)
                     let progress = min(max(scrolled / scrollableDistance, 0), 1)
                     Color.clear
-                        .preference(key: SectionProgressKey.self, value: [section.topicId: progress])
+                        .preference(key: SectionProgressKey.self, value: [section.id: progress])
                 }
             }
         } header: {
@@ -152,10 +153,10 @@ struct AllVideosGridView: View {
                 count: section.videos.count,
                 totalCount: section.totalCount,
                 topicId: section.topicId,
-                progress: sectionProgressValues[section.topicId] ?? 0,
+                progress: sectionProgressValues[section.id] ?? 0,
                 highlightTerms: store.parsedQuery.includeTerms
             )
-            .id("header-\(section.topicId)")
+            .id("header-\(section.id)")
         }
     }
 
@@ -217,6 +218,15 @@ struct AllVideosGridView: View {
                 result = parseAge(a.publishedAt) < parseAge(b.publishedAt)
             case .duration:
                 result = parseDuration(a.duration) > parseDuration(b.duration)
+            case .creator:
+                let aName = a.channelName ?? ""
+                let bName = b.channelName ?? ""
+                if aName == bName {
+                    // Within same creator, sort by date (newest first)
+                    result = parseAge(a.publishedAt) < parseAge(b.publishedAt)
+                } else {
+                    result = aName.localizedStandardCompare(bName) == .orderedAscending
+                }
             case .alphabetical:
                 result = a.title.localizedStandardCompare(b.title) == .orderedAscending
             case .shuffle:
@@ -323,9 +333,9 @@ struct AllVideosGridView: View {
     }
 
     private func syncSidebarToVideo(_ videoId: String?) {
+        guard !suppressSidebarSync else { return }
         guard let vid = videoId,
               let section = sections.first(where: { $0.videos.contains(where: { $0.id == vid }) }) else { return }
-        // Only update main topic selection on scroll — don't change subtopic
         if store.selectedSubtopicId == nil {
             store.selectedTopicId = section.topicId
         }
@@ -333,10 +343,14 @@ struct AllVideosGridView: View {
 
     private func scrollToTopic(_ topicId: Int64?, proxy: ScrollViewProxy) {
         guard let topicId else { return }
-        proxy.scrollTo("header-\(topicId)", anchor: .top)
+        suppressSidebarSync = true
+        proxy.scrollTo("header-topic-\(topicId)", anchor: .top)
         if let section = displayedSections.first(where: { $0.topicId == topicId }),
            let firstVideo = section.videos.first {
             selectedVideoId = firstVideo.id
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            suppressSidebarSync = false
         }
     }
 
@@ -389,7 +403,17 @@ struct TopicSection: Identifiable {
     let videos: [VideoGridItemModel]
     var totalCount: Int?
     var videoSubtopicMap: [String: Int64] = [:]
-    var id: Int64 { topicId }
+    // Creator-mode fields
+    var creatorName: String? = nil
+    var channelIconUrl: URL? = nil
+    var topicNames: [String] = []
+
+    var id: String {
+        if let creator = creatorName {
+            return "creator-\(creator)"
+        }
+        return "topic-\(topicId)"
+    }
 }
 
 struct VideoGridItemModel: Identifiable, Equatable {
@@ -411,8 +435,8 @@ private struct ContainerWidthKey: PreferenceKey {
 }
 
 private struct SectionProgressKey: PreferenceKey {
-    static let defaultValue: [Int64: Double] = [:]
-    static func reduce(value: inout [Int64: Double], nextValue: () -> [Int64: Double]) {
+    static let defaultValue: [String: Double] = [:]
+    static func reduce(value: inout [String: Double], nextValue: () -> [String: Double]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }

@@ -5,6 +5,7 @@ enum SortOrder: String, CaseIterable {
     case views
     case date
     case duration
+    case creator
     case alphabetical
     case shuffle
 
@@ -13,6 +14,7 @@ enum SortOrder: String, CaseIterable {
         case .views: return "chart.bar.fill"
         case .date: return "calendar"
         case .duration: return "timer"
+        case .creator: return "person.2"
         case .alphabetical: return "textformat.abc"
         case .shuffle: return "shuffle"
         }
@@ -23,6 +25,7 @@ enum SortOrder: String, CaseIterable {
         case .views: return "Views"
         case .date: return "Date"
         case .duration: return "Length"
+        case .creator: return "Creator"
         case .alphabetical: return "A-Z"
         case .shuffle: return "Shuffle"
         }
@@ -33,6 +36,7 @@ enum SortOrder: String, CaseIterable {
         case .views: return "Sort by view count"
         case .date: return "Sort by publish date"
         case .duration: return "Sort by length"
+        case .creator: return "Group by creator"
         case .alphabetical: return "Sort alphabetically"
         case .shuffle: return "Random order"
         }
@@ -43,6 +47,7 @@ enum SortOrder: String, CaseIterable {
         case .views: return "Sort by view count"
         case .date: return "Sort by date published"
         case .duration: return "Sort by video length"
+        case .creator: return "Group by creator within each topic"
         case .alphabetical: return "Sort alphabetically by title"
         case .shuffle: return "Shuffle into random order"
         }
