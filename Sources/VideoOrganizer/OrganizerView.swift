@@ -10,7 +10,7 @@ struct OrganizerView: View {
             TopicSidebar(store: store, displaySettings: displaySettings)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         } detail: {
-            AllVideosGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
+            CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                 .navigationTitle("")
                 .inspector(isPresented: $displaySettings.showInspector) {
                     VideoInspector(store: store, thumbnailCache: thumbnailCache)

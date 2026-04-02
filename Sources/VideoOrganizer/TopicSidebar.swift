@@ -20,40 +20,17 @@ struct TopicSidebar: View {
         }
     }
 
-    /// Selection binding that distinguishes main topics from subtopics.
-    /// Clicking a subtopic sets both selectedTopicId (parent) and selectedSubtopicId.
-    /// Clicking a main topic clears selectedSubtopicId.
-    private var sidebarSelection: Binding<Int64?> {
-        Binding(
-            get: { store.selectedSubtopicId ?? store.selectedTopicId },
-            set: { newValue in
-                guard let id = newValue else {
-                    store.selectedTopicId = nil
-                    store.selectedSubtopicId = nil
-                    return
-                }
-                // Check if this is a subtopic
-                for topic in store.topics {
-                    if topic.subtopics.contains(where: { $0.id == id }) {
-                        store.selectedTopicId = topic.id
-                        store.selectedSubtopicId = id
-                        displaySettings.scrollToTopicRequested = topic.id
-                        return
-                    }
-                }
-                // It's a main topic
-                store.selectedTopicId = id
-                store.selectedSubtopicId = nil
-                displaySettings.scrollToTopicRequested = id
-            }
-        )
+    private func isSelected(_ topic: TopicViewModel) -> Bool {
+        if let selectedSubtopicId = store.selectedSubtopicId {
+            return selectedSubtopicId == topic.id
+        }
+        return store.selectedTopicId == topic.id
     }
 
     var body: some View {
         ScrollViewReader { scrollProxy in
-            List(selection: sidebarSelection) {
-                // Hidden search field — scroll up to reveal
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
                     VStack(spacing: 4) {
                         HStack(spacing: 0) {
                             Image(systemName: "magnifyingglass")
@@ -94,39 +71,8 @@ struct TopicSidebar: View {
                             }
                         }
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
                     .id("search-field")
-                }
 
-                Section {
-                    ForEach(filteredTopics) { topic in
-                        // Parent topic row — tap to expand/collapse and select
-                        TopicRow(topic: topic, highlightTerms: store.parsedQuery.includeTerms)
-                            .tag(topic.id)
-                            .contextMenu { contextMenu(for: topic) }
-                            .onDoubleClick {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    if expandedTopicId == topic.id {
-                                        expandedTopicId = nil
-                                    } else {
-                                        expandedTopicId = topic.id
-                                    }
-                                }
-                            }
-
-                        // Subtopics — shown when this topic is expanded
-                        if expandedTopicId == topic.id && !topic.subtopics.isEmpty {
-                            ForEach(topic.subtopics) { sub in
-                                TopicRow(topic: sub, highlightTerms: store.parsedQuery.includeTerms, isSubtopic: true)
-                                    .tag(sub.id)
-                                    .padding(.leading, 20)
-                                    .transition(.move(edge: .top).combined(with: .opacity))
-                            }
-                        }
-                    }
-                } header: {
                     HStack {
                         Text("\(filteredTopics.count) Topics")
                             .font(.subheadline.weight(.medium))
@@ -141,10 +87,62 @@ struct TopicSidebar: View {
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
-                }
+                    .padding(.horizontal, 6)
 
-                if store.unassignedCount > 0 && store.parsedQuery.isEmpty {
-                    Section {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(filteredTopics) { topic in
+                            TopicRow(topic: topic, highlightTerms: store.parsedQuery.includeTerms, isSelected: isSelected(topic))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(
+                                TapGesture(count: 2).onEnded {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        if expandedTopicId == topic.id {
+                                            expandedTopicId = nil
+                                        } else {
+                                            expandedTopicId = topic.id
+                                        }
+                                    }
+                                }
+                            )
+                            .simultaneousGesture(
+                                TapGesture(count: 1).onEnded {
+                                    applySidebarSelection(topicId: topic.id, subtopicId: nil)
+                                }
+                            )
+                            .accessibilityIdentifier("topic-\(topic.id)")
+                            .accessibilityLabel("\(topic.name), \(topic.videoCount) videos")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityAction {
+                                applySidebarSelection(topicId: topic.id, subtopicId: nil)
+                            }
+                            .contextMenu { contextMenu(for: topic) }
+                            .id(topic.id)
+
+                            if expandedTopicId == topic.id && !topic.subtopics.isEmpty {
+                                ForEach(topic.subtopics) { sub in
+                                    TopicRow(topic: sub, highlightTerms: store.parsedQuery.includeTerms, isSubtopic: true, isSelected: isSelected(sub))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                    .simultaneousGesture(
+                                        TapGesture(count: 1).onEnded {
+                                            applySidebarSelection(topicId: topic.id, subtopicId: sub.id)
+                                        }
+                                    )
+                                    .accessibilityIdentifier("topic-\(sub.id)")
+                                    .accessibilityLabel("\(sub.name), \(sub.videoCount) videos")
+                                    .accessibilityAddTraits(.isButton)
+                                    .accessibilityAction {
+                                        applySidebarSelection(topicId: topic.id, subtopicId: sub.id)
+                                    }
+                                    .padding(.leading, 20)
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                                }
+                            }
+                        }
+                    }
+
+                    if store.unassignedCount > 0 && store.parsedQuery.isEmpty {
                         HStack(spacing: 10) {
                             Image(systemName: "questionmark.folder")
                                 .font(.title3)
@@ -157,8 +155,12 @@ struct TopicSidebar: View {
                                 .foregroundStyle(.secondary)
                         }
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 8)
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
             .focusable()
             .focused($listFocused)
@@ -225,12 +227,18 @@ struct TopicSidebar: View {
             if let topicId = suggestion.topicId {
                 store.searchText = ""
                 searchFocused = false
-                store.selectedTopicId = topicId
+                applySidebarSelection(topicId: topicId, subtopicId: nil)
             }
         case .channel:
             store.searchText = suggestion.text
             searchFocused = false
         }
+    }
+
+    private func applySidebarSelection(topicId: Int64, subtopicId: Int64?) {
+        store.selectedTopicId = topicId
+        store.selectedSubtopicId = subtopicId
+        displaySettings.scrollToTopicRequested = topicId
     }
 
     @ViewBuilder
@@ -301,6 +309,7 @@ private struct TopicRow: View {
     let topic: TopicViewModel
     var highlightTerms: [String] = []
     var isSubtopic: Bool = false
+    var isSelected: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -319,7 +328,10 @@ private struct TopicRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-        .accessibilityIdentifier("topic-\(topic.id)")
-        .accessibilityLabel("\(topic.name), \(topic.videoCount) videos")
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.25) : .clear)
+        )
     }
 }

@@ -1,0 +1,467 @@
+import SwiftUI
+
+/// Experimental grid view using flattened HStack rows instead of nested LazyVGrid.
+/// Each row is a direct child of the LazyVStack, making scrollTo(id:) reliable.
+/// The scroll target ID is on the real pinned header, not a zero-height anchor.
+struct FlattenedGridView: View {
+    @Bindable var store: OrganizerStore
+    let thumbnailCache: ThumbnailCache
+    @Bindable var displaySettings: DisplaySettings
+
+    // MARK: - State
+
+    @State private var sections: [TopicSection] = []
+    @State private var allVideoIds: [String] = []
+    @State private var cachedFilteredSections: [TopicSection] = []
+    @State private var containerWidth: CGFloat?  // nil until measured
+    @State private var pendingScrollTopic: Int64?
+    @State private var suppressSidebarSync = false
+    @State private var scrollPosition = ScrollPosition()
+    @FocusState private var isFocused: Bool
+
+    private var selectedVideoId: String? {
+        get { store.selectedVideoId }
+        nonmutating set { store.selectedVideoId = newValue }
+    }
+
+    // MARK: - Computed
+
+    private var columnCount: Int {
+        guard let w = containerWidth else { return 4 }
+        let colWidth = displaySettings.thumbnailSize + GridConstants.columnSpacingEstimate
+        let usableWidth = w - GridConstants.containerPaddingEstimate
+        return max(1, Int(usableWidth / colWidth))
+    }
+
+    private var gridSpacing: CGFloat {
+        displaySettings.showMetadata ? GridConstants.metadataGridSpacing : GridConstants.compactGridSpacing
+    }
+
+    private var displayedSections: [TopicSection] { cachedFilteredSections }
+
+    /// Chunk a section's videos into explicit rows based on current column count.
+    private func rows(for section: TopicSection) -> [GridRowModel] {
+        let cols = columnCount
+        var result: [GridRowModel] = []
+        var i = 0
+        while i < section.videos.count {
+            let end = min(i + cols, section.videos.count)
+            let chunk = Array(section.videos[i..<end])
+            result.append(GridRowModel(
+                id: "row-\(section.topicId)-\(i / cols)",
+                videos: chunk,
+                topicId: section.topicId
+            ))
+            i = end
+        }
+        return result
+    }
+
+    // MARK: - Body
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ForEach(displayedSections) { section in
+                    Section {
+                        let sectionRows = rows(for: section)
+                        ForEach(sectionRows) { row in
+                            rowView(row)
+                        }
+                        Spacer().frame(height: GridConstants.sectionBottomPadding)
+                    } header: {
+                        // Scroll target ID is on this real pinned header view
+                        SectionHeaderView(
+                            name: section.topicName,
+                            count: section.videos.count,
+                            totalCount: section.totalCount,
+                            topicId: section.topicId,
+                            progress: 0,
+                            showProgress: false,
+                            highlightTerms: store.parsedQuery.includeTerms
+                        )
+                        .id("section-\(section.topicId)")
+                    }
+                }
+            }
+            // scrollTargetLayout removed — interferes with scrollTo(y:)
+        }
+        .scrollPosition($scrollPosition)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newWidth in
+            guard newWidth > 200 else { return }
+            let changed = containerWidth != newWidth
+            containerWidth = newWidth
+            if changed, let pending = pendingScrollTopic {
+                pendingScrollTopic = nil
+                scrollToTopic(pending)
+            }
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($isFocused)
+        .onKeyPress(.rightArrow) { navigate(by: 1); return .handled }
+        .onKeyPress(.leftArrow) { navigate(by: -1); return .handled }
+        .onKeyPress(.downArrow) { navigate(by: columnCount); return .handled }
+        .onKeyPress(.upArrow) { navigate(by: -columnCount); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "l")) { _ in navigate(by: 1); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "h")) { _ in navigate(by: -1); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "j")) { _ in navigate(by: columnCount); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "k")) { _ in navigate(by: -columnCount); return .handled }
+        .onKeyPress(.home) { jumpToEdge(first: true); return .handled }
+        .onKeyPress(.end) { jumpToEdge(first: false); return .handled }
+        .onChange(of: selectedVideoId) { _, newId in
+            syncSidebarToVideo(newId)
+        }
+        .onChange(of: displaySettings.scrollToTopicRequested) { _, topicId in
+            guard let topicId else { return }
+            displaySettings.scrollToTopicRequested = nil
+            scrollToTopic(topicId)
+        }
+        .onChange(of: displaySettings.focusGridRequested) { _, requested in
+            guard requested else { return }
+            displaySettings.focusGridRequested = false
+            isFocused = true
+        }
+        .task {
+            loadSections()
+            recomputeFilteredSections()
+            isFocused = true
+            if selectedVideoId == nil, let first = allVideoIds.first {
+                selectedVideoId = first
+            }
+        }
+        .onChange(of: store.topics) { _, _ in
+            loadSections()
+            recomputeFilteredSections()
+        }
+        .onChange(of: store.searchText) { _, _ in
+            recomputeFilteredSections()
+        }
+        .onChange(of: displaySettings.sortOrder) { _, _ in
+            withAnimation(.easeInOut(duration: 0.3)) { recomputeFilteredSections() }
+        }
+        .onChange(of: displaySettings.sortAscending) { _, _ in
+            withAnimation(.easeInOut(duration: 0.3)) { recomputeFilteredSections() }
+        }
+        .onChange(of: store.selectedSubtopicId) { _, _ in
+            withAnimation(.easeInOut(duration: 0.3)) { recomputeFilteredSections() }
+        }
+        .onChange(of: store.selectedChannelId) { _, _ in
+            withAnimation(.easeInOut(duration: 0.3)) { recomputeFilteredSections() }
+        }
+    }
+
+    // MARK: - Row View
+
+    @ViewBuilder
+    private func rowView(_ row: GridRowModel) -> some View {
+        let cols = columnCount
+        let thumbSize = displaySettings.thumbnailSize
+
+        HStack(alignment: .top, spacing: gridSpacing) {
+            ForEach(row.videos) { video in
+                VideoCardWrapper(
+                    video: video,
+                    isSelected: selectedVideoId == video.id,
+                    cacheDir: thumbnailCache.cacheDirURL,
+                    displaySettings: displaySettings,
+                    store: store
+                ) {
+                    selectVideo(video.id)
+                } onDoubleClick: {
+                    openOnYouTube(video)
+                }
+                .frame(width: thumbSize, alignment: .top)
+                .id(video.id)
+                .contextMenu { videoContextMenu(for: video, topicId: row.topicId) }
+            }
+            // Fill partial rows with spacers to left-align
+            if row.videos.count < cols {
+                ForEach(0..<(cols - row.videos.count), id: \.self) { _ in
+                    Spacer().frame(width: thumbSize)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, GridConstants.horizontalPadding)
+        .padding(.vertical, gridSpacing / 2)
+    }
+
+    // MARK: - Scrolling
+
+    /// Height of a single grid row (deterministic from thumbnailSize + metadata settings).
+    private var rowHeight: CGFloat {
+        let thumbSize = displaySettings.thumbnailSize
+        let showMeta = displaySettings.showMetadata
+        let thumbnailHeight = thumbSize * 9.0 / 16.0
+        let metaSpacing: CGFloat = showMeta ? GridConstants.metadataSpacing(for: thumbSize) : 0
+        // Channel icon + title (2 lines) + channel name + metadata line + VStack spacing
+        let metaHeight: CGFloat = showMeta ? 70 : 0
+        let cardPad: CGFloat = showMeta ? GridConstants.cardPadding(for: thumbSize) * 2 : 4
+        return thumbnailHeight + metaSpacing + metaHeight + cardPad + gridSpacing
+    }
+
+    /// Height of a section header (SectionHeaderView only — no CreatorCirclesBar in this experiment).
+    private let headerHeight: CGFloat = 48
+
+    private func scrollToTopic(_ topicId: Int64) {
+        let debugLine = "[FlatScroll] topic=\(topicId) containerWidth=\(containerWidth as Any) cols=\(columnCount)\n"
+        if let data = debugLine.data(using: .utf8) {
+            let url = URL(fileURLWithPath: "/tmp/scroll_debug.log")
+            if let handle = try? FileHandle(forWritingTo: url) { handle.seekToEndOfFile(); handle.write(data); handle.closeFile() }
+            else { try? data.write(to: url) }
+        }
+
+        guard containerWidth != nil else {
+            pendingScrollTopic = topicId
+            return
+        }
+
+        if store.selectedChannelId != nil {
+            store.inspectedCreatorName = nil
+            store.clearChannelFilter()
+        }
+        suppressSidebarSync = true
+
+        guard let section = displayedSections.first(where: { $0.topicId == topicId }) else { return }
+
+        // Compute Y offset from deterministic row heights.
+        // Each section = headerHeight + (rowCount * rowHeight) + sectionBottomPadding
+        let cols = columnCount
+        var y: CGFloat = 0
+        for s in displayedSections {
+            if s.topicId == topicId { break }
+            let rowCount = Int(ceil(Double(s.videos.count) / Double(cols)))
+            y += headerHeight + CGFloat(rowCount) * rowHeight + GridConstants.sectionBottomPadding
+        }
+
+        Task { @MainActor in
+            scrollPosition.scrollTo(y: y)
+
+            try? await Task.sleep(for: .milliseconds(300))
+            if let firstVideo = section.videos.first {
+                selectedVideoId = firstVideo.id
+            }
+
+            try? await Task.sleep(for: .milliseconds(200))
+            suppressSidebarSync = false
+        }
+    }
+
+    // MARK: - Navigation
+
+    private func navigate(by offset: Int) {
+        let ids = displayedSections.flatMap { $0.videos.map(\.id) }
+        guard !ids.isEmpty else { return }
+        let currentIndex = selectedVideoId.flatMap { ids.firstIndex(of: $0) } ?? 0
+        let newIndex = max(0, min(ids.count - 1, currentIndex + offset))
+        let newId = ids[newIndex]
+        selectedVideoId = newId
+        scrollPosition.scrollTo(id: newId, anchor: .center)
+    }
+
+    private func jumpToEdge(first: Bool) {
+        let ids = displayedSections.flatMap { $0.videos.map(\.id) }
+        guard !ids.isEmpty else { return }
+        let id = first ? ids.first! : ids.last!
+        selectedVideoId = id
+        withAnimation {
+            scrollPosition.scrollTo(id: id, anchor: first ? .top : .bottom)
+        }
+    }
+
+    private func selectVideo(_ id: String) {
+        selectedVideoId = id
+        store.inspectedCreatorName = nil
+        isFocused = true
+    }
+
+    private func syncSidebarToVideo(_ videoId: String?) {
+        guard !suppressSidebarSync else { return }
+        guard store.selectedChannelId == nil else { return }
+        guard let vid = videoId,
+              let section = sections.first(where: { $0.videos.contains(where: { $0.id == vid }) }) else { return }
+        if store.selectedSubtopicId == nil {
+            store.selectedTopicId = section.topicId
+        }
+    }
+
+    private func openOnYouTube(_ video: VideoGridItemModel) {
+        if let url = URL(string: "https://www.youtube.com/watch?v=\(video.id)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    // MARK: - Context Menu
+
+    @ViewBuilder
+    private func videoContextMenu(for video: VideoGridItemModel, topicId: Int64) -> some View {
+        let otherTopics = store.topics.filter { $0.id != topicId }
+        Menu("Move to…") {
+            ForEach(otherTopics) { other in
+                Button(other.name) {
+                    store.moveVideo(videoId: video.id, toTopicId: other.id)
+                }
+            }
+        }
+    }
+
+    // MARK: - Data Loading (same as AllVideosGridView)
+
+    private func recomputeFilteredSections() {
+        let query = store.parsedQuery
+        var result: [TopicSection]
+
+        if query.isEmpty {
+            result = sections
+            store.searchResultCount = 0
+        } else {
+            result = []
+            for section in sections {
+                if query.matches(fields: [section.topicName]) {
+                    result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: section.videos, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap))
+                } else {
+                    let matching = section.videos.filter { video in
+                        query.matches(fields: [video.title, video.channelName ?? "", section.topicName])
+                    }
+                    if !matching.isEmpty {
+                        result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: matching, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap))
+                    }
+                }
+            }
+            store.searchResultCount = result.reduce(0) { $0 + $1.videos.count }
+        }
+
+        if let subId = store.selectedSubtopicId {
+            result = result.map { section in
+                let filtered = section.videos.filter { section.videoSubtopicMap[$0.id] == subId }
+                guard !filtered.isEmpty else { return section }
+                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap)
+            }.filter { !$0.videos.isEmpty }
+        }
+
+        if let channelId = store.selectedChannelId {
+            result = result.map { section in
+                let filtered = section.videos.filter { $0.channelId == channelId }
+                guard !filtered.isEmpty else { return section }
+                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap)
+            }.filter { !$0.videos.isEmpty }
+        }
+
+        if let sortOrder = displaySettings.sortOrder {
+            let ascending = displaySettings.sortAscending
+            cachedFilteredSections = result.map { section in
+                let sorted = sortVideos(section.videos, by: sortOrder, ascending: ascending)
+                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: sorted, totalCount: section.totalCount, videoSubtopicMap: section.videoSubtopicMap)
+            }
+        } else {
+            cachedFilteredSections = result
+        }
+    }
+
+    private func sortVideos(_ videos: [VideoGridItemModel], by order: SortOrder, ascending: Bool) -> [VideoGridItemModel] {
+        if order == .shuffle { return videos.shuffled() }
+        return videos.sorted { a, b in
+            let result: Bool
+            switch order {
+            case .views: result = parseViewCount(a.viewCount) > parseViewCount(b.viewCount)
+            case .date: result = parseAge(a.publishedAt) < parseAge(b.publishedAt)
+            case .duration: result = parseDuration(a.duration) > parseDuration(b.duration)
+            case .creator:
+                let aName = a.channelName ?? ""; let bName = b.channelName ?? ""
+                result = aName == bName ? parseAge(a.publishedAt) < parseAge(b.publishedAt) : aName.localizedStandardCompare(bName) == .orderedAscending
+            case .alphabetical: result = a.title.localizedStandardCompare(b.title) == .orderedAscending
+            case .shuffle: result = false
+            }
+            return ascending ? !result : result
+        }
+    }
+
+    private func loadSections() {
+        var newSections: [TopicSection] = []
+        var flatIds: [String] = []
+        for topic in store.topics {
+            if topic.subtopics.isEmpty {
+                let videos = mapVideos(store.videosForTopic(topic.id))
+                if !videos.isEmpty {
+                    newSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: videos))
+                    flatIds.append(contentsOf: videos.map(\.id))
+                }
+            } else {
+                var allVideos: [VideoGridItemModel] = []
+                var subtopicMap: [String: Int64] = [:]
+                for sub in topic.subtopics {
+                    let videos = mapVideos(store.videosForTopic(sub.id))
+                    for v in videos { subtopicMap[v.id] = sub.id }
+                    allVideos.append(contentsOf: videos)
+                }
+                let parentVideos = mapVideos(store.videosForTopic(topic.id))
+                allVideos.append(contentsOf: parentVideos)
+                if !allVideos.isEmpty {
+                    newSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: allVideos, videoSubtopicMap: subtopicMap))
+                    flatIds.append(contentsOf: allVideos.map(\.id))
+                }
+            }
+        }
+        sections = newSections
+        allVideoIds = flatIds
+    }
+
+    private func mapVideos(_ viewModels: [VideoViewModel]) -> [VideoGridItemModel] {
+        viewModels.map { v in
+            VideoGridItemModel(
+                id: v.videoId, title: v.title, channelName: v.channelName,
+                thumbnailUrl: v.thumbnailUrl, viewCount: v.viewCount,
+                publishedAt: v.publishedAt, duration: v.duration,
+                channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
+                channelId: v.channelId
+            )
+        }
+    }
+
+    private func parseViewCount(_ str: String?) -> Int {
+        guard let str else { return 0 }
+        let cleaned = str.replacingOccurrences(of: " views", with: "")
+        if cleaned.hasSuffix("M") { return Int((Double(cleaned.dropLast()) ?? 0) * 1_000_000) }
+        if cleaned.hasSuffix("K") { return Int((Double(cleaned.dropLast()) ?? 0) * 1_000) }
+        return Int(cleaned) ?? 0
+    }
+
+    private func parseAge(_ str: String?) -> Int {
+        guard let str else { return Int.max }
+        if str == "today" { return 0 }
+        let parts = str.split(separator: " ")
+        guard parts.count >= 2, let num = Int(parts[0]) else { return Int.max }
+        let unit = String(parts[1])
+        if unit.hasPrefix("day") { return num }
+        if unit.hasPrefix("month") { return num * 30 }
+        if unit.hasPrefix("year") { return num * 365 }
+        return Int.max
+    }
+
+    private func parseDuration(_ str: String?) -> Int {
+        guard let str else { return 0 }
+        let parts = str.split(separator: ":").compactMap { Int($0) }
+        switch parts.count {
+        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        case 2: return parts[0] * 60 + parts[1]
+        case 1: return parts[0]
+        default: return 0
+        }
+    }
+}
+
+// MARK: - Models
+
+struct GridRowModel: Identifiable {
+    let id: String
+    let videos: [VideoGridItemModel]
+    let topicId: Int64
+}
+
+private struct WidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
