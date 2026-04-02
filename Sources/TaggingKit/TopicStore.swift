@@ -14,6 +14,7 @@ public final class TopicStore: Sendable {
     private let topicId = SQLite.Expression<Int64>("id")
     private let topicName = SQLite.Expression<String>("name")
     private let topicCreatedAt = SQLite.Expression<String>("created_at")
+    private let topicParentId = SQLite.Expression<Int64?>("parent_id")
 
     // Video columns
     private let videoId = SQLite.Expression<String>("video_id")
@@ -77,6 +78,13 @@ public final class TopicStore: Sendable {
             try db.run("ALTER TABLE videos ADD COLUMN channel_icon_url TEXT")
         }
 
+        // Migrate: add parent_id to topics if missing
+        let topicInfo = try db.prepare("PRAGMA table_info(topics)")
+        let topicColumns = Set(topicInfo.map { $0[1] as! String })
+        if !topicColumns.contains("parent_id") {
+            try db.run("ALTER TABLE topics ADD COLUMN parent_id INTEGER REFERENCES topics(id)")
+        }
+
         try db.run(commitLog.create(ifNotExists: true) { t in
             t.column(commitId, primaryKey: .autoincrement)
             t.column(commitAction) // "add_to_playlist", "remove_from_playlist", "create_playlist"
@@ -129,9 +137,79 @@ public final class TopicStore: Sendable {
         try db.run(topics.filter(topicId == sourceId).delete())
     }
 
+    /// List top-level topics (parent_id IS NULL) with video counts including subtopics.
     public func listTopics() throws -> [TopicSummary] {
+        // Count includes videos in subtopics
+        let query = """
+            SELECT t.id, t.name,
+                (SELECT COUNT(*) FROM videos v WHERE v.topic_id = t.id
+                 OR v.topic_id IN (SELECT s.id FROM topics s WHERE s.parent_id = t.id)
+                ) as video_count
+            FROM topics t
+            WHERE t.parent_id IS NULL
+            ORDER BY video_count DESC
+        """
+        var results: [TopicSummary] = []
+        for row in try db.prepare(query) {
+            results.append(TopicSummary(
+                id: row[0] as! Int64,
+                name: row[1] as! String,
+                videoCount: Int(row[2] as! Int64),
+                parentId: nil
+            ))
+        }
+        return results
+    }
+
+    /// List subtopics for a given parent topic.
+    public func subtopicsForTopic(id parentTopicId: Int64) throws -> [TopicSummary] {
         let query = """
             SELECT t.id, t.name, COUNT(v.video_id) as video_count
+            FROM topics t
+            LEFT JOIN videos v ON v.topic_id = t.id
+            WHERE t.parent_id = ?
+            GROUP BY t.id
+            ORDER BY video_count DESC
+        """
+        var results: [TopicSummary] = []
+        for row in try db.prepare(query, parentTopicId) {
+            results.append(TopicSummary(
+                id: row[0] as! Int64,
+                name: row[1] as! String,
+                videoCount: Int(row[2] as! Int64),
+                parentId: parentTopicId
+            ))
+        }
+        return results
+    }
+
+    /// Create a subtopic under a parent topic. Disambiguates name if it already exists.
+    public func createSubtopic(name: String, parentId: Int64) throws -> Int64 {
+        var finalName = name
+        if try db.pluck(topics.filter(topicName == name)) != nil {
+            let parentName = try db.pluck(topics.filter(topicId == parentId)).map { $0[topicName] } ?? ""
+            finalName = "\(name) (\(parentName))"
+        }
+        return try db.run(topics.insert(
+            topicName <- finalName,
+            topicCreatedAt <- ISO8601DateFormatter().string(from: Date()),
+            topicParentId <- parentId
+        ))
+    }
+
+    /// Delete all subtopics for a parent topic, reassigning their videos to the parent.
+    public func deleteSubtopics(parentId: Int64) throws {
+        let subtopicIds = try db.prepare(topics.filter(topicParentId == parentId).select(topicId)).map { $0[topicId] }
+        for sid in subtopicIds {
+            try db.run(videos.filter(videoTopicId == sid).update(videoTopicId <- parentId))
+            try db.run(topics.filter(topicId == sid).delete())
+        }
+    }
+
+    /// List all topics flat (both top-level and subtopics).
+    public func listAllTopicsFlat() throws -> [TopicSummary] {
+        let query = """
+            SELECT t.id, t.name, COUNT(v.video_id) as video_count, t.parent_id
             FROM topics t
             LEFT JOIN videos v ON v.topic_id = t.id
             GROUP BY t.id
@@ -142,10 +220,21 @@ public final class TopicStore: Sendable {
             results.append(TopicSummary(
                 id: row[0] as! Int64,
                 name: row[1] as! String,
-                videoCount: Int(row[2] as! Int64)
+                videoCount: Int(row[2] as! Int64),
+                parentId: row[3] as? Int64
             ))
         }
         return results
+    }
+
+    /// Get all videos for a topic and its subtopics.
+    public func videosForTopicIncludingSubtopics(id tid: Int64) throws -> [StoredVideo] {
+        let subtopicIds = try db.prepare(topics.filter(topicParentId == tid).select(topicId)).map { $0[topicId] }
+        var allVideos = try videosForTopic(id: tid)
+        for sid in subtopicIds {
+            allVideos.append(contentsOf: try videosForTopic(id: sid))
+        }
+        return allVideos.sorted { $0.sourceIndex < $1.sourceIndex }
     }
 
     // MARK: - Assignments
@@ -235,6 +324,21 @@ public final class TopicStore: Sendable {
         try db.prepare(videos.filter(videoViewCount == nil as String?).select(videoId)).map { $0[videoId] }
     }
 
+    /// Returns all videos as VideoItems for classification.
+    public func allVideoItems() throws -> [VideoItem] {
+        try db.prepare(videos.order(videoSourceIndex)).map { row in
+            VideoItem(
+                sourceIndex: row[videoSourceIndex],
+                title: row[videoTitle],
+                videoUrl: row[videoUrl],
+                videoId: row[videoId],
+                channelName: row[videoChannel],
+                metadataText: nil,
+                unavailableKind: "none"
+            )
+        }
+    }
+
     /// Returns all video IDs.
     public func allVideoIds() throws -> [String] {
         try db.prepare(videos.select(videoId)).map { $0[videoId] }
@@ -287,6 +391,14 @@ public struct TopicSummary: Sendable {
     public let id: Int64
     public let name: String
     public let videoCount: Int
+    public let parentId: Int64?
+
+    public init(id: Int64, name: String, videoCount: Int, parentId: Int64? = nil) {
+        self.id = id
+        self.name = name
+        self.videoCount = videoCount
+        self.parentId = parentId
+    }
 }
 
 public struct StoredVideo: Sendable {

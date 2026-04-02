@@ -8,7 +8,7 @@ struct VideoTaggerCommand: AsyncParsableCommand {
         commandName: "video-tagger",
         abstract: "Organize YouTube videos into topics using Claude AI.",
         version: "0.2.0",
-        subcommands: [Suggest.self, Reclassify.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self]
+        subcommands: [Suggest.self, Reclassify.self, ReclassifyAll.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self, GenerateSubtopics.self]
     )
 }
 
@@ -420,6 +420,168 @@ struct BackfillMetadata: AsyncParsableCommand {
         if missing > 0 {
             print("\(missing) videos had no YouTube data (possibly deleted/private).")
         }
+    }
+}
+
+// MARK: - Reclassify All
+
+struct ReclassifyAll: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "reclassify-all",
+        abstract: "Reclassify ALL videos against existing topics using Sonnet for better accuracy."
+    )
+
+    @Option(name: .shortAndLong, help: "Path to the SQLite database.")
+    var db: String = "video-tagger.db"
+
+    @Option(name: .long, help: "Anthropic API key.")
+    var apiKey: String?
+
+    @Option(name: .long, help: "Batch size for classification (smaller = more accurate).")
+    var batchSize: Int = 100
+
+    func run() async throws {
+        let client: ClaudeClient
+        if let apiKey { client = ClaudeClient(apiKey: apiKey) } else { client = try ClaudeClient() }
+        let store = try TopicStore(path: db)
+        let suggester = TopicSuggester(client: client)
+
+        let topics = try store.listTopics()
+        let topicNames = topics.map(\.name)
+
+        // Clear subtopics first (will regenerate after)
+        print("Clearing existing subtopics...")
+        for topic in topics {
+            try store.deleteSubtopics(parentId: topic.id)
+        }
+
+        let allVideos = try store.allVideoItems()
+        print("Reclassifying \(allVideos.count) videos against \(topicNames.count) topics using Sonnet...")
+        print("Batch size: \(batchSize) (\(allVideos.count / batchSize + 1) batches)\n")
+
+        let assignments = try await suggester.classifyVideos(
+            videos: allVideos,
+            topics: topicNames,
+            batchSize: batchSize,
+            model: .sonnet
+        ) { batch, total in
+            print("  Batch \(batch)/\(total)...")
+        }
+
+        // Reassign all videos
+        var topicIdMap: [String: Int64] = [:]
+        for t in topics { topicIdMap[t.name] = t.id }
+
+        var assignedCount = 0
+        for a in assignments {
+            guard let tid = topicIdMap[a.topic] else { continue }
+            let vid = allVideos[a.videoIndex].videoId ?? ""
+            guard !vid.isEmpty else { continue }
+            try store.assignVideo(videoId: vid, toTopic: tid)
+            assignedCount += 1
+        }
+
+        let unassigned = try store.unassignedCount()
+        print("\nReclassified \(assignedCount) videos. \(unassigned) unassigned.")
+
+        let updatedTopics = try store.listTopics()
+        print("\nTopics:")
+        for topic in updatedTopics {
+            let old = topics.first { $0.id == topic.id }
+            let delta = topic.videoCount - (old?.videoCount ?? 0)
+            let deltaStr = delta == 0 ? "" : delta > 0 ? " (+\(delta))" : " (\(delta))"
+            print("  [\(String(format: "%2d", topic.id))] \(String(format: "%4d", topic.videoCount)) videos\(deltaStr)  \(topic.name)")
+        }
+
+        print("\nRun 'generate-subtopics --all' to regenerate subtopics.")
+    }
+}
+
+// MARK: - Generate Subtopics
+
+struct GenerateSubtopics: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "generate-subtopics",
+        abstract: "Discover and classify subtopics within each topic using Claude AI."
+    )
+
+    @Option(name: .shortAndLong, help: "Path to the SQLite database.")
+    var db: String = "video-tagger.db"
+
+    @Option(name: .long, help: "Process a single topic by ID.")
+    var topic: Int64?
+
+    @Flag(name: .long, help: "Process all top-level topics.")
+    var all = false
+
+    @Option(name: .long, help: "Anthropic API key.")
+    var apiKey: String?
+
+    func run() async throws {
+        guard all || topic != nil else {
+            print("Specify --all or --topic <id>.")
+            return
+        }
+
+        let client: ClaudeClient
+        if let apiKey { client = ClaudeClient(apiKey: apiKey) } else { client = try ClaudeClient() }
+        let store = try TopicStore(path: db)
+        let suggester = TopicSuggester(client: client)
+
+        let topicsToProcess: [TopicSummary]
+        if let topicId = topic {
+            let allTopics = try store.listTopics()
+            guard let t = allTopics.first(where: { $0.id == topicId }) else {
+                print("Topic \(topicId) not found.")
+                return
+            }
+            topicsToProcess = [t]
+        } else {
+            topicsToProcess = try store.listTopics()
+        }
+
+        print("Generating subtopics for \(topicsToProcess.count) topics...\n")
+
+        for (index, topicSummary) in topicsToProcess.enumerated() {
+            print("[\(index + 1)/\(topicsToProcess.count)] \(topicSummary.name) (\(topicSummary.videoCount) videos)")
+
+            // Fetch videos for this topic (including any existing subtopic videos)
+            let videos = try store.videosForTopicIncludingSubtopics(id: topicSummary.id)
+            guard videos.count >= 3 else {
+                print("  Skipping — too few videos (\(videos.count))")
+                continue
+            }
+
+            let videoItems = videos.map { v in
+                VideoItem(sourceIndex: v.sourceIndex, title: v.title, videoUrl: v.videoUrl,
+                          videoId: v.videoId, channelName: v.channelName, metadataText: nil, unavailableKind: "none")
+            }
+
+            // Discover and classify subtopics
+            let subtopics = try await suggester.discoverAndClassifySubtopics(
+                topicName: topicSummary.name,
+                videos: videoItems
+            )
+
+            // Delete existing subtopics (idempotent re-runs)
+            try store.deleteSubtopics(parentId: topicSummary.id)
+
+            // Create subtopics and reassign videos
+            for sub in subtopics {
+                let subId = try store.createSubtopic(name: sub.name, parentId: topicSummary.id)
+                for vid in sub.videoIds {
+                    try store.assignVideo(videoId: vid, toTopic: subId)
+                }
+                print("  \(String(format: "%4d", sub.videoIds.count))  \(sub.name)")
+            }
+
+            // Polite delay between topics
+            if index < topicsToProcess.count - 1 {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+
+        print("\nDone. Subtopics generated successfully.")
     }
 }
 

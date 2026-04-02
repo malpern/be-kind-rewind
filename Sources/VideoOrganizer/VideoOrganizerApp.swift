@@ -10,7 +10,7 @@ struct VideoOrganizerApp: App {
     @State private var showSplash = true
 
     var body: some Scene {
-        WindowGroup("Be Kind, Rewind: Video Organizer") {
+        WindowGroup {
             Group {
                 if let store {
                     OrganizerView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
@@ -76,7 +76,6 @@ struct VideoOrganizerApp: App {
             let client = try? ClaudeClient()
             let dbPath = resolveDbPath()
             let newStore = try OrganizerStore(dbPath: dbPath, claudeClient: client)
-            newStore.loadTopics()
             store = newStore
 
             let allVideoIds = newStore.topics.flatMap { topic in

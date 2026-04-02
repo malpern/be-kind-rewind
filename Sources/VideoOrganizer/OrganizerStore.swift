@@ -14,6 +14,7 @@ final class OrganizerStore {
 
     // Selected state
     var selectedTopicId: Int64?
+    var selectedSubtopicId: Int64?
     var selectedVideoId: String?
     var hoveredVideoId: String?
 
@@ -22,12 +23,17 @@ final class OrganizerStore {
     var parsedQuery: SearchQuery { SearchQuery(searchText) }
     var searchResultCount: Int = 0
 
+    // Cached flat video map — rebuilt on loadTopics()
+    private var videoMap: [String: VideoViewModel] = [:]
+    private var videoTopicMap: [String: Int64] = [:]
+
     private let store: TopicStore
     private let suggester: TopicSuggester?
 
     init(dbPath: String, claudeClient: ClaudeClient? = nil) throws {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }
+        loadTopics()
     }
 
     // MARK: - Loading
@@ -35,85 +41,141 @@ final class OrganizerStore {
     func loadTopics() {
         do {
             let summaries = try store.listTopics()
-            topics = summaries.map { TopicViewModel(id: $0.id, name: $0.name, videoCount: $0.videoCount) }
+            topics = summaries.map { summary in
+                let subtopicSummaries = (try? store.subtopicsForTopic(id: summary.id)) ?? []
+                let subtopics = subtopicSummaries.map {
+                    TopicViewModel(id: $0.id, name: $0.name, videoCount: $0.videoCount, parentId: summary.id)
+                }
+                return TopicViewModel(id: summary.id, name: summary.name, videoCount: summary.videoCount, subtopics: subtopics)
+            }
             totalVideoCount = try store.totalVideoCount()
             unassignedCount = try store.unassignedCount()
             if selectedTopicId == nil, let first = topics.first {
                 selectedTopicId = first.id
             }
+            rebuildVideoMaps()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    func videosForTopic(_ topicId: Int64, limit: Int? = nil) -> [VideoViewModel] {
+    /// Get videos for a topic including its subtopics.
+    func videosForTopicIncludingSubtopics(_ topicId: Int64) -> [VideoViewModel] {
         do {
-            let stored = try store.videosForTopic(id: topicId, limit: limit)
-            return stored.map {
-                VideoViewModel(
-                    videoId: $0.videoId,
-                    title: $0.title ?? "Untitled",
-                    channelName: $0.channelName,
-                    videoUrl: $0.videoUrl,
-                    sourceIndex: $0.sourceIndex,
-                    topicId: $0.topicId,
-                    viewCount: $0.viewCount,
-                    publishedAt: $0.publishedAt,
-                    duration: $0.duration,
-                    channelIconUrl: $0.channelIconUrl
-                )
-            }
+            let stored = try store.videosForTopicIncludingSubtopics(id: topicId)
+            return stored.map { VideoViewModel(from: $0) }
         } catch {
             errorMessage = error.localizedDescription
             return []
         }
     }
 
+    func videosForTopic(_ topicId: Int64, limit: Int? = nil) -> [VideoViewModel] {
+        do {
+            let stored = try store.videosForTopic(id: topicId, limit: limit)
+            return stored.map { VideoViewModel(from: $0) }
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    // MARK: - Video Lookup (O(1) via cached map)
+
     /// The video currently shown in the inspector — hovered takes priority, else selected.
     var inspectedVideoId: String? {
         hoveredVideoId ?? selectedVideoId
     }
 
-    /// Look up a video view model by ID.
-    func videoById(_ videoId: String) -> VideoViewModel? {
-        for topic in topics {
-            if let video = videosForTopic(topic.id).first(where: { $0.videoId == videoId }) {
-                return video
-            }
-        }
-        return nil
-    }
-
-    /// The video shown in the inspector.
     var inspectedVideo: VideoViewModel? {
-        inspectedVideoId.flatMap { videoById($0) }
+        inspectedVideoId.flatMap { videoMap[$0] }
     }
 
-    /// Topic name for a given video ID.
+    func videoById(_ videoId: String) -> VideoViewModel? {
+        videoMap[videoId]
+    }
+
     func topicNameForVideo(_ videoId: String) -> String? {
-        for topic in topics {
-            if videosForTopic(topic.id).contains(where: { $0.videoId == videoId }) {
-                return topic.name
-            }
-        }
-        return nil
+        guard let topicId = videoTopicMap[videoId] else { return nil }
+        return topics.first { $0.id == topicId }?.name
     }
 
-    /// Other videos from the same channel, within our library.
     func moreFromChannel(videoId: String, limit: Int = 6) -> [VideoViewModel] {
-        guard let video = videoById(videoId),
+        guard let video = videoMap[videoId],
               let channel = video.channelName else { return [] }
-        var results: [VideoViewModel] = []
+        return Array(
+            videoMap.values
+                .filter { $0.channelName == channel && $0.videoId != videoId }
+                .prefix(limit)
+        )
+    }
+
+    // Cached channel counts — rebuilt with video maps
+    private(set) var channelCounts: [String: Int] = [:]
+
+    private func rebuildVideoMaps() {
+        var vMap: [String: VideoViewModel] = [:]
+        var tMap: [String: Int64] = [:]
+        var cCounts: [String: Int] = [:]
         for topic in topics {
-            for v in videosForTopic(topic.id) {
-                if v.channelName == channel && v.videoId != videoId {
-                    results.append(v)
-                    if results.count >= limit { return results }
+            // Include videos from subtopics
+            for video in videosForTopicIncludingSubtopics(topic.id) {
+                vMap[video.videoId] = video
+                tMap[video.videoId] = topic.id
+                if let channel = video.channelName {
+                    cCounts[channel, default: 0] += 1
                 }
             }
         }
-        return results
+        videoMap = vMap
+        videoTopicMap = tMap
+        channelCounts = cCounts
+    }
+
+    /// Typeahead suggestions matching the current search text.
+    func typeaheadSuggestions(limit: Int = 8) -> [TypeaheadSuggestion] {
+        let text = searchText.trimmingCharacters(in: .whitespaces)
+        guard text.count >= 2 else { return [] }
+        // Don't show suggestions for exclude terms
+        guard !text.hasPrefix("-") else { return [] }
+
+        var results: [TypeaheadSuggestion] = []
+
+        // Match topics and subtopics
+        for topic in topics {
+            if topic.name.localizedStandardContains(text) {
+                results.append(TypeaheadSuggestion(
+                    kind: .topic,
+                    text: topic.name,
+                    count: topic.videoCount,
+                    topicId: topic.id
+                ))
+            }
+            for sub in topic.subtopics where sub.name.localizedStandardContains(text) {
+                results.append(TypeaheadSuggestion(
+                    kind: .subtopic,
+                    text: sub.name,
+                    count: sub.videoCount,
+                    topicId: sub.id,
+                    parentName: topic.name
+                ))
+            }
+        }
+
+        // Match channels
+        for (channel, count) in channelCounts where channel.localizedStandardContains(text) {
+            results.append(TypeaheadSuggestion(
+                kind: .channel,
+                text: channel,
+                count: count,
+                topicId: nil
+            ))
+        }
+
+        // Sort by count descending, take limit
+        results.sort { $0.count > $1.count }
+        return Array(results.prefix(limit))
     }
 
     // MARK: - Topic Operations
@@ -170,11 +232,6 @@ final class OrganizerStore {
 
     // MARK: - AI Operations
 
-    func discoverSubTopics(for topicId: Int64, count: Int = 5) async -> [SubTopicSuggestion] {
-        // TODO: Wire up to TopicSuggester.splitTopic for sub-topic discovery
-        return []
-    }
-
     func splitTopic(_ topicId: Int64, into count: Int = 3) async {
         guard let suggester else { return }
         isLoading = true
@@ -209,12 +266,47 @@ final class OrganizerStore {
     }
 }
 
-// MARK: - View Models (value types for SwiftUI)
+// MARK: - View Models
+
+struct TypeaheadSuggestion: Identifiable {
+    enum Kind { case topic, subtopic, channel }
+    let kind: Kind
+    let text: String
+    let count: Int
+    let topicId: Int64?
+    var parentName: String? = nil
+    var id: String { "\(kind)-\(text)" }
+
+    var icon: String {
+        switch kind {
+        case .topic: return TopicTheme.iconName(for: text)
+        case .subtopic: return "arrow.turn.down.right"
+        case .channel: return "person.circle.fill"
+        }
+    }
+
+    var displayText: String {
+        if let parent = parentName {
+            return "\(text) — \(parent)"
+        }
+        return text
+    }
+}
 
 struct TopicViewModel: Identifiable, Hashable {
     let id: Int64
     var name: String
     var videoCount: Int
+    var parentId: Int64? = nil
+    var subtopics: [TopicViewModel] = []
+
+    static func == (lhs: TopicViewModel, rhs: TopicViewModel) -> Bool {
+        lhs.id == rhs.id && lhs.name == rhs.name && lhs.videoCount == rhs.videoCount && lhs.subtopics.map(\.id) == rhs.subtopics.map(\.id)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 }
 
 struct VideoViewModel: Identifiable, Hashable {
@@ -231,11 +323,41 @@ struct VideoViewModel: Identifiable, Hashable {
 
     var id: String { videoId }
 
+    var youtubeUrl: URL? {
+        URL(string: "https://www.youtube.com/watch?v=\(videoId)")
+    }
+
     var thumbnailUrl: URL? {
-        guard let videoId = videoUrl.flatMap({ URL(string: $0) })?.queryItems?["v"] ?? self.videoId.nilIfEmpty else {
+        guard let vid = videoUrl.flatMap({ URL(string: $0) })?.queryItems?["v"] ?? videoId.nilIfEmpty else {
             return nil
         }
-        return URL(string: "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg")
+        return URL(string: "https://i.ytimg.com/vi/\(vid)/mqdefault.jpg")
+    }
+
+    init(from stored: TaggingKit.StoredVideo) {
+        self.videoId = stored.videoId
+        self.title = stored.title ?? "Untitled"
+        self.channelName = stored.channelName
+        self.videoUrl = stored.videoUrl
+        self.sourceIndex = stored.sourceIndex
+        self.topicId = stored.topicId
+        self.viewCount = stored.viewCount
+        self.publishedAt = stored.publishedAt
+        self.duration = stored.duration
+        self.channelIconUrl = stored.channelIconUrl
+    }
+
+    init(videoId: String, title: String, channelName: String?, videoUrl: String?, sourceIndex: Int, topicId: Int64?, viewCount: String?, publishedAt: String?, duration: String?, channelIconUrl: String?) {
+        self.videoId = videoId
+        self.title = title
+        self.channelName = channelName
+        self.videoUrl = videoUrl
+        self.sourceIndex = sourceIndex
+        self.topicId = topicId
+        self.viewCount = viewCount
+        self.publishedAt = publishedAt
+        self.duration = duration
+        self.channelIconUrl = channelIconUrl
     }
 }
 

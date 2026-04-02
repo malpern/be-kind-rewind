@@ -34,17 +34,14 @@ struct VideoInspector: View {
     private func inspectorContent(_ video: VideoViewModel) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // Large thumbnail
-                thumbnailView(for: video)
+                ThumbnailView(videoId: video.videoId, thumbnailUrl: video.thumbnailUrl, cacheDir: thumbnailCache.cacheDirURL)
                     .aspectRatio(16/9, contentMode: .fit)
 
                 VStack(alignment: .leading, spacing: 16) {
-                    // Title
                     HighlightedText(video.title, terms: store.parsedQuery.includeTerms)
                         .font(.title3.weight(.semibold))
                         .textSelection(.enabled)
 
-                    // Channel
                     if let channel = video.channelName {
                         HStack(spacing: 10) {
                             if let iconUrl = video.channelIconUrl.flatMap({ URL(string: $0) }) {
@@ -52,7 +49,9 @@ struct VideoInspector: View {
                                     if case .success(let image) = phase {
                                         image.resizable()
                                     } else {
-                                        channelIconPlaceholder
+                                        Image(systemName: "person.circle.fill")
+                                            .resizable()
+                                            .foregroundStyle(.tertiary)
                                     }
                                 }
                                 .frame(width: 28, height: 28)
@@ -66,16 +65,13 @@ struct VideoInspector: View {
 
                     Divider()
 
-                    // Metadata
                     metadataGrid(video)
 
-                    // Actions (only for selected video)
                     if isSelected {
                         Divider()
                         actionButtons(video)
                     }
 
-                    // More from this channel
                     let moreVideos = store.moreFromChannel(videoId: video.videoId)
                     if !moreVideos.isEmpty {
                         Divider()
@@ -123,7 +119,7 @@ struct VideoInspector: View {
     private func actionButtons(_ video: VideoViewModel) -> some View {
         VStack(spacing: 8) {
             Button {
-                if let url = URL(string: "https://www.youtube.com/watch?v=\(video.videoId)") {
+                if let url = video.youtubeUrl {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
@@ -132,16 +128,20 @@ struct VideoInspector: View {
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
+            .help("Open this video on YouTube")
 
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString("https://www.youtube.com/watch?v=\(video.videoId)", forType: .string)
+                if let url = video.youtubeUrl {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                }
             } label: {
                 Label("Copy Link", systemImage: "link")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
             .buttonStyle(.bordered)
+            .help("Copy YouTube link to clipboard")
         }
     }
 
@@ -158,7 +158,7 @@ struct VideoInspector: View {
                     store.selectedVideoId = v.videoId
                 } label: {
                     HStack(spacing: 10) {
-                        relatedThumbnail(for: v)
+                        ThumbnailView(videoId: v.videoId, thumbnailUrl: v.thumbnailUrl, cacheDir: thumbnailCache.cacheDirURL)
                             .frame(width: 80, height: 45)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
 
@@ -179,52 +179,5 @@ struct VideoInspector: View {
                 .buttonStyle(.plain)
             }
         }
-    }
-
-    // MARK: - Thumbnails
-
-    @ViewBuilder
-    private func thumbnailView(for video: VideoViewModel) -> some View {
-        let path = thumbnailCache.cacheDirURL.appendingPathComponent("\(video.videoId).jpg")
-        if FileManager.default.fileExists(atPath: path.path),
-           let nsImage = NSImage(contentsOf: path) {
-            Image(nsImage: nsImage)
-                .resizable()
-                .aspectRatio(16/9, contentMode: .fill)
-        } else if let url = video.thumbnailUrl {
-            AsyncImage(url: url) { phase in
-                if case .success(let image) = phase {
-                    image.resizable().aspectRatio(16/9, contentMode: .fill)
-                } else {
-                    thumbnailPlaceholder
-                }
-            }
-        } else {
-            thumbnailPlaceholder
-        }
-    }
-
-    @ViewBuilder
-    private func relatedThumbnail(for video: VideoViewModel) -> some View {
-        let path = thumbnailCache.cacheDirURL.appendingPathComponent("\(video.videoId).jpg")
-        if FileManager.default.fileExists(atPath: path.path),
-           let nsImage = NSImage(contentsOf: path) {
-            Image(nsImage: nsImage)
-                .resizable()
-                .aspectRatio(16/9, contentMode: .fill)
-        } else {
-            Color(nsColor: .quaternaryLabelColor)
-        }
-    }
-
-    private var thumbnailPlaceholder: some View {
-        Color(nsColor: .quaternaryLabelColor)
-            .aspectRatio(16/9, contentMode: .fit)
-    }
-
-    private var channelIconPlaceholder: some View {
-        Image(systemName: "person.circle.fill")
-            .resizable()
-            .foregroundStyle(.tertiary)
     }
 }

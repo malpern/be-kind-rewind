@@ -86,11 +86,12 @@ public actor TopicSuggester {
 
     // MARK: - Step 2: Classify videos against fixed topic list
 
-    /// Assign each video to exactly one topic from the fixed list. Uses Haiku with temperature 0.
+    /// Assign each video to exactly one topic from the fixed list.
     public func classifyVideos(
         videos: [VideoItem],
         topics: [String],
         batchSize: Int = 200,
+        model: ClaudeClient.Model = .haiku,
         onProgress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> [ClassifiedVideo] {
         let topicList = topics.enumerated().map { "\($0 + 1). \($1)" }.joined(separator: "\n")
@@ -104,6 +105,11 @@ public actor TopicSuggester {
 
         for (batchIdx, batch) in batches.enumerated() {
             onProgress?(batchIdx + 1, batches.count)
+
+            // Polite delay between batches
+            if batchIdx > 0 {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
 
             let titleList = batch.items.enumerated().map { i, v in
                 let channel = v.channelName.map { " [\($0)]" } ?? ""
@@ -124,15 +130,19 @@ public actor TopicSuggester {
             Every video must be assigned. Use the topic number, not the name.
             """
 
-            let response = try await client.complete(
-                prompt: prompt,
-                system: "You are classifying videos into predefined topics. Return only valid JSON. Every video index must appear in the output.",
-                model: .haiku,
-                maxTokens: 4096
-            )
+            do {
+                let response = try await client.complete(
+                    prompt: prompt,
+                    system: "You are classifying videos into predefined topics. Return only valid JSON. Every video index must appear in the output.",
+                    model: model,
+                    maxTokens: 4096
+                )
 
-            let assignments = try parseClassificationResponse(response, topics: topics, batchOffset: batch.offset)
-            allAssignments.append(contentsOf: assignments)
+                let assignments = try parseClassificationResponse(response, topics: topics, batchOffset: batch.offset)
+                allAssignments.append(contentsOf: assignments)
+            } catch {
+                print("  ⚠ Batch \(batchIdx + 1) failed: \(error.localizedDescription). Skipping.")
+            }
         }
 
         return allAssignments
@@ -186,6 +196,60 @@ public actor TopicSuggester {
         return subTopicNames.compactMap { name in
             guard let indices = groups[name], !indices.isEmpty else { return nil }
             return (name: name, videoIndices: indices)
+        }
+    }
+
+    // MARK: - Discover subtopics (auto count, Sonnet)
+
+    /// Discover subtopics for a topic. Sonnet decides the natural number of subtopics.
+    /// Returns subtopic names and video assignments (by videoId).
+    public func discoverAndClassifySubtopics(
+        topicName: String,
+        videos: [VideoItem]
+    ) async throws -> [(name: String, videoIds: [String])] {
+        // Step 1: Sonnet discovers subtopic names (auto count)
+        let sampleTitles = videos.prefix(200).map { v in
+            let channel = v.channelName.map { " [\($0)]" } ?? ""
+            return "\(v.title ?? "Untitled")\(channel)"
+        }.joined(separator: "\n")
+
+        let discoverPrompt = """
+        This YouTube topic "\(topicName)" has \(videos.count) videos. Here's a sample:
+
+        \(sampleTitles)
+
+        Analyze these videos and suggest a natural number of sub-categories (typically 3-8) that would meaningfully organize them. Each sub-category should have a short descriptive name (2-5 words).
+
+        Return ONLY a JSON array of strings: ["Sub-Category A", "Sub-Category B", ...]
+        """
+
+        let namesResponse = try await client.complete(
+            prompt: discoverPrompt,
+            system: "You are a video librarian organizing a topic into sub-categories. Choose the number of sub-categories that makes sense for this content — don't force categories where none exist. Return only valid JSON.",
+            model: .sonnet,
+            maxTokens: 512
+        )
+
+        let subtopicNames = try parseStringArray(namesResponse)
+
+        // Step 2: Classify all videos against subtopic list using Haiku
+        let classified = try await classifyVideos(
+            videos: videos,
+            topics: subtopicNames,
+            batchSize: 200
+        )
+
+        // Group by subtopic, using videoId instead of sourceIndex
+        var groups: [String: [String]] = [:]
+        for c in classified {
+            let vid = videos[c.videoIndex].videoId ?? ""
+            guard !vid.isEmpty else { continue }
+            groups[c.topic, default: []].append(vid)
+        }
+
+        return subtopicNames.compactMap { name in
+            guard let ids = groups[name], !ids.isEmpty else { return nil }
+            return (name: name, videoIds: ids)
         }
     }
 
@@ -256,10 +320,16 @@ public actor TopicSuggester {
         topics: [String],
         batchOffset: Int
     ) throws -> [ClassifiedVideo] {
-        let cleaned = response
+        var cleaned = response
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Try to extract JSON object if surrounded by text
+        if let start = cleaned.firstIndex(of: "{"),
+           let end = cleaned.lastIndex(of: "}") {
+            cleaned = String(cleaned[start...end])
+        }
 
         guard let data = cleaned.data(using: .utf8),
               let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {

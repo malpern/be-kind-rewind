@@ -4,6 +4,8 @@ struct TopicSidebar: View {
     @Bindable var store: OrganizerStore
     @Bindable var displaySettings: DisplaySettings
     @State private var showingSettings = false
+    @State private var expandedTopicId: Int64? = nil
+    @FocusState private var searchFocused: Bool
 
     private var filteredTopics: [TopicViewModel] {
         let query = store.parsedQuery
@@ -17,59 +19,197 @@ struct TopicSidebar: View {
         }
     }
 
-    var body: some View {
-        List(selection: $store.selectedTopicId) {
-            Section {
-                ForEach(filteredTopics) { topic in
-                    TopicRow(topic: topic, highlightTerms: store.parsedQuery.includeTerms)
-                        .tag(topic.id)
-                        .contextMenu { contextMenu(for: topic) }
+    /// Selection binding that distinguishes main topics from subtopics.
+    /// Clicking a subtopic sets both selectedTopicId (parent) and selectedSubtopicId.
+    /// Clicking a main topic clears selectedSubtopicId.
+    private var sidebarSelection: Binding<Int64?> {
+        Binding(
+            get: { store.selectedSubtopicId ?? store.selectedTopicId },
+            set: { newValue in
+                guard let id = newValue else {
+                    store.selectedTopicId = nil
+                    store.selectedSubtopicId = nil
+                    return
                 }
-            } header: {
-                HStack {
-                    Text("\(filteredTopics.count) Topics")
-                        .font(.subheadline.weight(.medium))
-                    Spacer()
-                    if store.parsedQuery.isEmpty {
-                        Text("\(store.totalVideoCount) videos")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        Text("\(store.searchResultCount) results")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(Color.accentColor)
+                // Check if this is a subtopic
+                for topic in store.topics {
+                    if topic.subtopics.contains(where: { $0.id == id }) {
+                        store.selectedTopicId = topic.id
+                        store.selectedSubtopicId = id
+                        return
+                    }
+                }
+                // It's a main topic
+                store.selectedTopicId = id
+                store.selectedSubtopicId = nil
+            }
+        )
+    }
+
+    var body: some View {
+        ScrollViewReader { scrollProxy in
+            List(selection: sidebarSelection) {
+                // Hidden search field — scroll up to reveal
+                Section {
+                    VStack(spacing: 4) {
+                        HStack(spacing: 0) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.tertiary)
+                                .font(.body)
+                                .frame(width: 24)
+                            TextField("", text: $store.searchText, prompt: Text("Search").foregroundStyle(.tertiary))
+                                .textFieldStyle(.plain)
+                                .font(.body)
+                                .focused($searchFocused)
+                                .onSubmit {
+                                    if let first = store.typeaheadSuggestions().first {
+                                        selectSuggestion(first)
+                                    }
+                                }
+                            if !store.searchText.isEmpty {
+                                Button {
+                                    store.searchText = ""
+                                    searchFocused = true
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.tertiary)
+                                        .font(.body)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Clear search")
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(Color(nsColor: .controlBackgroundColor)))
+                        .overlay(Capsule().stroke(.quaternary, lineWidth: 0.5))
+
+                        let suggestions = store.typeaheadSuggestions()
+                        if searchFocused && !suggestions.isEmpty {
+                            SearchTypeahead(suggestions: suggestions, searchText: store.searchText) { suggestion in
+                                selectSuggestion(suggestion)
+                            }
+                        }
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                    .id("search-field")
+                }
+
+                Section {
+                    ForEach(filteredTopics) { topic in
+                        // Parent topic row — tap to expand/collapse and select
+                        TopicRow(topic: topic, highlightTerms: store.parsedQuery.includeTerms)
+                            .tag(topic.id)
+                            .contextMenu { contextMenu(for: topic) }
+                            .onDoubleClick {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    if expandedTopicId == topic.id {
+                                        expandedTopicId = nil
+                                    } else {
+                                        expandedTopicId = topic.id
+                                    }
+                                }
+                            }
+
+                        // Subtopics — shown when this topic is expanded
+                        if expandedTopicId == topic.id && !topic.subtopics.isEmpty {
+                            ForEach(topic.subtopics) { sub in
+                                TopicRow(topic: sub, highlightTerms: store.parsedQuery.includeTerms, isSubtopic: true)
+                                    .tag(sub.id)
+                                    .padding(.leading, 20)
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                            }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("\(filteredTopics.count) Topics")
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                        if store.parsedQuery.isEmpty {
+                            Text("\(store.totalVideoCount) videos")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            Text("\(store.searchResultCount) results")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+
+                if store.unassignedCount > 0 && store.parsedQuery.isEmpty {
+                    Section {
+                        HStack(spacing: 10) {
+                            Image(systemName: "questionmark.folder")
+                                .font(.title3)
+                                .foregroundStyle(.orange)
+                                .frame(width: 24)
+                            Text("Unassigned")
+                            Spacer()
+                            Text("\(store.unassignedCount)")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .foregroundStyle(.secondary)
                     }
                 }
             }
-
-            if store.unassignedCount > 0 && store.parsedQuery.isEmpty {
-                Section {
-                    HStack(spacing: 10) {
-                        Image(systemName: "questionmark.folder")
-                            .font(.title3)
-                            .foregroundStyle(.orange)
-                            .frame(width: 24)
-                        Text("Unassigned")
-                        Spacer()
-                        Text("\(store.unassignedCount)")
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    scrollProxy.scrollTo(filteredTopics.first?.id, anchor: .top)
+                }
+            }
+            .navigationTitle("")
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        withAnimation {
+                            scrollProxy.scrollTo("search-field", anchor: .top)
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            searchFocused = true
+                        }
+                        displaySettings.toast.show("Search", icon: "magnifyingglass")
+                    } label: {
+                        Image(systemName: "magnifyingglass")
                     }
-                    .foregroundStyle(.secondary)
+                    .help("Show search field")
+                    .accessibilityIdentifier("showSearch")
+                    .accessibilityLabel("Show search field")
+                }
+
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showingSettings.toggle()
+                        displaySettings.toast.show("Display Settings", icon: "gearshape")
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .help("Display settings")
+                    .accessibilityIdentifier("displaySettings")
+                    .accessibilityLabel("Display settings")
+                    .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
+                        SettingsPopover(displaySettings: displaySettings)
+                    }
                 }
             }
         }
-        .searchable(text: $store.searchText, placement: .sidebar, prompt: "Search videos & topics")
-        .navigationTitle("Be Kind, Rewind")
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button { showingSettings.toggle() } label: {
-                    Image(systemName: "gearshape")
-                }
-                .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
-                    SettingsPopover(displaySettings: displaySettings)
-                }
+    }
+
+    private func selectSuggestion(_ suggestion: TypeaheadSuggestion) {
+        switch suggestion.kind {
+        case .topic, .subtopic:
+            if let topicId = suggestion.topicId {
+                store.searchText = ""
+                searchFocused = false
+                store.selectedTopicId = topicId
             }
+        case .channel:
+            store.searchText = suggestion.text
+            searchFocused = false
         }
     }
 
@@ -109,7 +249,7 @@ private struct SettingsPopover: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Thumbnail Size")
-                    .font(.subheadline)
+                    .font(.body)
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
@@ -125,7 +265,10 @@ private struct SettingsPopover: View {
 
             Divider()
 
-            Toggle("Show video metadata", isOn: $displaySettings.showMetadata.animation(.easeInOut(duration: 0.25)))
+            Toggle("Compressed Layout", isOn: Binding(
+                get: { !displaySettings.showMetadata },
+                set: { displaySettings.showMetadata = !$0 }
+            ).animation(.easeInOut(duration: 0.25)))
         }
         .padding(16)
         .frame(width: 260)
@@ -137,12 +280,13 @@ private struct SettingsPopover: View {
 private struct TopicRow: View {
     let topic: TopicViewModel
     var highlightTerms: [String] = []
+    var isSubtopic: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: iconName(for: topic.name))
+            Image(systemName: TopicTheme.iconName(for: topic.name))
                 .font(.title3)
-                .foregroundStyle(iconColor(for: topic.name))
+                .foregroundStyle(TopicTheme.iconColor(for: topic.name))
                 .frame(width: 24)
 
             HighlightedText(topic.name, terms: highlightTerms)
@@ -155,48 +299,7 @@ private struct TopicRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-    }
-
-    private func iconName(for name: String) -> String {
-        let lower = name.lowercased()
-        if lower.contains("keyboard") { return "keyboard" }
-        if lower.contains("claude") || lower.contains("anthropic") { return "brain" }
-        if lower.contains("ai") || lower.contains("agent") || lower.contains("llm") { return "cpu" }
-        if lower.contains("vim") || lower.contains("terminal") { return "terminal" }
-        if lower.contains("swift") || lower.contains("ios") { return "swift" }
-        if lower.contains("mac") || lower.contains("apple") { return "desktopcomputer" }
-        if lower.contains("web") { return "globe" }
-        if lower.contains("embedded") || lower.contains("electronic") || lower.contains("pcb") { return "chip" }
-        if lower.contains("linux") || lower.contains("devops") { return "server.rack" }
-        if lower.contains("retro") || lower.contains("vintage") { return "clock.arrow.trianglehead.counterclockwise.rotate.90" }
-        if lower.contains("3d print") { return "cube" }
-        if lower.contains("home auto") { return "house" }
-        if lower.contains("geopolit") || lower.contains("current event") { return "globe.americas" }
-        if lower.contains("finance") || lower.contains("retire") { return "chart.line.uptrend.xyaxis" }
-        if lower.contains("health") || lower.contains("lifestyle") { return "heart" }
-        if lower.contains("entertainment") || lower.contains("pop culture") { return "film" }
-        if lower.contains("productiv") || lower.contains("creative") || lower.contains("learning") { return "lightbulb" }
-        if lower.contains("personal growth") || lower.contains("philosophy") { return "person.fill" }
-        if lower.contains("programming") || lower.contains("software") { return "chevron.left.forwardslash.chevron.right" }
-        if lower.contains("tech") || lower.contains("gadget") { return "wrench.and.screwdriver" }
-        if lower.contains("cursor") || lower.contains("ide") || lower.contains("coding tool") { return "hammer" }
-        return "folder"
-    }
-
-    private func iconColor(for name: String) -> Color {
-        let lower = name.lowercased()
-        if lower.contains("keyboard") { return .purple }
-        if lower.contains("claude") || lower.contains("anthropic") { return .orange }
-        if lower.contains("ai") || lower.contains("agent") || lower.contains("llm") { return .blue }
-        if lower.contains("vim") || lower.contains("terminal") { return .green }
-        if lower.contains("swift") || lower.contains("ios") { return .orange }
-        if lower.contains("mac") || lower.contains("apple") { return .gray }
-        if lower.contains("web") { return .cyan }
-        if lower.contains("embedded") || lower.contains("electronic") { return .yellow }
-        if lower.contains("retro") { return .brown }
-        if lower.contains("health") { return .red }
-        if lower.contains("finance") { return .green }
-        if lower.contains("entertainment") { return .pink }
-        return .secondary
+        .accessibilityIdentifier("topic-\(topic.id)")
+        .accessibilityLabel("\(topic.name), \(topic.videoCount) videos")
     }
 }
