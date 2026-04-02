@@ -15,6 +15,9 @@ struct AllVideosGridView: View {
     @State private var sectionProgressValues: [String: Double] = [:]
     @State private var viewportHeight: CGFloat = 600
     @State private var suppressSidebarSync = false
+    @State private var isScrolling = false
+    @State private var scrollFadeTask: Task<Void, Never>?
+    @State private var channelBarFocused = false  // true = arrow keys navigate channels, not videos
     @FocusState private var isFocused: Bool
 
     private var gridColumns: [GridItem] {
@@ -47,14 +50,14 @@ struct AllVideosGridView: View {
                 .focusable()
                 .focusEffectDisabled()
                 .focused($isFocused)
-                .onKeyPress(.rightArrow) { navigate(by: 1, proxy: proxy); return .handled }
-                .onKeyPress(.leftArrow) { navigate(by: -1, proxy: proxy); return .handled }
-                .onKeyPress(characters: CharacterSet(charactersIn: "l")) { _ in navigate(by: 1, proxy: proxy); return .handled }
-                .onKeyPress(characters: CharacterSet(charactersIn: "h")) { _ in navigate(by: -1, proxy: proxy); return .handled }
-                .onKeyPress(.downArrow) { navigate(by: estimatedColumnCount, proxy: proxy); return .handled }
-                .onKeyPress(.upArrow) { navigate(by: -estimatedColumnCount, proxy: proxy); return .handled }
-                .onKeyPress(characters: CharacterSet(charactersIn: "j")) { _ in navigate(by: estimatedColumnCount, proxy: proxy); return .handled }
-                .onKeyPress(characters: CharacterSet(charactersIn: "k")) { _ in navigate(by: -estimatedColumnCount, proxy: proxy); return .handled }
+                .onKeyPress(.rightArrow) { if channelBarFocused { navigateChannel(by: 1); return .handled }; navigate(by: 1, proxy: proxy); return .handled }
+                .onKeyPress(.leftArrow) { if channelBarFocused { navigateChannel(by: -1); return .handled }; navigate(by: -1, proxy: proxy); return .handled }
+                .onKeyPress(characters: CharacterSet(charactersIn: "l")) { _ in if channelBarFocused { navigateChannel(by: 1); return .handled }; navigate(by: 1, proxy: proxy); return .handled }
+                .onKeyPress(characters: CharacterSet(charactersIn: "h")) { _ in if channelBarFocused { navigateChannel(by: -1); return .handled }; navigate(by: -1, proxy: proxy); return .handled }
+                .onKeyPress(.downArrow) { if channelBarFocused { enterVideoGrid(proxy: proxy); return .handled }; navigate(by: estimatedColumnCount, proxy: proxy); return .handled }
+                .onKeyPress(.upArrow) { if tryEnterChannelBar(proxy: proxy) { return .handled }; navigate(by: -estimatedColumnCount, proxy: proxy); return .handled }
+                .onKeyPress(characters: CharacterSet(charactersIn: "j")) { _ in if channelBarFocused { enterVideoGrid(proxy: proxy); return .handled }; navigate(by: estimatedColumnCount, proxy: proxy); return .handled }
+                .onKeyPress(characters: CharacterSet(charactersIn: "k")) { _ in if tryEnterChannelBar(proxy: proxy) { return .handled }; navigate(by: -estimatedColumnCount, proxy: proxy); return .handled }
                 .onKeyPress(.pageDown) { navigate(by: estimatedColumnCount * GridConstants.pageJumpRows, proxy: proxy); return .handled }
                 .onKeyPress(.pageUp) { navigate(by: -estimatedColumnCount * GridConstants.pageJumpRows, proxy: proxy); return .handled }
                 .onKeyPress(.home) { jumpToEdge(first: true, proxy: proxy); return .handled }
@@ -64,6 +67,16 @@ struct AllVideosGridView: View {
                 }
                 .onChange(of: store.selectedTopicId) { _, newId in
                     scrollToTopic(newId, proxy: proxy)
+                }
+                .onChange(of: displaySettings.scrollToTopicRequested) { _, topicId in
+                    guard let topicId else { return }
+                    displaySettings.scrollToTopicRequested = nil
+                    scrollToTopic(topicId, proxy: proxy)
+                }
+                .onChange(of: displaySettings.focusGridRequested) { _, requested in
+                    guard requested else { return }
+                    displaySettings.focusGridRequested = false
+                    isFocused = true
                 }
         }
         .task {
@@ -96,6 +109,11 @@ struct AllVideosGridView: View {
                 recomputeFilteredSections()
             }
         }
+        .onChange(of: store.selectedChannelId) { _, _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                recomputeFilteredSections()
+            }
+        }
     }
 
     // MARK: - Content
@@ -117,7 +135,19 @@ struct AllVideosGridView: View {
                     .onChange(of: geo.size.height) { _, h in viewportHeight = h }
             }
         }
-        .onPreferenceChange(SectionProgressKey.self) { sectionProgressValues = $0 }
+        .onPreferenceChange(SectionProgressKey.self) { newValues in
+            sectionProgressValues = newValues
+            // Show progress bar while scrolling, fade out after pause
+            if !isScrolling {
+                withAnimation(.easeIn(duration: 0.15)) { isScrolling = true }
+            }
+            scrollFadeTask?.cancel()
+            scrollFadeTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.0))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.6)) { isScrolling = false }
+            }
+        }
     }
 
     @ViewBuilder
@@ -148,14 +178,64 @@ struct AllVideosGridView: View {
                 }
             }
         } header: {
-            SectionHeaderView(
-                name: section.topicName,
-                count: section.videos.count,
-                totalCount: section.totalCount,
-                topicId: section.topicId,
-                progress: sectionProgressValues[section.id] ?? 0,
-                highlightTerms: store.parsedQuery.includeTerms
-            )
+            VStack(spacing: 0) {
+                if let creatorName = section.creatorName {
+                    // Creator grouping mode: show creator header
+                    CreatorSectionHeaderView(
+                        channelName: creatorName,
+                        channelIconUrl: section.channelIconUrl,
+                        count: section.videos.count,
+                        totalCount: section.totalCount,
+                        topicNames: section.topicNames,
+                        sectionId: section.id,
+                        progress: sectionProgressValues[section.id] ?? 0,
+                        highlightTerms: store.parsedQuery.includeTerms
+                    )
+                    .onTapGesture {
+                        store.inspectedCreatorName = creatorName
+                    }
+                    .onHover { hovering in
+                        if hovering {
+                            store.inspectedCreatorName = creatorName
+                        }
+                    }
+                } else {
+                    // Normal topic mode: show topic header + creator circles
+                    SectionHeaderView(
+                        name: section.topicName,
+                        count: section.videos.count,
+                        totalCount: section.totalCount,
+                        topicId: section.topicId,
+                        progress: sectionProgressValues[section.id] ?? 0,
+                        showProgress: isScrolling,
+                        highlightTerms: store.parsedQuery.includeTerms
+                    )
+                    CreatorCirclesBar(
+                        channels: store.channelsForTopic(section.topicId),
+                        selectedChannelId: store.selectedChannelId,
+                        topicId: section.topicId,
+                        videoCountForChannel: { store.videoCountForChannel($0, inTopic: section.topicId) },
+                        hasRecentContent: { store.channelHasRecentContent($0, inTopic: section.topicId) },
+                        onSelect: { channelId in
+                            // Set the inspector to show creator detail
+                            let channel = store.channelsForTopic(section.topicId).first(where: { $0.channelId == channelId })
+                            if store.selectedChannelId == channelId {
+                                // Deselecting — clear creator inspection
+                                store.inspectedCreatorName = nil
+                            } else {
+                                store.inspectedCreatorName = channel?.name
+                            }
+                            // Keep sidebar on this topic and focus the channel bar
+                            suppressSidebarSync = true
+                            channelBarFocused = (store.selectedChannelId != channelId) // will be selected
+                            store.toggleChannelFilter(channelId)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                suppressSidebarSync = false
+                            }
+                        }
+                    )
+                }
+            }
             .id("header-\(section.id)")
         }
     }
@@ -195,12 +275,28 @@ struct AllVideosGridView: View {
             }.filter { !$0.videos.isEmpty }
         }
 
+        // Filter by selected channel if one is active
+        if let channelId = store.selectedChannelId {
+            result = result.map { section in
+                let filtered = section.videos.filter { $0.channelId == channelId }
+                guard !filtered.isEmpty else { return section }
+                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap)
+            }.filter { !$0.videos.isEmpty }
+        }
+
         // Apply sort to videos within each section (nil = playlist order)
         if let sortOrder = displaySettings.sortOrder {
             let ascending = displaySettings.sortAscending
-            cachedFilteredSections = result.map { section in
-                let sorted = sortVideos(section.videos, by: sortOrder, ascending: ascending)
-                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: sorted, totalCount: section.totalCount, videoSubtopicMap: section.videoSubtopicMap)
+            if sortOrder == .creator {
+                // Group by creator: explode each topic section into per-creator sub-sections
+                cachedFilteredSections = result.flatMap { section in
+                    groupByCreator(section: section, ascending: ascending)
+                }
+            } else {
+                cachedFilteredSections = result.map { section in
+                    let sorted = sortVideos(section.videos, by: sortOrder, ascending: ascending)
+                    return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: sorted, totalCount: section.totalCount, videoSubtopicMap: section.videoSubtopicMap)
+                }
             }
         } else {
             cachedFilteredSections = result
@@ -233,6 +329,56 @@ struct AllVideosGridView: View {
                 result = false
             }
             return ascending ? !result : result
+        }
+    }
+
+    /// Group a topic section's videos by creator, returning one sub-section per channel.
+    /// Each sub-section uses CreatorSectionHeaderView. Sorted by video count desc (most prolific first).
+    private func groupByCreator(section: TopicSection, ascending: Bool) -> [TopicSection] {
+        // Group videos by channel name
+        var grouped: [(name: String, videos: [VideoGridItemModel])] = []
+        var channelOrder: [String] = []
+        var channelMap: [String: [VideoGridItemModel]] = [:]
+
+        for video in section.videos {
+            let name = video.channelName ?? "Unknown"
+            if channelMap[name] == nil {
+                channelOrder.append(name)
+            }
+            channelMap[name, default: []].append(video)
+        }
+
+        for name in channelOrder {
+            if let videos = channelMap[name] {
+                grouped.append((name: name, videos: videos))
+            }
+        }
+
+        // Sort creators by video count descending (or ascending)
+        grouped.sort { a, b in
+            ascending ? a.videos.count < b.videos.count : a.videos.count > b.videos.count
+        }
+
+        // Sort videos within each creator by date (newest first)
+        return grouped.map { group in
+            let sorted = group.videos.sorted { a, b in
+                parseAge(a.publishedAt) < parseAge(b.publishedAt)
+            }
+            // Find the channel icon from the first video that has one
+            let iconUrl = sorted.first(where: { $0.channelIconUrl != nil })?.channelIconUrl
+            // Collect topic names this creator appears in
+            let topicNames = [section.topicName]
+
+            return TopicSection(
+                topicId: section.topicId,
+                topicName: section.topicName,
+                videos: sorted,
+                totalCount: store.channelCounts[group.name],
+                videoSubtopicMap: section.videoSubtopicMap,
+                creatorName: group.name,
+                channelIconUrl: iconUrl,
+                topicNames: topicNames
+            )
         }
     }
 
@@ -320,20 +466,65 @@ struct AllVideosGridView: View {
                 viewCount: v.viewCount,
                 publishedAt: v.publishedAt,
                 duration: v.duration,
-                channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) }
+                channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
+                channelId: v.channelId
             )
         }
     }
 
     // MARK: - Navigation
 
+    private func navigateChannel(by offset: Int) {
+        guard let currentId = store.selectedChannelId,
+              let topicId = store.selectedTopicId else { return }
+        let channels = store.channelsForTopic(topicId)
+        guard let currentIndex = channels.firstIndex(where: { $0.channelId == currentId }) else { return }
+        let newIndex = max(0, min(channels.count - 1, currentIndex + offset))
+        let newChannel = channels[newIndex]
+        suppressSidebarSync = true
+        channelBarFocused = true
+        store.selectedChannelId = newChannel.channelId
+        store.inspectedCreatorName = newChannel.name
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            suppressSidebarSync = false
+        }
+    }
+
+    /// Move focus from channel bar into the video grid, selecting the first video.
+    private func enterVideoGrid(proxy: ScrollViewProxy) {
+        channelBarFocused = false
+        if let firstId = displayedVideoIds.first {
+            selectedVideoId = firstId
+            proxy.scrollTo(firstId, anchor: .center)
+        }
+    }
+
+    /// If a channel filter is active and the selected video is in the top row, move focus to the channel bar.
+    /// Returns true if focus moved to channel bar.
+    private func tryEnterChannelBar(proxy: ScrollViewProxy) -> Bool {
+        guard store.selectedChannelId != nil, !channelBarFocused else { return false }
+        let ids = displayedVideoIds
+        guard let currentId = selectedVideoId,
+              let currentIndex = ids.firstIndex(of: currentId) else { return false }
+        // If in the top row (index < column count), move to channel bar
+        if currentIndex < estimatedColumnCount {
+            channelBarFocused = true
+            return true
+        }
+        return false
+    }
+
     private func selectVideo(_ id: String, proxy: ScrollViewProxy) {
         selectedVideoId = id
+        store.inspectedCreatorName = nil
+        channelBarFocused = false
         isFocused = true
     }
 
     private func syncSidebarToVideo(_ videoId: String?) {
         guard !suppressSidebarSync else { return }
+        // Don't change topic when a channel filter is active — it would clear the filter
+        guard store.selectedChannelId == nil else { return }
         guard let vid = videoId,
               let section = sections.first(where: { $0.videos.contains(where: { $0.id == vid }) }) else { return }
         if store.selectedSubtopicId == nil {
@@ -343,11 +534,20 @@ struct AllVideosGridView: View {
 
     private func scrollToTopic(_ topicId: Int64?, proxy: ScrollViewProxy) {
         guard let topicId else { return }
+        // Clear channel filter when navigating to a different topic
+        if store.selectedChannelId != nil {
+            store.inspectedCreatorName = nil
+            store.clearChannelFilter()
+        }
         suppressSidebarSync = true
-        proxy.scrollTo("header-topic-\(topicId)", anchor: .top)
+        // Scroll to first video with .top anchor — this positions the pinned header
+        // at the top of the viewport with content immediately below it
         if let section = displayedSections.first(where: { $0.topicId == topicId }),
            let firstVideo = section.videos.first {
+            proxy.scrollTo(firstVideo.id, anchor: .top)
             selectedVideoId = firstVideo.id
+        } else {
+            proxy.scrollTo("header-topic-\(topicId)", anchor: .top)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             suppressSidebarSync = false
@@ -425,6 +625,7 @@ struct VideoGridItemModel: Identifiable, Equatable {
     let publishedAt: String?
     let duration: String?
     let channelIconUrl: URL?
+    let channelId: String?
 }
 
 // MARK: - Preference Keys

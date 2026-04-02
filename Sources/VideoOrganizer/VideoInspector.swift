@@ -9,7 +9,9 @@ struct VideoInspector: View {
 
     var body: some View {
         Group {
-            if let video {
+            if let creatorName = store.inspectedCreatorName {
+                creatorInspectorContent(store.creatorDetail(channelName: creatorName))
+            } else if let video {
                 inspectorContent(video)
             } else {
                 emptyState
@@ -142,6 +144,116 @@ struct VideoInspector: View {
             .controlSize(.large)
             .buttonStyle(.bordered)
             .help("Copy YouTube link to clipboard")
+        }
+    }
+
+    // MARK: - Creator Detail
+
+    private func creatorInspectorContent(_ detail: CreatorDetailViewModel) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Large channel icon
+                HStack {
+                    Spacer()
+                    creatorIcon(detail)
+                        .frame(width: 80, height: 80)
+                        .clipShape(Circle())
+                    Spacer()
+                }
+                .padding(.top, 20)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    // Name + tier
+                    VStack(spacing: 4) {
+                        Text(detail.channelName)
+                            .font(.title2.weight(.semibold))
+                            .textSelection(.enabled)
+
+                        if let subs = detail.formattedSubscribers, let tier = detail.subscriberTier {
+                            Text("\(subs) · \(tier)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                    Divider()
+
+                    // Stats
+                    Grid(alignment: .leading, verticalSpacing: 10) {
+                        metadataRow(icon: "video", label: "Saved", value: "\(detail.totalVideoCount) videos")
+                        if let coverage = detail.coverageText {
+                            metadataRow(icon: "chart.pie", label: "Coverage", value: coverage)
+                        }
+                        if detail.totalViews > 0 {
+                            metadataRow(icon: "eye", label: "Views", value: detail.formattedViews)
+                        }
+                        if let velocity = detail.velocityText {
+                            metadataRow(icon: "bolt", label: "Recent", value: velocity)
+                        }
+                        if let newest = detail.newestAge {
+                            metadataRow(icon: "calendar", label: "Newest", value: newest)
+                        }
+                        if let oldest = detail.oldestAge {
+                            metadataRow(icon: "calendar.badge.clock", label: "Oldest", value: oldest)
+                        }
+                    }
+
+                    Divider()
+
+                    // Topic breakdown
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Topics")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ForEach(detail.videosByTopic, id: \.topicName) { entry in
+                            HStack {
+                                Image(systemName: TopicTheme.iconName(for: entry.topicName))
+                                    .font(.caption)
+                                    .foregroundStyle(TopicTheme.iconColor(for: entry.topicName))
+                                    .frame(width: 20)
+                                Text(entry.topicName)
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(entry.videos.count)")
+                                    .font(.callout.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func creatorIcon(_ detail: CreatorDetailViewModel) -> some View {
+        if let data = detail.channelIconData, let nsImage = NSImage(data: data) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else if let urlString = detail.channelIconUrl, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    creatorPlaceholder(detail.channelName)
+                }
+            }
+        } else {
+            creatorPlaceholder(detail.channelName)
+        }
+    }
+
+    private func creatorPlaceholder(_ name: String) -> some View {
+        ZStack {
+            Circle().fill(Color.accentColor.opacity(0.15))
+            Text(String(name.prefix(1)).uppercased())
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
     }
 

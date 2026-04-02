@@ -140,6 +140,86 @@ public struct YouTubeClient: Sendable {
 
         return results
     }
+    /// Fetch full channel details (snippet + statistics) for multiple channel IDs, batching 50 at a time.
+    public func fetchChannelDetails(
+        channelIds: [String],
+        progress: ((Int, Int) -> Void)? = nil
+    ) async throws -> [ChannelRecord] {
+        var results: [ChannelRecord] = []
+        let batches = stride(from: 0, to: channelIds.count, by: 50).map {
+            Array(channelIds[$0..<min($0 + 50, channelIds.count)])
+        }
+
+        var consecutiveErrors = 0
+        for (index, batch) in batches.enumerated() {
+            progress?(index + 1, batches.count)
+
+            if index > 0 {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+
+            do {
+                let batchIds = batch.joined(separator: ",")
+                var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/channels")!
+                components.queryItems = [
+                    URLQueryItem(name: "part", value: "snippet,statistics"),
+                    URLQueryItem(name: "id", value: batchIds),
+                    URLQueryItem(name: "key", value: apiKey)
+                ]
+
+                let (data, response) = try await URLSession.shared.data(from: components.url!)
+                guard let http = response as? HTTPURLResponse else {
+                    throw YouTubeError.invalidResponse
+                }
+                guard http.statusCode == 200 else {
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    throw YouTubeError.apiError(statusCode: http.statusCode, message: body)
+                }
+
+                let decoded = try JSONDecoder().decode(ChannelDetailResponse.self, from: data)
+                let now = ISO8601DateFormatter().string(from: Date())
+                for item in decoded.items {
+                    let record = ChannelRecord(
+                        channelId: item.id,
+                        name: item.snippet?.title ?? item.id,
+                        handle: item.snippet?.customUrl,
+                        channelUrl: "https://www.youtube.com/channel/\(item.id)",
+                        iconUrl: item.snippet?.thumbnails?.defaultThumbnail?.url,
+                        subscriberCount: item.statistics?.subscriberCount,
+                        description: item.snippet?.description,
+                        videoCountTotal: item.statistics?.videoCount.flatMap { Int($0) },
+                        fetchedAt: now
+                    )
+                    results.append(record)
+                }
+                consecutiveErrors = 0
+            } catch let error as YouTubeError {
+                consecutiveErrors += 1
+                if case .apiError(let code, _) = error, (code == 403 || code == 429) {
+                    let backoff = min(60, 2 * consecutiveErrors)
+                    print("  ⚠ Rate limited on channel batch \(index + 1). Waiting \(backoff)s...")
+                    try? await Task.sleep(for: .seconds(backoff))
+                    if consecutiveErrors >= 3 {
+                        print("  ✘ 3 consecutive failures. Stopping — got \(results.count) channels.")
+                        break
+                    }
+                } else {
+                    print("  ⚠ Channel batch \(index + 1) failed: \(error.localizedDescription). Skipping.")
+                }
+            }
+        }
+
+        return results
+    }
+
+    /// Download a channel icon image and return the raw bytes.
+    public func downloadChannelIcon(url: URL) async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw YouTubeError.invalidResponse
+        }
+        return data
+    }
 }
 
 // MARK: - Models
@@ -268,6 +348,40 @@ private struct ChannelItem: Decodable {
                 let url: String?
             }
         }
+    }
+}
+
+private struct ChannelDetailResponse: Decodable {
+    let items: [ChannelDetailItem]
+}
+
+private struct ChannelDetailItem: Decodable {
+    let id: String
+    let snippet: ChannelDetailSnippet?
+    let statistics: ChannelStatistics?
+
+    struct ChannelDetailSnippet: Decodable {
+        let title: String?
+        let description: String?
+        let customUrl: String?
+        let thumbnails: Thumbnails?
+
+        struct Thumbnails: Decodable {
+            let defaultThumbnail: Thumbnail?
+
+            enum CodingKeys: String, CodingKey {
+                case defaultThumbnail = "default"
+            }
+
+            struct Thumbnail: Decodable {
+                let url: String?
+            }
+        }
+    }
+
+    struct ChannelStatistics: Decodable {
+        let subscriberCount: String?
+        let videoCount: String?
     }
 }
 

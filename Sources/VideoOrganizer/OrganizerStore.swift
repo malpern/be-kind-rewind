@@ -13,10 +13,22 @@ final class OrganizerStore {
     private(set) var errorMessage: String?
 
     // Selected state
-    var selectedTopicId: Int64?
+    var selectedTopicId: Int64? {
+        didSet {
+            if oldValue != selectedTopicId {
+                selectedChannelId = nil
+            }
+        }
+    }
     var selectedSubtopicId: Int64?
     var selectedVideoId: String?
     var hoveredVideoId: String?
+
+    // Channel filter
+    var selectedChannelId: String?
+
+    // Creator inspection — set when hovering/clicking a creator section header
+    var inspectedCreatorName: String?
 
     // Search
     var searchText: String = ""
@@ -114,23 +126,165 @@ final class OrganizerStore {
     // Cached channel counts — rebuilt with video maps
     private(set) var channelCounts: [String: Int] = [:]
 
+    // Cached channels per topic — rebuilt on loadTopics()
+    private(set) var topicChannels: [Int64: [ChannelRecord]] = [:]
+
+    // Cached per-topic channel video counts: [topicId: [channelId: count]]
+    private var topicChannelCounts: [Int64: [String: Int]] = [:]
+
+    // Cached per-topic channel recency: [topicId: Set<channelId>]
+    private var topicChannelRecent: [Int64: Set<String>] = [:]
+
+    /// Returns channels with videos in the given topic (including subtopics), sorted by video count desc.
+    func channelsForTopic(_ topicId: Int64) -> [ChannelRecord] {
+        topicChannels[topicId] ?? []
+    }
+
+    /// Video count for a channel within a topic. O(1) from cache.
+    func videoCountForChannel(_ channelId: String, inTopic topicId: Int64) -> Int {
+        topicChannelCounts[topicId]?[channelId] ?? 0
+    }
+
+    /// Whether a channel has recent content in a topic. O(1) from cache.
+    func channelHasRecentContent(_ channelId: String, inTopic topicId: Int64) -> Bool {
+        topicChannelRecent[topicId]?.contains(channelId) ?? false
+    }
+
+    /// Toggle channel filter. If already selected, deselects.
+    func toggleChannelFilter(_ channelId: String) {
+        if selectedChannelId == channelId {
+            selectedChannelId = nil
+        } else {
+            selectedChannelId = channelId
+        }
+    }
+
+    /// Clear channel filter.
+    func clearChannelFilter() {
+        selectedChannelId = nil
+    }
+
+    /// Get all videos by a creator name, grouped by topic.
+    func creatorDetail(channelName: String) -> CreatorDetailViewModel {
+        var videosByTopic: [(topicName: String, videos: [VideoViewModel])] = []
+        var totalViews = 0
+        var oldestDays = 0
+        var newestDays = Int.max
+        var recentCount = 0  // videos from last 30 days
+
+        for topic in topics {
+            let videos = videosForTopicIncludingSubtopics(topic.id).filter { $0.channelName == channelName }
+            if !videos.isEmpty {
+                videosByTopic.append((topicName: topic.name, videos: videos))
+                for v in videos {
+                    if let vc = v.viewCount { totalViews += parseViewCount(vc) }
+                    if let pa = v.publishedAt {
+                        let days = parseAge(pa)
+                        oldestDays = max(oldestDays, days)
+                        newestDays = min(newestDays, days)
+                        if days <= 30 { recentCount += 1 }
+                    }
+                }
+            }
+        }
+
+        let channelIconUrl = videosByTopic.flatMap(\.videos).first(where: { $0.channelIconUrl != nil })?.channelIconUrl
+        let totalCount = videosByTopic.reduce(0) { $0 + $1.videos.count }
+
+        // Look up channel record for subscriber count and total uploads
+        let channelId = videosByTopic.flatMap(\.videos).first(where: { $0.channelId != nil })?.channelId
+        let channelRecord = channelId.flatMap { cId in topicChannels.values.flatMap { $0 }.first(where: { $0.channelId == cId }) }
+
+        let subscriberCount = channelRecord?.subscriberCount.flatMap { Int($0) }
+        let totalUploads = channelRecord?.videoCountTotal
+
+        return CreatorDetailViewModel(
+            channelName: channelName,
+            channelIconUrl: channelIconUrl,
+            channelIconData: channelRecord?.iconData,
+            totalVideoCount: totalCount,
+            totalViews: totalViews,
+            newestAge: newestDays == Int.max ? nil : formatAge(newestDays),
+            oldestAge: oldestDays == 0 ? nil : formatAge(oldestDays),
+            recentCount: recentCount,
+            subscriberCount: subscriberCount,
+            totalUploads: totalUploads,
+            videosByTopic: videosByTopic
+        )
+    }
+
+    private func parseViewCount(_ str: String) -> Int {
+        let cleaned = str.replacingOccurrences(of: " views", with: "")
+        if cleaned.hasSuffix("M") {
+            return Int((Double(cleaned.dropLast()) ?? 0) * 1_000_000)
+        } else if cleaned.hasSuffix("K") {
+            return Int((Double(cleaned.dropLast()) ?? 0) * 1_000)
+        }
+        return Int(cleaned) ?? 0
+    }
+
+    private func parseAge(_ str: String) -> Int {
+        if str == "today" { return 0 }
+        let parts = str.split(separator: " ")
+        guard parts.count >= 2, let num = Int(parts[0]) else { return Int.max }
+        let unit = String(parts[1])
+        if unit.hasPrefix("day") { return num }
+        if unit.hasPrefix("month") { return num * 30 }
+        if unit.hasPrefix("year") { return num * 365 }
+        return Int.max
+    }
+
+    private func formatAge(_ days: Int) -> String {
+        if days == 0 { return "today" }
+        if days == 1 { return "1 day ago" }
+        if days < 30 { return "\(days) days ago" }
+        let months = days / 30
+        if months == 1 { return "1 month ago" }
+        if months < 12 { return "\(months) months ago" }
+        let years = months / 12
+        if years == 1 { return "1 year ago" }
+        return "\(years) years ago"
+    }
+
     private func rebuildVideoMaps() {
         var vMap: [String: VideoViewModel] = [:]
         var tMap: [String: Int64] = [:]
         var cCounts: [String: Int] = [:]
+        var tChannels: [Int64: [ChannelRecord]] = [:]
+        var tChannelCounts: [Int64: [String: Int]] = [:]
+        var tChannelRecent: [Int64: Set<String>] = [:]
+
         for topic in topics {
-            // Include videos from subtopics
+            var perTopicCounts: [String: Int] = [:]
+            var perTopicRecent: Set<String> = []
+
             for video in videosForTopicIncludingSubtopics(topic.id) {
                 vMap[video.videoId] = video
                 tMap[video.videoId] = topic.id
                 if let channel = video.channelName {
                     cCounts[channel, default: 0] += 1
                 }
+                if let cid = video.channelId {
+                    perTopicCounts[cid, default: 0] += 1
+                    if let pa = video.publishedAt, parseAge(pa) <= 7 {
+                        perTopicRecent.insert(cid)
+                    }
+                }
+            }
+
+            tChannelCounts[topic.id] = perTopicCounts
+            tChannelRecent[topic.id] = perTopicRecent
+
+            if let channels = try? store.channelsForTopicIncludingSubtopics(id: topic.id) {
+                tChannels[topic.id] = channels
             }
         }
         videoMap = vMap
         videoTopicMap = tMap
         channelCounts = cCounts
+        topicChannels = tChannels
+        topicChannelCounts = tChannelCounts
+        topicChannelRecent = tChannelRecent
     }
 
     /// Typeahead suggestions matching the current search text.
@@ -320,6 +474,7 @@ struct VideoViewModel: Identifiable, Hashable {
     let publishedAt: String?
     let duration: String?
     let channelIconUrl: String?
+    let channelId: String?
 
     var id: String { videoId }
 
@@ -345,9 +500,10 @@ struct VideoViewModel: Identifiable, Hashable {
         self.publishedAt = stored.publishedAt
         self.duration = stored.duration
         self.channelIconUrl = stored.channelIconUrl
+        self.channelId = stored.channelId
     }
 
-    init(videoId: String, title: String, channelName: String?, videoUrl: String?, sourceIndex: Int, topicId: Int64?, viewCount: String?, publishedAt: String?, duration: String?, channelIconUrl: String?) {
+    init(videoId: String, title: String, channelName: String?, videoUrl: String?, sourceIndex: Int, topicId: Int64?, viewCount: String?, publishedAt: String?, duration: String?, channelIconUrl: String?, channelId: String? = nil) {
         self.videoId = videoId
         self.title = title
         self.channelName = channelName
@@ -358,6 +514,60 @@ struct VideoViewModel: Identifiable, Hashable {
         self.publishedAt = publishedAt
         self.duration = duration
         self.channelIconUrl = channelIconUrl
+        self.channelId = channelId
+    }
+}
+
+struct CreatorDetailViewModel {
+    let channelName: String
+    let channelIconUrl: String?
+    let channelIconData: Data?
+    let totalVideoCount: Int
+    let totalViews: Int
+    let newestAge: String?
+    let oldestAge: String?
+    let recentCount: Int           // videos from last 30 days
+    let subscriberCount: Int?      // from channel record
+    let totalUploads: Int?         // total videos on their channel
+    let videosByTopic: [(topicName: String, videos: [VideoViewModel])]
+
+    var formattedViews: String {
+        if totalViews >= 1_000_000 {
+            return String(format: "%.1fM views", Double(totalViews) / 1_000_000)
+        } else if totalViews >= 1_000 {
+            return String(format: "%.0fK views", Double(totalViews) / 1_000)
+        }
+        return "\(totalViews) views"
+    }
+
+    var formattedSubscribers: String? {
+        guard let subs = subscriberCount else { return nil }
+        if subs >= 1_000_000 {
+            return String(format: "%.1fM subscribers", Double(subs) / 1_000_000)
+        } else if subs >= 1_000 {
+            return String(format: "%.0fK subscribers", Double(subs) / 1_000)
+        }
+        return "\(subs) subscribers"
+    }
+
+    var subscriberTier: String? {
+        guard let subs = subscriberCount else { return nil }
+        if subs >= 10_000_000 { return "mega creator" }
+        if subs >= 1_000_000 { return "large creator" }
+        if subs >= 100_000 { return "mid-tier creator" }
+        if subs >= 10_000 { return "growing creator" }
+        return "small creator"
+    }
+
+    var coverageText: String? {
+        guard let total = totalUploads, total > 0 else { return nil }
+        let pct = Int(Double(totalVideoCount) / Double(total) * 100)
+        return "You've saved \(totalVideoCount) of \(total) videos (\(pct)%)"
+    }
+
+    var velocityText: String? {
+        if recentCount == 0 { return nil }
+        return "\(recentCount) new video\(recentCount == 1 ? "" : "s") in last 30 days"
     }
 }
 

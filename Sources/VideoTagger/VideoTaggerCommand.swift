@@ -8,7 +8,7 @@ struct VideoTaggerCommand: AsyncParsableCommand {
         commandName: "video-tagger",
         abstract: "Organize YouTube videos into topics using Claude AI.",
         version: "0.2.0",
-        subcommands: [Suggest.self, Reclassify.self, ReclassifyAll.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self, GenerateSubtopics.self]
+        subcommands: [Suggest.self, Reclassify.self, ReclassifyAll.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self, EnrichChannels.self, GenerateSubtopics.self]
     )
 }
 
@@ -384,42 +384,174 @@ struct BackfillMetadata: AsyncParsableCommand {
             print("Fetching metadata for \(ids.count) videos missing metadata...")
         }
 
+        // videos.list costs 1 unit per call (50 IDs each) — no extra cost for part=snippet,contentDetails,statistics
+        let batchCount = (ids.count + 49) / 50
+        print("Quota: \(batchCount) API calls (\(batchCount) of 10,000 daily units)")
+
         let metadata = try await youtube.fetchAllVideoMetadata(ids: ids) { batch, total in
             print("  Batch \(batch)/\(total)...")
         }
 
-        // Collect unique channel IDs and fetch their icons
-        let channelIds = Array(Set(metadata.compactMap(\.channelId)))
-        var channelIcons: [String: String] = [:]
-        if !channelIds.isEmpty {
-            print("Fetching channel icons for \(channelIds.count) channels...")
-            let iconBatches = stride(from: 0, to: channelIds.count, by: 50).map {
-                Array(channelIds[$0..<min($0 + 50, channelIds.count)])
-            }
-            for batch in iconBatches {
-                let icons = try await youtube.fetchChannelThumbnails(channelIds: batch)
-                channelIcons.merge(icons) { _, new in new }
-            }
-        }
-
+        // videos.list already returns channelId — use it to set channel_id and create stubs.
+        // No separate channels.list call needed here; run 'enrich-channels' for full details + icons.
         var updated = 0
+        var channelStubs = 0
         for m in metadata {
-            let iconUrl = m.channelId.flatMap { channelIcons[$0] }
             try store.updateVideoMetadata(
                 videoId: m.videoId,
                 viewCount: m.formattedViewCount,
                 publishedAt: m.formattedDate,
                 duration: m.formattedDuration,
-                channelIconUrl: iconUrl
+                channelIconUrl: nil  // icons come from enrich-channels, not here
             )
+
+            // Set channel_id on the video and create a stub channel record
+            if let cid = m.channelId {
+                try store.setVideoChannelId(videoId: m.videoId, channelId: cid)
+                if try store.channelById(cid) == nil {
+                    try store.upsertChannel(ChannelRecord(
+                        channelId: cid,
+                        name: m.channelTitle ?? cid,
+                        channelUrl: "https://www.youtube.com/channel/\(cid)"
+                    ))
+                    channelStubs += 1
+                }
+            }
             updated += 1
         }
 
         let missing = ids.count - updated
-        print("Updated \(updated) videos with metadata and \(channelIcons.count) channel icons.")
+        print("\nUpdated \(updated) videos. Used \(batchCount) quota units.")
+        if channelStubs > 0 {
+            print("Created \(channelStubs) channel stubs. Run 'enrich-channels' for full details + cached icons.")
+        }
         if missing > 0 {
             print("\(missing) videos had no YouTube data (possibly deleted/private).")
         }
+    }
+}
+
+// MARK: - Enrich Channels
+
+struct EnrichChannels: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "enrich-channels",
+        abstract: "Fetch full channel details and cache icons locally."
+    )
+
+    @Option(name: .shortAndLong, help: "Path to the SQLite database.")
+    var db: String = "video-tagger.db"
+
+    @Option(name: .long, help: "YouTube/Google API key (or set YOUTUBE_API_KEY / GOOGLE_API_KEY env var).")
+    var apiKey: String?
+
+    @Flag(name: .long, help: "Re-fetch all channels, not just stubs missing details.")
+    var force = false
+
+    @Option(name: .long, help: "Max age in days before re-fetching (default 90).")
+    var maxAgeDays: Int = 90
+
+    func run() async throws {
+        let store = try TopicStore(path: db)
+        let youtube: YouTubeClient
+        if let apiKey {
+            youtube = YouTubeClient(apiKey: apiKey)
+        } else {
+            youtube = try YouTubeClient()
+        }
+
+        var quotaUsed = 0
+
+        // Step 1: Backfill channel_id on videos that don't have one yet
+        // This requires videos.list (1 unit per 50 videos)
+        let missingChannelIds = try store.videoIdsMissingChannelId()
+        if !missingChannelIds.isEmpty {
+            let batchCount = (missingChannelIds.count + 49) / 50
+            print("Step 1: Backfilling channel_id for \(missingChannelIds.count) videos (\(batchCount) API calls = \(batchCount) quota units)")
+            let metadata = try await youtube.fetchAllVideoMetadata(ids: missingChannelIds) { batch, total in
+                print("  videos.list batch \(batch)/\(total)...")
+            }
+            quotaUsed += batchCount
+            var backfilled = 0
+            for m in metadata {
+                if let cid = m.channelId {
+                    try store.setVideoChannelId(videoId: m.videoId, channelId: cid)
+                    if try store.channelById(cid) == nil {
+                        try store.upsertChannel(ChannelRecord(
+                            channelId: cid,
+                            name: m.channelTitle ?? cid,
+                            channelUrl: "https://www.youtube.com/channel/\(cid)"
+                        ))
+                    }
+                    backfilled += 1
+                }
+            }
+            print("  Backfilled \(backfilled) videos.\n")
+        } else {
+            print("Step 1: All videos already have channel_id. Skipping. (0 quota units)")
+        }
+
+        // Step 2: Fetch full channel details via channels.list (1 unit per 50 channels)
+        let allChannelIds = try store.allChannelIds()
+        let channelsToEnrich: [String]
+        if force {
+            channelsToEnrich = allChannelIds
+        } else {
+            channelsToEnrich = try allChannelIds.filter { cid in
+                guard let channel = try store.channelById(cid) else { return true }
+                guard let fetchedAt = channel.fetchedAt else { return true }
+                let formatter = ISO8601DateFormatter()
+                guard let date = formatter.date(from: fetchedAt) else { return true }
+                return Date().timeIntervalSince(date) > Double(maxAgeDays * 86400)
+            }
+        }
+
+        if channelsToEnrich.isEmpty {
+            print("Step 2: All \(allChannelIds.count) channels up to date. (0 quota units)")
+        } else {
+            let batchCount = (channelsToEnrich.count + 49) / 50
+            print("Step 2: Enriching \(channelsToEnrich.count) of \(allChannelIds.count) channels (\(batchCount) API calls = \(batchCount) quota units)")
+            let channelRecords = try await youtube.fetchChannelDetails(channelIds: channelsToEnrich) { batch, total in
+                print("  channels.list batch \(batch)/\(total)...")
+            }
+            quotaUsed += batchCount
+
+            for record in channelRecords {
+                try store.upsertChannel(record)
+            }
+            print("  Updated \(channelRecords.count) channel records.\n")
+        }
+
+        // Step 3: Download and cache icons from CDN (FREE — no quota cost)
+        let channelsNeedingIcons = try allChannelIds.compactMap { cid -> ChannelRecord? in
+            guard let ch = try store.channelById(cid) else { return nil }
+            return (ch.iconData == nil && ch.iconUrl != nil) ? ch : nil
+        }
+
+        if !channelsNeedingIcons.isEmpty {
+            print("Step 3: Downloading \(channelsNeedingIcons.count) channel icons from CDN (0 quota units — CDN is free)")
+            var iconCount = 0
+            for channel in channelsNeedingIcons {
+                guard let urlString = channel.iconUrl, let url = URL(string: urlString) else { continue }
+                do {
+                    let data = try await youtube.downloadChannelIcon(url: url)
+                    try store.updateChannelIcon(channelId: channel.channelId, iconData: data)
+                    iconCount += 1
+                    if iconCount % 50 == 0 {
+                        print("  Downloaded \(iconCount)/\(channelsNeedingIcons.count) icons...")
+                    }
+                } catch {
+                    print("  ⚠ Failed: \(channel.name)")
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            print("  Cached \(iconCount) icons locally.\n")
+        } else {
+            print("Step 3: All channel icons already cached. (0 quota units)")
+        }
+
+        print("Done. Used \(quotaUsed) of 10,000 daily quota units.")
+        print("Channel data is ready for creator circles.")
     }
 }
 

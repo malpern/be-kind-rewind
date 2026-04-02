@@ -9,6 +9,7 @@ public final class TopicStore: Sendable {
     private let topics = Table("topics")
     private let videos = Table("videos")
     private let commitLog = Table("commit_log")
+    private let channels = Table("channels")
 
     // Topic columns
     private let topicId = SQLite.Expression<Int64>("id")
@@ -27,6 +28,20 @@ public final class TopicStore: Sendable {
     private let videoPublishedAt = SQLite.Expression<String?>("published_at")
     private let videoDuration = SQLite.Expression<String?>("duration")
     private let videoChannelIconUrl = SQLite.Expression<String?>("channel_icon_url")
+    private let videoChannelId = SQLite.Expression<String?>("channel_id")
+
+    // Channel columns
+    private let channelId = SQLite.Expression<String>("channel_id")
+    private let channelName = SQLite.Expression<String>("name")
+    private let channelHandle = SQLite.Expression<String?>("handle")
+    private let channelUrl = SQLite.Expression<String?>("channel_url")
+    private let channelIconUrl = SQLite.Expression<String?>("icon_url")
+    private let channelIconData = SQLite.Expression<SQLite.Blob?>("icon_data")
+    private let channelSubscriberCount = SQLite.Expression<String?>("subscriber_count")
+    private let channelDescription = SQLite.Expression<String?>("description")
+    private let channelVideoCountTotal = SQLite.Expression<Int?>("video_count_total")
+    private let channelFetchedAt = SQLite.Expression<String?>("fetched_at")
+    private let channelIconFetchedAt = SQLite.Expression<String?>("icon_fetched_at")
 
     // Commit log columns
     private let commitId = SQLite.Expression<Int64>("id")
@@ -84,6 +99,26 @@ public final class TopicStore: Sendable {
         if !topicColumns.contains("parent_id") {
             try db.run("ALTER TABLE topics ADD COLUMN parent_id INTEGER REFERENCES topics(id)")
         }
+
+        // Migrate: add channel_id to videos if missing
+        if !existingColumns.contains("channel_id") {
+            try db.run("ALTER TABLE videos ADD COLUMN channel_id TEXT REFERENCES channels(channel_id)")
+        }
+
+        // Create channels table
+        try db.run(channels.create(ifNotExists: true) { t in
+            t.column(channelId, primaryKey: true)
+            t.column(channelName)
+            t.column(channelHandle)
+            t.column(channelUrl)
+            t.column(channelIconUrl)
+            t.column(channelIconData)
+            t.column(channelSubscriberCount)
+            t.column(channelDescription)
+            t.column(channelVideoCountTotal)
+            t.column(channelFetchedAt)
+            t.column(channelIconFetchedAt)
+        })
 
         try db.run(commitLog.create(ifNotExists: true) { t in
             t.column(commitId, primaryKey: .autoincrement)
@@ -266,7 +301,8 @@ public final class TopicStore: Sendable {
                 viewCount: row[videoViewCount],
                 publishedAt: row[videoPublishedAt],
                 duration: row[videoDuration],
-                channelIconUrl: row[videoChannelIconUrl]
+                channelIconUrl: row[videoChannelIconUrl],
+                channelId: row[videoChannelId]
             )
         }
     }
@@ -286,7 +322,8 @@ public final class TopicStore: Sendable {
                 viewCount: row[videoViewCount],
                 publishedAt: row[videoPublishedAt],
                 duration: row[videoDuration],
-                channelIconUrl: row[videoChannelIconUrl]
+                channelIconUrl: row[videoChannelIconUrl],
+                channelId: row[videoChannelId]
             )
         }
     }
@@ -315,6 +352,150 @@ public final class TopicStore: Sendable {
 
     public func totalVideoCount() throws -> Int {
         try db.scalar(videos.count)
+    }
+
+    // MARK: - Channels
+
+    /// Insert or update a channel record.
+    public func upsertChannel(_ channel: ChannelRecord) throws {
+        try db.run(channels.insert(or: .replace,
+            channelId <- channel.channelId,
+            channelName <- channel.name,
+            channelHandle <- channel.handle,
+            channelUrl <- channel.channelUrl,
+            channelIconUrl <- channel.iconUrl,
+            channelIconData <- channel.iconData.map { SQLite.Blob(bytes: [UInt8]($0)) },
+            channelSubscriberCount <- channel.subscriberCount,
+            channelDescription <- channel.description,
+            channelVideoCountTotal <- channel.videoCountTotal,
+            channelFetchedAt <- channel.fetchedAt,
+            channelIconFetchedAt <- channel.iconFetchedAt
+        ))
+    }
+
+    /// Look up a single channel by ID.
+    public func channelById(_ id: String) throws -> ChannelRecord? {
+        guard let row = try db.pluck(channels.filter(channelId == id)) else { return nil }
+        return channelFromRow(row)
+    }
+
+    /// Return all channels that have at least one video in the given topic.
+    public func channelsForTopic(id topicId: Int64) throws -> [ChannelRecord] {
+        let query = """
+            SELECT DISTINCT c.* FROM channels c
+            INNER JOIN videos v ON v.channel_id = c.channel_id
+            WHERE v.topic_id = ?
+            ORDER BY (SELECT COUNT(*) FROM videos v2 WHERE v2.channel_id = c.channel_id AND v2.topic_id = ?) DESC
+        """
+        return try channelsFromRawQuery(query, bindings: [topicId, topicId])
+    }
+
+    /// Return all channels that have videos in the given topic or its subtopics.
+    public func channelsForTopicIncludingSubtopics(id topicId: Int64) throws -> [ChannelRecord] {
+        let subtopicIds = try db.prepare(topics.filter(topicParentId == topicId).select(self.topicId)).map { $0[self.topicId] }
+        let allIds = [topicId] + subtopicIds
+        let placeholders = allIds.map { _ in "?" }.joined(separator: ",")
+        let query = """
+            SELECT DISTINCT c.* FROM channels c
+            INNER JOIN videos v ON v.channel_id = c.channel_id
+            WHERE v.topic_id IN (\(placeholders))
+            ORDER BY (SELECT COUNT(*) FROM videos v2 WHERE v2.channel_id = c.channel_id AND v2.topic_id IN (\(placeholders))) DESC
+        """
+        let bindings: [Binding] = allIds.map { $0 as Binding } + allIds.map { $0 as Binding }
+        return try channelsFromRawQuery(query, bindings: bindings)
+    }
+
+    /// Update the cached icon image data for a channel.
+    public func updateChannelIcon(channelId cid: String, iconData: Data) throws {
+        let blob = SQLite.Blob(bytes: [UInt8](iconData))
+        try db.run(channels.filter(channelId == cid).update(
+            channelIconData <- blob,
+            channelIconFetchedAt <- ISO8601DateFormatter().string(from: Date())
+        ))
+    }
+
+    /// Set the channel_id foreign key on a video.
+    public func setVideoChannelId(videoId vid: String, channelId cid: String) throws {
+        try db.run(videos.filter(videoId == vid).update(videoChannelId <- cid))
+    }
+
+    /// Return all channel IDs in the channels table.
+    public func allChannelIds() throws -> [String] {
+        try db.prepare(channels.select(channelId)).map { $0[channelId] }
+    }
+
+    /// Return video IDs that don't have a channel_id set yet.
+    public func videoIdsMissingChannelId() throws -> [String] {
+        try db.prepare(videos.filter(videoChannelId == nil as String?).select(videoId)).map { $0[videoId] }
+    }
+
+    /// Return videos for a specific channel within a topic (including subtopics).
+    public func videosForTopicByChannel(topicId tid: Int64, channelId cid: String) throws -> [StoredVideo] {
+        let subtopicIds = try db.prepare(topics.filter(topicParentId == tid).select(topicId)).map { $0[topicId] }
+        let allIds = [tid] + subtopicIds
+        let query = videos.filter(allIds.contains(videoTopicId) && videoChannelId == cid).order(videoSourceIndex)
+        return try db.prepare(query).map { row in
+            StoredVideo(
+                videoId: row[videoId],
+                title: row[videoTitle],
+                channelName: row[videoChannel],
+                videoUrl: row[videoUrl],
+                sourceIndex: row[videoSourceIndex],
+                topicId: row[videoTopicId],
+                viewCount: row[videoViewCount],
+                publishedAt: row[videoPublishedAt],
+                duration: row[videoDuration],
+                channelIconUrl: row[videoChannelIconUrl],
+                channelId: row[videoChannelId]
+            )
+        }
+    }
+
+    /// Count videos for a channel within a topic (including subtopics).
+    public func videoCountForChannel(channelId cid: String, inTopic tid: Int64) throws -> Int {
+        let subtopicIds = try db.prepare(topics.filter(topicParentId == tid).select(topicId)).map { $0[topicId] }
+        let allIds = [tid] + subtopicIds
+        return try db.scalar(videos.filter(allIds.contains(videoTopicId) && videoChannelId == cid).count)
+    }
+
+    private func channelFromRow(_ row: Row) -> ChannelRecord {
+        ChannelRecord(
+            channelId: row[channelId],
+            name: row[channelName],
+            handle: row[channelHandle],
+            channelUrl: row[channelUrl],
+            iconUrl: row[channelIconUrl],
+            iconData: row[channelIconData].map { Data($0.bytes) },
+            subscriberCount: row[channelSubscriberCount],
+            description: row[channelDescription],
+            videoCountTotal: row[channelVideoCountTotal],
+            fetchedAt: row[channelFetchedAt],
+            iconFetchedAt: row[channelIconFetchedAt]
+        )
+    }
+
+    private func channelsFromRawQuery(_ query: String, bindings: [Binding]) throws -> [ChannelRecord] {
+        var results: [ChannelRecord] = []
+        let stmt = try db.prepare(query)
+        for row in try stmt.bind(bindings) {
+            // Raw query columns match channels table order
+            guard let cid = row[0] as? String,
+                  let name = row[1] as? String else { continue }
+            results.append(ChannelRecord(
+                channelId: cid,
+                name: name,
+                handle: row[2] as? String,
+                channelUrl: row[3] as? String,
+                iconUrl: row[4] as? String,
+                iconData: (row[5] as? SQLite.Blob).map { Data($0.bytes) },
+                subscriberCount: row[6] as? String,
+                description: row[7] as? String,
+                videoCountTotal: (row[8] as? Int64).map { Int($0) },
+                fetchedAt: row[9] as? String,
+                iconFetchedAt: row[10] as? String
+            ))
+        }
+        return results
     }
 
     // MARK: - Video Metadata
@@ -412,6 +593,7 @@ public struct StoredVideo: Sendable {
     public let publishedAt: String?
     public let duration: String?
     public let channelIconUrl: String?
+    public let channelId: String?
 }
 
 public struct SyncAction: Sendable {

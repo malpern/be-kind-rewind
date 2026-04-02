@@ -6,6 +6,7 @@ struct TopicSidebar: View {
     @State private var showingSettings = false
     @State private var expandedTopicId: Int64? = nil
     @FocusState private var searchFocused: Bool
+    @FocusState private var listFocused: Bool
 
     private var filteredTopics: [TopicViewModel] {
         let query = store.parsedQuery
@@ -36,12 +37,14 @@ struct TopicSidebar: View {
                     if topic.subtopics.contains(where: { $0.id == id }) {
                         store.selectedTopicId = topic.id
                         store.selectedSubtopicId = id
+                        displaySettings.scrollToTopicRequested = topic.id
                         return
                     }
                 }
                 // It's a main topic
                 store.selectedTopicId = id
                 store.selectedSubtopicId = nil
+                displaySettings.scrollToTopicRequested = id
             }
         )
     }
@@ -157,9 +160,26 @@ struct TopicSidebar: View {
                     }
                 }
             }
+            .focusable()
+            .focused($listFocused)
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     scrollProxy.scrollTo(filteredTopics.first?.id, anchor: .top)
+                }
+            }
+            .onChange(of: displaySettings.focusSidebarRequested) { _, requested in
+                guard requested else { return }
+                displaySettings.focusSidebarRequested = false
+                listFocused = true
+            }
+            .onChange(of: displaySettings.searchRequested) { _, requested in
+                guard requested else { return }
+                displaySettings.searchRequested = false
+                withAnimation {
+                    scrollProxy.scrollTo("search-field", anchor: .top)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    searchFocused = true
                 }
             }
             .navigationTitle("")

@@ -6,6 +6,7 @@ struct SectionHeaderView: View {
     var totalCount: Int?
     let topicId: Int64
     let progress: Double
+    var showProgress: Bool = true
     var highlightTerms: [String] = []
 
     var body: some View {
@@ -47,6 +48,7 @@ struct SectionHeaderView: View {
                 }
             }
             .frame(height: GridConstants.progressBarHeight)
+            .opacity(showProgress ? 1 : 0)
         }
         .background(.bar)
     }

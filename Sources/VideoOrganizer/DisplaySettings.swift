@@ -67,4 +67,8 @@ final class DisplaySettings {
     var sortOrder: SortOrder? = nil
     var sortAscending: Bool = false
     var toast = ActionToastState()
+    var searchRequested = false
+    var focusSidebarRequested = false
+    var focusGridRequested = false
+    var scrollToTopicRequested: Int64?
 }
