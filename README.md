@@ -51,7 +51,15 @@ video-tagger merge 3 7
 
 # Reclassify unassigned videos
 video-tagger reclassify
+
+# Resync playlist provenance for all known playlists
+video-tagger verify-all-playlists --db /tmp/full-tagger-v2.db
 ```
+
+Playlist provenance notes:
+- playlist identities can be imported from a `youtube-cli` `playlists.json` artifact
+- playlist memberships are verified via the YouTube API using stored OAuth tokens
+- rerun `video-tagger verify-all-playlists --db /tmp/full-tagger-v2.db` whenever you want to refresh playlist membership data for the current library
 
 ## Requirements
 
@@ -72,6 +80,8 @@ open "Video Organizer.app"
 # Run tests
 swift test
 ```
+
+Commits also run local Swift checks automatically through the repo's pre-commit hook. If staged changes include `*.swift`, `Package.swift`, or `build-app.sh`, the hook runs `swift test` before the commit completes. Docs-only commits skip the check. To bypass it intentionally, use `SKIP_LOCAL_CHECKS=1 git commit ...`.
 
 ## Architecture
 
