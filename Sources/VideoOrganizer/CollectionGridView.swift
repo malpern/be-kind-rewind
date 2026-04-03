@@ -22,11 +22,13 @@ struct CollectionGridView: View {
             showMetadata: displaySettings.showMetadata,
             selectedVideoId: store.selectedVideoId,
             scrollToTopicRequested: displaySettings.scrollToTopicRequested,
+            scrollToSectionRequested: displaySettings.scrollToSectionRequested,
             onSelect: { videoId in
                 store.selectedVideoId = videoId
             },
             onClearScrollRequest: {
                 displaySettings.scrollToTopicRequested = nil
+                displaySettings.scrollToSectionRequested = nil
             }
         )
         .task {
@@ -149,7 +151,15 @@ struct CollectionGridView: View {
             return (name: name, videos: videos)
         }
         grouped.sort { a, b in ascending ? a.videos.count < b.videos.count : a.videos.count > b.videos.count }
-        return grouped.map { group in
+        let topicMarker = TopicSection(
+            topicId: section.topicId,
+            topicName: section.topicName,
+            videos: [],
+            totalCount: section.totalCount,
+            headerCountOverride: section.videos.count,
+            videoSubtopicMap: section.videoSubtopicMap
+        )
+        let creatorSections = grouped.map { group in
             let sorted = group.videos.sorted { a, b in parseAge(a.publishedAt) < parseAge(b.publishedAt) }
             let iconUrl = sorted.first(where: { $0.channelIconUrl != nil })?.channelIconUrl
             return TopicSection(
@@ -159,6 +169,7 @@ struct CollectionGridView: View {
                 creatorName: group.name, channelIconUrl: iconUrl, topicNames: [section.topicName]
             )
         }
+        return [topicMarker] + creatorSections
     }
 
     private func sortVideos(_ videos: [VideoGridItemModel], by order: SortOrder, ascending: Bool) -> [VideoGridItemModel] {
@@ -222,6 +233,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
     let showMetadata: Bool
     let selectedVideoId: String?
     let scrollToTopicRequested: Int64?
+    let scrollToSectionRequested: String?
     let onSelect: (String) -> Void
     let onClearScrollRequest: () -> Void
 
@@ -256,6 +268,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
         }
 
+        if let sectionId = scrollToSectionRequested {
+            coordinator.enqueueScroll(toSectionId: sectionId)
+            DispatchQueue.main.async {
+                onClearScrollRequest()
+            }
+        }
+
         container.scheduleFlushIfReady()
     }
 
@@ -272,6 +291,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private var pendingGeneration: Int = -1
         private var renderedGeneration: Int = -1
         private var pendingScrollTopicId: Int64?
+        private var pendingScrollSectionId: String?
         private var pendingSelectedVideoId: String?
         private var renderedSelectedVideoId: String?
         private var needsLayoutInvalidation = false
@@ -331,6 +351,10 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             pendingScrollTopicId = topicId
         }
 
+        func enqueueScroll(toSectionId sectionId: String) {
+            pendingScrollSectionId = sectionId
+        }
+
         func flushIfReady() {
             guard let container, let collectionView, container.isReadyForCollectionWork else { return }
 
@@ -355,6 +379,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             if let topicId = pendingScrollTopicId {
                 pendingScrollTopicId = nil
                 didApplyScroll = scrollToTopic(topicId)
+            }
+
+            if let sectionId = pendingScrollSectionId {
+                pendingScrollSectionId = nil
+                didApplyScroll = scrollToSection(sectionId) || didApplyScroll
             }
 
             if renderedSelectedVideoId != pendingSelectedVideoId || shouldReload || shouldInvalidateLayout || didApplyScroll {
@@ -511,16 +540,53 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard let collectionView,
                   collectionView.numberOfSections > 0,
                   let sectionIndex = renderedSections.firstIndex(where: { $0.topicId == topicId }),
-                  sectionIndex < collectionView.numberOfSections,
-                  collectionView.numberOfItems(inSection: sectionIndex) > 0 else { return false }
+                  sectionIndex < collectionView.numberOfSections else { return false }
 
-            let indexPath = IndexPath(item: 0, section: sectionIndex)
-            collectionView.scrollToItems(at: Set([indexPath]), scrollPosition: .top)
+            return scrollToSectionIndex(sectionIndex)
+        }
 
-            let video = renderedSections[sectionIndex].videos[0]
-            pendingSelectedVideoId = video.id
-            renderedSelectedVideoId = video.id
-            onSelect(video.id)
+        @discardableResult
+        private func scrollToSection(_ sectionId: String) -> Bool {
+            guard let collectionView,
+                  collectionView.numberOfSections > 0,
+                  let sectionIndex = renderedSections.firstIndex(where: { $0.id == sectionId }),
+                  sectionIndex < collectionView.numberOfSections else { return false }
+
+            return scrollToSectionIndex(sectionIndex)
+        }
+
+        @discardableResult
+        private func scrollToSectionIndex(_ sectionIndex: Int) -> Bool {
+            guard let collectionView else { return false }
+            let itemCount = collectionView.numberOfItems(inSection: sectionIndex)
+            if itemCount > 0 {
+                let indexPath = IndexPath(item: 0, section: sectionIndex)
+                collectionView.scrollToItems(at: Set([indexPath]), scrollPosition: .top)
+
+                let video = renderedSections[sectionIndex].videos[0]
+                pendingSelectedVideoId = video.id
+                renderedSelectedVideoId = video.id
+                onSelect(video.id)
+                return true
+            }
+
+            guard let scrollView = collectionView.enclosingScrollView,
+                  let attributes = collectionView.collectionViewLayout?
+                    .layoutAttributesForSupplementaryView(
+                        ofKind: NSCollectionView.elementKindSectionHeader,
+                        at: IndexPath(item: 0, section: sectionIndex)
+                    ) else { return false }
+
+            let origin = NSPoint(x: 0, y: max(attributes.frame.minY, 0))
+            scrollView.contentView.scroll(to: origin)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+
+            if let nextVideoSection = renderedSections.dropFirst(sectionIndex + 1).first(where: { !$0.videos.isEmpty }),
+               let video = nextVideoSection.videos.first {
+                pendingSelectedVideoId = video.id
+                renderedSelectedVideoId = video.id
+                onSelect(video.id)
+            }
             return true
         }
 
@@ -542,7 +608,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
             return .topic(
                 name: section.topicName,
-                count: section.videos.count,
+                count: section.headerCountOverride ?? section.videos.count,
                 totalCount: section.totalCount,
                 topicId: section.topicId,
                 highlightTerms: store?.parsedQuery.includeTerms ?? [],

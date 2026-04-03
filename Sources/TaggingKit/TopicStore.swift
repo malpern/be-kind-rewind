@@ -128,6 +128,10 @@ public final class TopicStore: Sendable {
             t.column(commitCreatedAt, defaultValue: ISO8601DateFormatter().string(from: Date()))
             t.column(commitSynced, defaultValue: false)
         })
+
+        try db.run("CREATE INDEX IF NOT EXISTS idx_topics_parent_id ON topics(parent_id)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_source ON videos(topic_id, source_index)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_channel_source ON videos(topic_id, channel_id, source_index)")
     }
 
     // MARK: - Import
@@ -265,11 +269,23 @@ public final class TopicStore: Sendable {
     /// Get all videos for a topic and its subtopics.
     public func videosForTopicIncludingSubtopics(id tid: Int64) throws -> [StoredVideo] {
         let subtopicIds = try db.prepare(topics.filter(topicParentId == tid).select(topicId)).map { $0[topicId] }
-        var allVideos = try videosForTopic(id: tid)
-        for sid in subtopicIds {
-            allVideos.append(contentsOf: try videosForTopic(id: sid))
+        let allIds = [tid] + subtopicIds
+        let query = videos.filter(allIds.contains(videoTopicId)).order(videoSourceIndex)
+        return try db.prepare(query).map { row in
+            StoredVideo(
+                videoId: row[videoId],
+                title: row[videoTitle],
+                channelName: row[videoChannel],
+                videoUrl: row[videoUrl],
+                sourceIndex: row[videoSourceIndex],
+                topicId: row[videoTopicId],
+                viewCount: row[videoViewCount],
+                publishedAt: row[videoPublishedAt],
+                duration: row[videoDuration],
+                channelIconUrl: row[videoChannelIconUrl],
+                channelId: row[videoChannelId]
+            )
         }
-        return allVideos.sorted { $0.sourceIndex < $1.sourceIndex }
     }
 
     // MARK: - Assignments
@@ -382,12 +398,14 @@ public final class TopicStore: Sendable {
     /// Return all channels that have at least one video in the given topic.
     public func channelsForTopic(id topicId: Int64) throws -> [ChannelRecord] {
         let query = """
-            SELECT DISTINCT c.* FROM channels c
+            SELECT c.*, COUNT(v.video_id) AS topic_video_count
+            FROM channels c
             INNER JOIN videos v ON v.channel_id = c.channel_id
             WHERE v.topic_id = ?
-            ORDER BY (SELECT COUNT(*) FROM videos v2 WHERE v2.channel_id = c.channel_id AND v2.topic_id = ?) DESC
+            GROUP BY c.channel_id
+            ORDER BY topic_video_count DESC
         """
-        return try channelsFromRawQuery(query, bindings: [topicId, topicId])
+        return try channelsFromRawQuery(query, bindings: [topicId])
     }
 
     /// Return all channels that have videos in the given topic or its subtopics.
@@ -396,12 +414,14 @@ public final class TopicStore: Sendable {
         let allIds = [topicId] + subtopicIds
         let placeholders = allIds.map { _ in "?" }.joined(separator: ",")
         let query = """
-            SELECT DISTINCT c.* FROM channels c
+            SELECT c.*, COUNT(v.video_id) AS topic_video_count
+            FROM channels c
             INNER JOIN videos v ON v.channel_id = c.channel_id
             WHERE v.topic_id IN (\(placeholders))
-            ORDER BY (SELECT COUNT(*) FROM videos v2 WHERE v2.channel_id = c.channel_id AND v2.topic_id IN (\(placeholders))) DESC
+            GROUP BY c.channel_id
+            ORDER BY topic_video_count DESC
         """
-        let bindings: [Binding] = allIds.map { $0 as Binding } + allIds.map { $0 as Binding }
+        let bindings: [Binding] = allIds.map { $0 as Binding }
         return try channelsFromRawQuery(query, bindings: bindings)
     }
 
@@ -477,7 +497,7 @@ public final class TopicStore: Sendable {
     private func channelsFromRawQuery(_ query: String, bindings: [Binding]) throws -> [ChannelRecord] {
         var results: [ChannelRecord] = []
         let stmt = try db.prepare(query)
-        for row in try stmt.bind(bindings) {
+        for row in stmt.bind(bindings) {
             // Raw query columns match channels table order
             guard let cid = row[0] as? String,
                   let name = row[1] as? String else { continue }

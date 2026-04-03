@@ -5,8 +5,13 @@ struct TopicSidebar: View {
     @Bindable var displaySettings: DisplaySettings
     @State private var showingSettings = false
     @State private var expandedTopicId: Int64? = nil
+    @State private var selectedCreatorSectionId: String?
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
+
+    private var isCreatorMode: Bool {
+        displaySettings.sortOrder == .creator
+    }
 
     private var filteredTopics: [TopicViewModel] {
         let query = store.parsedQuery
@@ -119,24 +124,45 @@ struct TopicSidebar: View {
                             .contextMenu { contextMenu(for: topic) }
                             .id(topic.id)
 
-                            if expandedTopicId == topic.id && !topic.subtopics.isEmpty {
-                                ForEach(topic.subtopics) { sub in
-                                    TopicRow(topic: sub, highlightTerms: store.parsedQuery.includeTerms, isSubtopic: true, isSelected: isSelected(sub))
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                    .simultaneousGesture(
-                                        TapGesture(count: 1).onEnded {
+                            if expandedTopicId == topic.id {
+                                if isCreatorMode {
+                                    ForEach(creatorEntries(for: topic)) { creator in
+                                        Button {
+                                            applyCreatorSelection(creator)
+                                        } label: {
+                                            CreatorSidebarRow(
+                                                creator: creator,
+                                                highlightTerms: store.parsedQuery.includeTerms,
+                                                isSelected: selectedCreatorSectionId == creator.sectionId
+                                            )
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .contentShape(Rectangle())
+                                        .accessibilityIdentifier("creator-\(creator.sectionId)")
+                                        .accessibilityLabel("\(creator.creatorName), \(creator.count) videos")
+                                        .padding(.leading, 20)
+                                        .id(creator.sectionId)
+                                    }
+                                } else if !topic.subtopics.isEmpty {
+                                    ForEach(topic.subtopics) { sub in
+                                        TopicRow(topic: sub, highlightTerms: store.parsedQuery.includeTerms, isSubtopic: true, isSelected: isSelected(sub))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                        .simultaneousGesture(
+                                            TapGesture(count: 1).onEnded {
+                                                applySidebarSelection(topicId: topic.id, subtopicId: sub.id)
+                                            }
+                                        )
+                                        .accessibilityIdentifier("topic-\(sub.id)")
+                                        .accessibilityLabel("\(sub.name), \(sub.videoCount) videos")
+                                        .accessibilityAddTraits(.isButton)
+                                        .accessibilityAction {
                                             applySidebarSelection(topicId: topic.id, subtopicId: sub.id)
                                         }
-                                    )
-                                    .accessibilityIdentifier("topic-\(sub.id)")
-                                    .accessibilityLabel("\(sub.name), \(sub.videoCount) videos")
-                                    .accessibilityAddTraits(.isButton)
-                                    .accessibilityAction {
-                                        applySidebarSelection(topicId: topic.id, subtopicId: sub.id)
+                                        .padding(.leading, 20)
+                                        .transition(.move(edge: .top).combined(with: .opacity))
                                     }
-                                    .padding(.leading, 20)
-                                    .transition(.move(edge: .top).combined(with: .opacity))
                                 }
                             }
                         }
@@ -165,6 +191,14 @@ struct TopicSidebar: View {
             .focusable()
             .focused($listFocused)
             .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    scrollProxy.scrollTo(filteredTopics.first?.id, anchor: .top)
+                }
+            }
+            .onChange(of: displaySettings.sortOrder) { _, _ in
+                if !isCreatorMode {
+                    selectedCreatorSectionId = nil
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     scrollProxy.scrollTo(filteredTopics.first?.id, anchor: .top)
                 }
@@ -236,9 +270,16 @@ struct TopicSidebar: View {
     }
 
     private func applySidebarSelection(topicId: Int64, subtopicId: Int64?) {
+        selectedCreatorSectionId = nil
         store.selectedTopicId = topicId
         store.selectedSubtopicId = subtopicId
         displaySettings.scrollToTopicRequested = topicId
+    }
+
+    private func applyCreatorSelection(_ creator: CreatorSidebarEntry) {
+        selectedCreatorSectionId = creator.sectionId
+        store.inspectedCreatorName = creator.creatorName
+        displaySettings.scrollToSectionRequested = creator.sectionId
     }
 
     @ViewBuilder
@@ -261,6 +302,20 @@ struct TopicSidebar: View {
 
         Button("Delete Topic", role: .destructive) {
             store.deleteTopic(topic.id)
+        }
+    }
+
+    private func creatorEntries(for topic: TopicViewModel) -> [CreatorSidebarEntry] {
+        let channels = store.channelsForTopic(topic.id)
+        return channels.compactMap { channel in
+            let count = store.videoCountForChannel(channel.channelId, inTopic: topic.id)
+            guard count > 0 else { return nil }
+            return CreatorSidebarEntry(
+                sectionId: "creator-\(topic.id)-\(channel.name)",
+                creatorName: channel.name,
+                count: count,
+                channelIconUrl: channel.iconUrl.flatMap(URL.init(string:))
+            )
         }
     }
 }
@@ -333,5 +388,62 @@ private struct TopicRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isSelected ? Color.accentColor.opacity(0.25) : .clear)
         )
+    }
+}
+
+private struct CreatorSidebarEntry: Identifiable {
+    let sectionId: String
+    let creatorName: String
+    let count: Int
+    let channelIconUrl: URL?
+
+    var id: String { sectionId }
+}
+
+private struct CreatorSidebarRow: View {
+    let creator: CreatorSidebarEntry
+    var highlightTerms: [String] = []
+    var isSelected: Bool = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            channelIcon
+
+            VStack(alignment: .leading, spacing: 2) {
+                HighlightedText(creator.creatorName, terms: highlightTerms)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Text("\(creator.count)")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.25) : .clear)
+        )
+    }
+
+    @ViewBuilder
+    private var channelIcon: some View {
+        if let channelIconUrl = creator.channelIconUrl {
+            AsyncImage(url: channelIconUrl) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Image(systemName: "person.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 24, height: 24)
+            .clipShape(Circle())
+        } else {
+            Image(systemName: "person.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+        }
     }
 }

@@ -71,4 +71,5 @@ final class DisplaySettings {
     var focusSidebarRequested = false
     var focusGridRequested = false
     var scrollToTopicRequested: Int64?
+    var scrollToSectionRequested: String?
 }

@@ -602,6 +602,7 @@ struct TopicSection: Identifiable {
     let topicName: String
     let videos: [VideoGridItemModel]
     var totalCount: Int?
+    var headerCountOverride: Int? = nil
     var videoSubtopicMap: [String: Int64] = [:]
     // Creator-mode fields
     var creatorName: String? = nil
@@ -610,7 +611,7 @@ struct TopicSection: Identifiable {
 
     var id: String {
         if let creator = creatorName {
-            return "creator-\(creator)"
+            return "creator-\(topicId)-\(creator)"
         }
         return "topic-\(topicId)"
     }
