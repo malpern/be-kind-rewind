@@ -34,7 +34,7 @@ struct CollectionGridView: View {
         .task {
             loadAndFilter()
             if store.selectedVideoId == nil,
-               let first = sections.first?.videos.first {
+               let first = sections.lazy.flatMap(\.videos).first(where: { !$0.isPlaceholder }) {
                 store.selectedVideoId = first.id
             }
         }
@@ -44,6 +44,9 @@ struct CollectionGridView: View {
         .onChange(of: displaySettings.sortAscending) { _, _ in loadAndFilter() }
         .onChange(of: store.selectedSubtopicId) { _, _ in loadAndFilter() }
         .onChange(of: store.selectedChannelId) { _, _ in loadAndFilter() }
+        .onChange(of: store.selectedPlaylistId) { _, _ in loadAndFilter() }
+        .onChange(of: store.topicDisplayModes) { _, _ in loadAndFilter() }
+        .onChange(of: store.candidateRefreshToken) { _, _ in loadAndFilter() }
     }
 
     // MARK: - Section Computation (replicated from AllVideosGridView)
@@ -52,23 +55,28 @@ struct CollectionGridView: View {
         var baseSections: [TopicSection] = []
 
         for topic in store.topics {
+            let displayMode = store.displayMode(for: topic.id)
             if topic.subtopics.isEmpty {
-                let videos = mapVideos(store.videosForTopic(topic.id))
+                let videos = videosForTopic(topic.id, name: topic.name, displayMode: displayMode)
                 if !videos.isEmpty {
-                    baseSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: videos))
+                    baseSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: videos, displayMode: displayMode))
                 }
             } else {
                 var allVideos: [VideoGridItemModel] = []
                 var subtopicMap: [String: Int64] = [:]
-                for sub in topic.subtopics {
-                    let videos = mapVideos(store.videosForTopic(sub.id))
-                    for v in videos { subtopicMap[v.id] = sub.id }
-                    allVideos.append(contentsOf: videos)
+                if displayMode == .saved {
+                    for sub in topic.subtopics {
+                        let videos = mapVideos(store.videosForTopic(sub.id))
+                        for v in videos { subtopicMap[v.id] = sub.id }
+                        allVideos.append(contentsOf: videos)
+                    }
+                    let parentVideos = mapVideos(store.videosForTopic(topic.id))
+                    allVideos.append(contentsOf: parentVideos)
+                } else {
+                    allVideos = videosForTopic(topic.id, name: topic.name, displayMode: displayMode)
                 }
-                let parentVideos = mapVideos(store.videosForTopic(topic.id))
-                allVideos.append(contentsOf: parentVideos)
                 if !allVideos.isEmpty {
-                    baseSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: allVideos, videoSubtopicMap: subtopicMap))
+                    baseSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: allVideos, videoSubtopicMap: subtopicMap, displayMode: displayMode))
                 }
             }
         }
@@ -82,13 +90,13 @@ struct CollectionGridView: View {
             result = []
             for section in baseSections {
                 if query.matches(fields: [section.topicName]) {
-                    result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: section.videos, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap))
+                    result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: section.videos, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode))
                 } else {
                     let matching = section.videos.filter { video in
                         query.matches(fields: [video.title, video.channelName ?? "", section.topicName])
                     }
                     if !matching.isEmpty {
-                        result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: matching, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap))
+                        result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: matching, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode))
                     }
                 }
             }
@@ -97,27 +105,48 @@ struct CollectionGridView: View {
 
         if let subId = store.selectedSubtopicId {
             result = result.compactMap { section in
+                guard section.displayMode == .saved else { return section }
                 let filtered = section.videos.filter { section.videoSubtopicMap[$0.id] == subId }
                 guard !filtered.isEmpty else { return nil }
-                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap)
+                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode)
             }
         }
 
         if let channelId = store.selectedChannelId {
             result = result.compactMap { section in
+                guard section.displayMode == .saved else { return section }
                 let filtered = section.videos.filter { $0.channelId == channelId }
                 guard !filtered.isEmpty else { return nil }
-                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap)
+                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode)
+            }
+        }
+
+        if store.selectedPlaylistId != nil {
+            result = result.compactMap { section in
+                guard section.displayMode == .saved else { return section }
+                let filtered = section.videos.filter { store.videoIsInSelectedPlaylist($0.id) }
+                guard !filtered.isEmpty else { return nil }
+                return TopicSection(
+                    topicId: section.topicId,
+                    topicName: section.topicName,
+                    videos: filtered,
+                    totalCount: section.videos.count,
+                    videoSubtopicMap: section.videoSubtopicMap,
+                    displayMode: section.displayMode
+                )
             }
         }
 
         if let sortOrder = displaySettings.sortOrder {
             if sortOrder == .creator {
-                result = result.flatMap { section in groupByCreator(section: section, ascending: displaySettings.sortAscending) }
+                result = result.flatMap { section in
+                    section.displayMode == .saved ? groupByCreator(section: section, ascending: displaySettings.sortAscending) : [section]
+                }
             } else {
                 result = result.map { section in
+                    guard section.displayMode == .saved else { return section }
                     let sorted = sortVideos(section.videos, by: sortOrder, ascending: displaySettings.sortAscending)
-                    return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: sorted, totalCount: section.totalCount, videoSubtopicMap: section.videoSubtopicMap)
+                    return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: sorted, totalCount: section.totalCount, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode)
                 }
             }
         }
@@ -133,92 +162,59 @@ struct CollectionGridView: View {
                 thumbnailUrl: v.thumbnailUrl, viewCount: v.viewCount,
                 publishedAt: v.publishedAt, duration: v.duration,
                 channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
-                channelId: v.channelId
+                channelId: v.channelId,
+                isPlaceholder: false,
+                placeholderMessage: nil
             )
+        }
+    }
+
+    private func videosForTopic(_ topicId: Int64, name: String, displayMode: TopicDisplayMode) -> [VideoGridItemModel] {
+        switch displayMode {
+        case .saved:
+            return mapVideos(store.videosForTopic(topicId))
+        case .watchCandidates:
+            return store.candidateVideosForTopic(topicId).map {
+                VideoGridItemModel(
+                    id: $0.videoId,
+                    title: $0.title,
+                    channelName: $0.channelName,
+                    thumbnailUrl: $0.thumbnailUrl,
+                    viewCount: $0.viewCount,
+                    publishedAt: $0.publishedAt,
+                    duration: $0.duration,
+                    channelIconUrl: $0.channelIconUrl.flatMap(URL.init(string:)),
+                    channelId: $0.channelId,
+                    isPlaceholder: $0.isPlaceholder,
+                    placeholderMessage: $0.secondaryText
+                )
+            }
         }
     }
 
     private func groupByCreator(section: TopicSection, ascending: Bool) -> [TopicSection] {
-        var channelOrder: [String] = []
-        var channelMap: [String: [VideoGridItemModel]] = [:]
-        for video in section.videos {
-            let name = video.channelName ?? "Unknown"
-            if channelMap[name] == nil { channelOrder.append(name) }
-            channelMap[name, default: []].append(video)
-        }
-        var grouped = channelOrder.compactMap { name -> (name: String, videos: [VideoGridItemModel])? in
-            guard let videos = channelMap[name] else { return nil }
-            return (name: name, videos: videos)
-        }
-        grouped.sort { a, b in ascending ? a.videos.count < b.videos.count : a.videos.count > b.videos.count }
-        let topicMarker = TopicSection(
-            topicId: section.topicId,
-            topicName: section.topicName,
-            videos: [],
-            totalCount: section.totalCount,
-            headerCountOverride: section.videos.count,
-            videoSubtopicMap: section.videoSubtopicMap
+        GridSectionLogic.groupByCreator(
+            section: section,
+            ascending: ascending,
+            channelCounts: store.channelCounts,
+            includeTopicMarker: true
         )
-        let creatorSections = grouped.map { group in
-            let sorted = group.videos.sorted { a, b in parseAge(a.publishedAt) < parseAge(b.publishedAt) }
-            let iconUrl = sorted.first(where: { $0.channelIconUrl != nil })?.channelIconUrl
-            return TopicSection(
-                topicId: section.topicId, topicName: section.topicName,
-                videos: sorted, totalCount: store.channelCounts[group.name],
-                videoSubtopicMap: section.videoSubtopicMap,
-                creatorName: group.name, channelIconUrl: iconUrl, topicNames: [section.topicName]
-            )
-        }
-        return [topicMarker] + creatorSections
     }
 
     private func sortVideos(_ videos: [VideoGridItemModel], by order: SortOrder, ascending: Bool) -> [VideoGridItemModel] {
-        if order == .shuffle { return videos.shuffled() }
-        return videos.sorted { a, b in
-            let result: Bool
-            switch order {
-            case .views: result = parseViewCount(a.viewCount) > parseViewCount(b.viewCount)
-            case .date: result = parseAge(a.publishedAt) < parseAge(b.publishedAt)
-            case .duration: result = parseDuration(a.duration) > parseDuration(b.duration)
-            case .creator:
-                let aName = a.channelName ?? ""; let bName = b.channelName ?? ""
-                result = aName == bName ? parseAge(a.publishedAt) < parseAge(b.publishedAt) : aName.localizedStandardCompare(bName) == .orderedAscending
-            case .alphabetical: result = a.title.localizedStandardCompare(b.title) == .orderedAscending
-            case .shuffle: result = false
-            }
-            return ascending ? !result : result
-        }
+        GridSectionLogic.sortVideos(videos, by: order, ascending: ascending)
     }
 
     private func parseViewCount(_ str: String?) -> Int {
-        guard let str else { return 0 }
-        let cleaned = str.replacingOccurrences(of: " views", with: "")
-        if cleaned.hasSuffix("M") { return Int((Double(cleaned.dropLast()) ?? 0) * 1_000_000) }
-        if cleaned.hasSuffix("K") { return Int((Double(cleaned.dropLast()) ?? 0) * 1_000) }
-        return Int(cleaned) ?? 0
+        GridSectionLogic.parseViewCount(str)
     }
 
     private func parseAge(_ str: String?) -> Int {
-        guard let str else { return Int.max }
-        if str == "today" { return 0 }
-        let parts = str.split(separator: " ")
-        guard parts.count >= 2, let num = Int(parts[0]) else { return Int.max }
-        let unit = String(parts[1])
-        if unit.hasPrefix("day") { return num }
-        if unit.hasPrefix("month") { return num * 30 }
-        if unit.hasPrefix("year") { return num * 365 }
-        return Int.max
+        GridSectionLogic.parseAge(str)
     }
 
     private func parseDuration(_ str: String?) -> Int {
-        guard let str else { return 0 }
-        let parts = str.split(separator: ":").compactMap { Int($0) }
-        switch parts.count {
-        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
-        case 2: return parts[0] * 60 + parts[1]
-        case 1: return parts[0]
-        default: return 0
-        }
+        GridSectionLogic.parseDuration(str)
     }
 }
 
@@ -295,6 +291,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private var pendingSelectedVideoId: String?
         private var renderedSelectedVideoId: String?
         private var needsLayoutInvalidation = false
+        private var renderedContentWidth: CGFloat = 0
 
         var cacheDir: URL = URL(fileURLWithPath: "/tmp")
         var thumbnailSize: Double = 220
@@ -359,15 +356,18 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard let container, let collectionView, container.isReadyForCollectionWork else { return }
 
             let shouldReload = renderedGeneration != pendingGeneration
+            let currentContentWidth = container.scrollView.contentView.bounds.width
+            let widthChanged = abs(currentContentWidth - renderedContentWidth) > 0.5
             if shouldReload {
                 renderedSections = pendingSections
                 renderedGeneration = pendingGeneration
                 collectionView.reloadData()
             }
 
-            let shouldInvalidateLayout = needsLayoutInvalidation
+            let shouldInvalidateLayout = needsLayoutInvalidation || widthChanged
             if shouldInvalidateLayout {
                 needsLayoutInvalidation = false
+                renderedContentWidth = currentContentWidth
                 container.flowLayout.invalidateLayout()
             }
 
@@ -436,6 +436,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                   indexPath.item < renderedSections[indexPath.section].videos.count else { return }
 
             let video = renderedSections[indexPath.section].videos[indexPath.item]
+            guard !video.isPlaceholder else { return }
             pendingSelectedVideoId = video.id
             renderedSelectedVideoId = video.id
             onSelect(video.id)
@@ -446,6 +447,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard indexPath.section < renderedSections.count,
                   indexPath.item < renderedSections[indexPath.section].videos.count else { return }
             let video = renderedSections[indexPath.section].videos[indexPath.item]
+            guard !video.isPlaceholder else { return }
             openOnYouTube(video)
         }
 
@@ -564,9 +566,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 collectionView.scrollToItems(at: Set([indexPath]), scrollPosition: .top)
 
                 let video = renderedSections[sectionIndex].videos[0]
-                pendingSelectedVideoId = video.id
-                renderedSelectedVideoId = video.id
-                onSelect(video.id)
+                if !video.isPlaceholder {
+                    pendingSelectedVideoId = video.id
+                    renderedSelectedVideoId = video.id
+                    onSelect(video.id)
+                }
                 return true
             }
 
@@ -612,8 +616,18 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 totalCount: section.totalCount,
                 topicId: section.topicId,
                 highlightTerms: store?.parsedQuery.includeTerms ?? [],
-                channels: store?.channelsForTopic(section.topicId) ?? [],
-                selectedChannelId: store?.selectedChannelId,
+                displayMode: section.displayMode,
+                candidateProgress: store?.candidateProgress(for: section.topicId) ?? 0,
+                isCandidateLoading: store?.candidateLoadingTopics.contains(section.topicId) ?? false,
+                candidateProgressTitle: store?.candidateProgressTitle(for: section.topicId),
+                candidateProgressDetail: store?.candidateProgressDetail(for: section.topicId),
+                onSelectDisplayMode: { [weak store] mode in
+                    Task { @MainActor in
+                        await store?.activateDisplayMode(mode, for: section.topicId)
+                    }
+                },
+                channels: section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : [],
+                selectedChannelId: section.displayMode == .saved ? store?.selectedChannelId : nil,
                 videoCountForChannel: { [weak store] channelId in
                     store?.videoCountForChannel(channelId, inTopic: section.topicId) ?? 0
                 },
@@ -649,6 +663,8 @@ private final class CollectionGridContainerView: NSView {
 
     private var flushScheduled = false
     private var lastContentWidth: CGFloat = 0
+    nonisolated(unsafe) private var boundsObserver: NSObjectProtocol?
+    private var initialLayoutTask: Task<Void, Never>?
 
     var isReadyForCollectionWork: Bool {
         window != nil && contentWidth > 1
@@ -670,17 +686,26 @@ private final class CollectionGridContainerView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window != nil {
+            installBoundsObserverIfNeeded()
+            scheduleInitialLayoutStabilization()
+        } else {
+            removeBoundsObserver()
+            cancelInitialLayoutStabilization()
+        }
         scheduleFlushIfReady()
+    }
+
+    deinit {
+        initialLayoutTask?.cancel()
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+        }
     }
 
     override func layout() {
         super.layout()
-
-        let width = contentWidth
-        guard abs(width - lastContentWidth) > 0.5 else { return }
-        lastContentWidth = width
-        flowLayout.invalidateLayout()
-        scheduleFlushIfReady()
+        handleWidthChangeIfNeeded()
     }
 
     func scheduleFlushIfReady() {
@@ -719,6 +744,7 @@ private final class CollectionGridContainerView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
         scrollView.autohidesScrollers = true
+        scrollView.contentView.postsBoundsChangedNotifications = true
 
         addSubview(scrollView)
         NSLayoutConstraint.activate([
@@ -727,6 +753,66 @@ private final class CollectionGridContainerView: NSView {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+    }
+
+    private func installBoundsObserverIfNeeded() {
+        guard boundsObserver == nil else { return }
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleWidthChangeIfNeeded()
+            }
+        }
+    }
+
+    private func removeBoundsObserver() {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+            self.boundsObserver = nil
+        }
+    }
+
+    private func scheduleInitialLayoutStabilization() {
+        guard initialLayoutTask == nil else { return }
+        let delays: [TimeInterval] = [0.0, 0.05, 0.15, 0.3]
+        initialLayoutTask = Task { @MainActor [weak self] in
+            defer { self?.initialLayoutTask = nil }
+            for delay in delays {
+                if delay > 0 {
+                    try? await Task.sleep(for: .seconds(delay))
+                }
+                guard !Task.isCancelled, let self else { return }
+                self.forceRelayoutPass()
+            }
+        }
+    }
+
+    private func cancelInitialLayoutStabilization() {
+        initialLayoutTask?.cancel()
+        initialLayoutTask = nil
+    }
+
+    private func forceRelayoutPass() {
+        let width = contentWidth
+        guard width > 1 else { return }
+        lastContentWidth = width
+        collectionView.frame.size.width = width
+        flowLayout.invalidateLayout()
+        collectionView.needsLayout = true
+        collectionView.layoutSubtreeIfNeeded()
+        scheduleFlushIfReady()
+    }
+
+    private func handleWidthChangeIfNeeded() {
+        let width = contentWidth
+        guard abs(width - lastContentWidth) > 0.5 else { return }
+        lastContentWidth = width
+        collectionView.frame.size.width = width
+        flowLayout.invalidateLayout()
+        scheduleFlushIfReady()
     }
 }
 
@@ -737,6 +823,12 @@ enum CollectionSectionHeaderModel {
         totalCount: Int?,
         topicId: Int64,
         highlightTerms: [String],
+        displayMode: TopicDisplayMode,
+        candidateProgress: Double,
+        isCandidateLoading: Bool,
+        candidateProgressTitle: String?,
+        candidateProgressDetail: String?,
+        onSelectDisplayMode: (TopicDisplayMode) -> Void,
         channels: [ChannelRecord],
         selectedChannelId: String?,
         videoCountForChannel: (String) -> Int,
@@ -756,10 +848,13 @@ enum CollectionSectionHeaderModel {
 
     var height: CGFloat {
         switch self {
-        case let .topic(_, _, _, _, _, channels, _, _, _, _):
-            channels.isEmpty ? 48 : 112
+        case let .topic(name: _, count: _, totalCount: _, topicId: _, highlightTerms: _, displayMode: _, candidateProgress: _, isCandidateLoading: isCandidateLoading, candidateProgressTitle: _, candidateProgressDetail: _, onSelectDisplayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, onSelectChannel: _):
+            if isCandidateLoading {
+                return channels.isEmpty ? 104 : 168
+            }
+            return channels.isEmpty ? 48 : 112
         case .creator:
-            56
+            return 56
         }
     }
 }
@@ -829,6 +924,25 @@ private struct VideoCellContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: showMetadata ? GridConstants.metadataSpacing(for: thumbnailSize) : 2) {
+            if video.isPlaceholder {
+                placeholderCard
+            } else {
+                standardCard
+            }
+        }
+        .padding(showMetadata ? GridConstants.cardPadding(for: thumbnailSize) : 2)
+        .background(
+            RoundedRectangle(cornerRadius: cornerRadius + 2, style: .continuous)
+                .fill(Color.white.opacity(isSelected ? GridConstants.hoverBackgroundOpacity : 0))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius + 2, style: .continuous)
+                .stroke(Color.accentColor, lineWidth: isSelected ? GridConstants.selectionBorderWidth : 0)
+        )
+    }
+
+    private var standardCard: some View {
+        Group {
             ZStack(alignment: .bottomTrailing) {
                 ThumbnailView(videoId: video.id, thumbnailUrl: video.thumbnailUrl, cacheDir: cacheDir)
                     .aspectRatio(16/9, contentMode: .fit)
@@ -857,15 +971,38 @@ private struct VideoCellContent: View {
                     .lineLimit(1)
             }
         }
-        .padding(showMetadata ? GridConstants.cardPadding(for: thumbnailSize) : 2)
-        .background(
-            RoundedRectangle(cornerRadius: cornerRadius + 2, style: .continuous)
-                .fill(Color.white.opacity(isSelected ? GridConstants.hoverBackgroundOpacity : 0))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius + 2, style: .continuous)
-                .stroke(Color.accentColor, lineWidth: isSelected ? GridConstants.selectionBorderWidth : 0)
-        )
+    }
+
+    private var placeholderCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.accentColor.opacity(0.08))
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [8, 6]))
+                        .foregroundStyle(Color.accentColor.opacity(0.35))
+                    VStack(spacing: 8) {
+                        Image(systemName: "sparkles.rectangle.stack")
+                            .font(.system(size: 28, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                        Text("Watch candidates")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                    }
+                }
+                .aspectRatio(16/9, contentMode: .fit)
+
+            Text(video.title)
+                .font(GridConstants.titleFont(for: thumbnailSize))
+                .foregroundStyle(.primary)
+
+            if let message = video.placeholderMessage {
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 
@@ -914,16 +1051,20 @@ private struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId, highlightTerms, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
+        case let .topic(name, count, totalCount, topicId, highlightTerms, displayMode, candidateProgress, _, candidateProgressTitle, candidateProgressDetail, onSelectDisplayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
             VStack(spacing: 0) {
                 SectionHeaderView(
                     name: name,
                     count: count,
                     totalCount: totalCount,
                     topicId: topicId,
-                    progress: 0,
+                    progress: candidateProgress,
                     showProgress: false,
-                    highlightTerms: highlightTerms
+                    highlightTerms: highlightTerms,
+                    displayMode: displayMode,
+                    progressTitle: candidateProgressTitle,
+                    progressDetail: candidateProgressDetail,
+                    onDisplayModeChange: onSelectDisplayMode
                 )
                 .accessibilityIdentifier("topic-\(topicId)")
 

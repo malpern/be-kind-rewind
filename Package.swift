@@ -36,6 +36,14 @@ let package = Package(
         .testTarget(
             name: "TaggingKitTests",
             dependencies: ["TaggingKit"]
+        ),
+        .testTarget(
+            name: "VideoTaggerTests",
+            dependencies: ["VideoTagger", "TaggingKit"]
+        ),
+        .testTarget(
+            name: "VideoOrganizerTests",
+            dependencies: ["VideoOrganizer", "TaggingKit"]
         )
     ]
 )

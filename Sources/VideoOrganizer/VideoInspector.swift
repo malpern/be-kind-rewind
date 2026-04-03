@@ -4,15 +4,16 @@ struct VideoInspector: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache
 
-    private var video: VideoViewModel? { store.inspectedVideo }
+    private var inspectedItem: InspectedVideoViewModel? { store.inspectedItem }
+    private var video: VideoViewModel? { inspectedItem?.video }
     private var isSelected: Bool { store.selectedVideoId == store.inspectedVideoId }
 
     var body: some View {
         Group {
             if let creatorName = store.inspectedCreatorName {
                 creatorInspectorContent(store.creatorDetail(channelName: creatorName))
-            } else if let video {
-                inspectorContent(video)
+            } else if let inspectedItem {
+                inspectorContent(inspectedItem)
             } else {
                 emptyState
             }
@@ -33,8 +34,9 @@ struct VideoInspector: View {
         .frame(maxHeight: .infinity)
     }
 
-    private func inspectorContent(_ video: VideoViewModel) -> some View {
-        ScrollView {
+    private func inspectorContent(_ inspectedItem: InspectedVideoViewModel) -> some View {
+        let video = inspectedItem.video
+        return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 ThumbnailView(videoId: video.videoId, thumbnailUrl: video.thumbnailUrl, cacheDir: thumbnailCache.cacheDirURL)
                     .aspectRatio(16/9, contentMode: .fit)
@@ -67,6 +69,12 @@ struct VideoInspector: View {
 
                     Divider()
 
+                    tagsSection(inspectedItem)
+
+                    if !inspectedItem.playlists.isEmpty || inspectedItem.isWatchCandidate {
+                        Divider()
+                    }
+
                     metadataGrid(video)
 
                     if isSelected {
@@ -87,8 +95,29 @@ struct VideoInspector: View {
 
     // MARK: - Metadata Grid
 
+    @ViewBuilder
+    private func tagsSection(_ inspectedItem: InspectedVideoViewModel) -> some View {
+        let tags = inspectorTags(for: inspectedItem)
+        if !tags.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Tags")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                FlexibleTagList(tags: tags) { tag in
+                    tag == "Watch Candidate" ? .orange : .accentColor
+                } onSelect: { tag in
+                    guard tag != "Watch Candidate",
+                          let playlist = inspectedItem.playlists.first(where: { $0.title == tag }) else { return }
+                    store.applyPlaylistFilter(playlist)
+                }
+            }
+        }
+    }
+
     private func metadataGrid(_ video: VideoViewModel) -> some View {
-        Grid(alignment: .leading, verticalSpacing: 10) {
+        let playlists = store.playlistsForVideo(video.videoId)
+        return Grid(alignment: .leading, verticalSpacing: 10) {
             if let views = video.viewCount {
                 metadataRow(icon: "eye", label: "Views", value: views)
             }
@@ -101,7 +130,18 @@ struct VideoInspector: View {
             if let topic = store.topicNameForVideo(video.videoId) {
                 metadataRow(icon: "folder", label: "Topic", value: topic)
             }
+            if !playlists.isEmpty {
+                metadataRow(icon: "music.note.list", label: "Playlists", value: "\(playlists.count)")
+            }
         }
+    }
+
+    private func inspectorTags(for inspectedItem: InspectedVideoViewModel) -> [String] {
+        var tags = inspectedItem.playlists.map(\.title)
+        if inspectedItem.isWatchCandidate {
+            tags.insert("Watch Candidate", at: 0)
+        }
+        return tags
     }
 
     @ViewBuilder
@@ -291,5 +331,77 @@ struct VideoInspector: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+private struct FlexibleTagList: View {
+    let tags: [String]
+    let colorForTag: (String) -> Color
+    var onSelect: ((String) -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(rows, id: \.self) { row in
+                HStack(spacing: 8) {
+                    ForEach(row, id: \.self) { tag in
+                        tagChip(tag)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tagChip(_ tag: String) -> some View {
+        let chip = Text(tag)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(colorForTag(tag).opacity(0.14))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(colorForTag(tag).opacity(0.28), lineWidth: 1)
+            )
+
+        if let onSelect, tag != "Watch Candidate" {
+            Button {
+                onSelect(tag)
+            } label: {
+                chip
+            }
+            .buttonStyle(.plain)
+            .help("Filter library to playlist \(tag)")
+        } else {
+            chip
+        }
+    }
+
+    private var rows: [[String]] {
+        var result: [[String]] = []
+        var current: [String] = []
+        var width = 0
+        let maxWidth = 26
+
+        for tag in tags {
+            let proposed = width + tag.count + (current.isEmpty ? 0 : 2)
+            if proposed > maxWidth && !current.isEmpty {
+                result.append(current)
+                current = [tag]
+                width = tag.count
+            } else {
+                current.append(tag)
+                width = proposed
+            }
+        }
+
+        if !current.isEmpty {
+            result.append(current)
+        }
+
+        return result
     }
 }

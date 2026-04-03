@@ -4,14 +4,22 @@ struct OrganizerView: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache
     @Bindable var displaySettings: DisplaySettings
+    @Bindable var youTubeAuth: YouTubeAuthController
 
     var body: some View {
         NavigationSplitView {
-            TopicSidebar(store: store, displaySettings: displaySettings)
+            TopicSidebar(store: store, displaySettings: displaySettings, youTubeAuth: youTubeAuth)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         } detail: {
             CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                 .navigationTitle("")
+                .overlay(alignment: .top) {
+                    if let overlay = store.candidateProgressOverlay {
+                        CandidateProgressOverlayView(state: overlay)
+                            .padding(.top, 20)
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                    }
+                }
                 .inspector(isPresented: $displaySettings.showInspector) {
                     VideoInspector(store: store, thumbnailCache: thumbnailCache)
                         .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
@@ -79,6 +87,17 @@ struct OrganizerView: View {
 
     @ViewBuilder
     private var statusIndicators: some View {
+        if let playlistTitle = store.selectedPlaylistTitle {
+            Button {
+                store.clearPlaylistFilter()
+                displaySettings.toast.show("Playlist Filter Cleared", icon: "music.note.list")
+            } label: {
+                Label(playlistTitle, systemImage: "music.note.list")
+            }
+            .buttonStyle(.bordered)
+            .help("Clear playlist filter")
+        }
+
         if store.isLoading {
             ProgressView()
                 .controlSize(.small)
@@ -94,5 +113,55 @@ struct OrganizerView: View {
             }
             .accessibilityLabel("Downloading thumbnails: \(thumbnailCache.downloadedCount) of \(thumbnailCache.totalCount)")
         }
+    }
+}
+
+private struct CandidateProgressOverlayView: View {
+    let state: CandidateProgressOverlayState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label("Finding Watch Candidates", systemImage: "sparkles")
+                    .font(.headline.weight(.semibold))
+
+                Spacer(minLength: 0)
+
+                Text(state.topicName)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            ProgressView(value: min(max(state.progress, 0), 1), total: 1)
+                .progressViewStyle(.linear)
+                .controlSize(.small)
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(state.title)
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer(minLength: 0)
+
+                Text("\(Int((min(max(state.progress, 0), 1) * 100).rounded()))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(state.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: 420)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08))
+        }
+        .shadow(color: .black.opacity(0.14), radius: 14, y: 8)
+        .allowsHitTesting(false)
     }
 }

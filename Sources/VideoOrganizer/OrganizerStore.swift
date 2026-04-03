@@ -11,6 +11,7 @@ final class OrganizerStore {
     private(set) var unassignedCount: Int = 0
     private(set) var isLoading = false
     private(set) var errorMessage: String?
+    private(set) var candidateRefreshToken = 0
 
     // Selected state
     var selectedTopicId: Int64? {
@@ -24,8 +25,10 @@ final class OrganizerStore {
     var selectedVideoId: String?
     var hoveredVideoId: String?
 
-    // Channel filter
+    // Channel / playlist filters
     var selectedChannelId: String?
+    var selectedPlaylistId: String?
+    var selectedPlaylistTitle: String?
 
     // Creator inspection — set when hovering/clicking a creator section header
     var inspectedCreatorName: String?
@@ -35,16 +38,27 @@ final class OrganizerStore {
     var parsedQuery: SearchQuery { SearchQuery(searchText) }
     var searchResultCount: Int = 0
 
+    // Per-topic center-pane mode
+    var topicDisplayModes: [Int64: TopicDisplayMode] = [:]
+    private(set) var candidateErrors: [Int64: String] = [:]
+    private(set) var candidateLoadingTopics: Set<Int64> = []
+    private(set) var candidateProgressByTopic: [Int64: Double] = [:]
+    private(set) var candidateCompletedChannelsByTopic: [Int64: Int] = [:]
+    private(set) var candidateTotalChannelsByTopic: [Int64: Int] = [:]
+    private(set) var candidateCurrentChannelNameByTopic: [Int64: String] = [:]
+
     // Cached flat video map — rebuilt on loadTopics()
     private var videoMap: [String: VideoViewModel] = [:]
     private var videoTopicMap: [String: Int64] = [:]
 
     private let store: TopicStore
     private let suggester: TopicSuggester?
+    private let youtubeClient: YouTubeClient?
 
     init(dbPath: String, claudeClient: ClaudeClient? = nil) throws {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }
+        self.youtubeClient = try? YouTubeClient()
         loadTopics()
     }
 
@@ -66,6 +80,7 @@ final class OrganizerStore {
                 selectedTopicId = first.id
             }
             rebuildVideoMaps()
+            rebuildPlaylistMaps()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -104,6 +119,37 @@ final class OrganizerStore {
         inspectedVideoId.flatMap { videoMap[$0] }
     }
 
+    var inspectedCandidateVideo: CandidateVideoViewModel? {
+        guard let videoId = inspectedVideoId,
+              let topicId = selectedTopicId,
+              displayMode(for: topicId) == .watchCandidates,
+              let stored = try? store.candidateForTopic(id: topicId, videoId: videoId)
+        else {
+            return nil
+        }
+        return CandidateVideoViewModel(from: stored)
+    }
+
+    var inspectedItem: InspectedVideoViewModel? {
+        if let video = inspectedVideo {
+            return InspectedVideoViewModel(
+                video: video,
+                playlists: playlistsForVideo(video.videoId),
+                isWatchCandidate: false
+            )
+        }
+
+        if let candidate = inspectedCandidateVideo {
+            return InspectedVideoViewModel(
+                video: VideoViewModel(from: candidate),
+                playlists: playlistsForVideo(candidate.videoId),
+                isWatchCandidate: true
+            )
+        }
+
+        return nil
+    }
+
     func videoById(_ videoId: String) -> VideoViewModel? {
         videoMap[videoId]
     }
@@ -111,6 +157,30 @@ final class OrganizerStore {
     func topicNameForVideo(_ videoId: String) -> String? {
         guard let topicId = videoTopicMap[videoId] else { return nil }
         return topics.first { $0.id == topicId }?.name
+    }
+
+    func playlistsForVideo(_ videoId: String) -> [PlaylistRecord] {
+        playlistsByVideoId[videoId] ?? []
+    }
+
+    func videoIsInSelectedPlaylist(_ videoId: String) -> Bool {
+        guard let selectedPlaylistId else { return true }
+        return playlistsByVideoId[videoId]?.contains(where: { $0.playlistId == selectedPlaylistId }) ?? false
+    }
+
+    func applyPlaylistFilter(_ playlist: PlaylistRecord) {
+        selectedPlaylistId = playlist.playlistId
+        selectedPlaylistTitle = playlist.title
+        selectedChannelId = nil
+        selectedSubtopicId = nil
+        AppLogger.discovery.info("Applied playlist filter \(playlist.playlistId, privacy: .public) (\(playlist.title, privacy: .public))")
+    }
+
+    func clearPlaylistFilter() {
+        guard selectedPlaylistId != nil else { return }
+        AppLogger.discovery.info("Cleared playlist filter \(self.selectedPlaylistId ?? "", privacy: .public)")
+        selectedPlaylistId = nil
+        selectedPlaylistTitle = nil
     }
 
     func moreFromChannel(videoId: String, limit: Int = 6) -> [VideoViewModel] {
@@ -125,6 +195,7 @@ final class OrganizerStore {
 
     // Cached channel counts — rebuilt with video maps
     private(set) var channelCounts: [String: Int] = [:]
+    private(set) var playlistsByVideoId: [String: [PlaylistRecord]] = [:]
 
     // Cached channels per topic — rebuilt on loadTopics()
     private(set) var topicChannels: [Int64: [ChannelRecord]] = [:]
@@ -162,6 +233,117 @@ final class OrganizerStore {
     /// Clear channel filter.
     func clearChannelFilter() {
         selectedChannelId = nil
+    }
+
+    func displayMode(for topicId: Int64) -> TopicDisplayMode {
+        topicDisplayModes[topicId] ?? .saved
+    }
+
+    func setDisplayMode(_ mode: TopicDisplayMode, for topicId: Int64) {
+        topicDisplayModes[topicId] = mode
+        AppLogger.discovery.info("Set topic \(topicId, privacy: .public) display mode to \(mode.rawValue, privacy: .public)")
+        if mode == .watchCandidates {
+            selectedChannelId = nil
+            selectedSubtopicId = nil
+            selectedVideoId = nil
+            if selectedTopicId != topicId {
+                selectedTopicId = topicId
+            }
+        }
+    }
+
+    func activateDisplayMode(_ mode: TopicDisplayMode, for topicId: Int64) async {
+        setDisplayMode(mode, for: topicId)
+        guard mode == .watchCandidates else {
+            candidateRefreshToken += 1
+            return
+        }
+        await ensureCandidates(for: topicId)
+    }
+
+    func candidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
+        if candidateLoadingTopics.contains(topicId) {
+            return [.placeholder(topicId: topicId, title: "Finding candidates…", message: "Pulling recent and popular videos from creators already associated with this topic.")]
+        }
+
+        if let error = candidateErrors[topicId] {
+            return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error)]
+        }
+
+        do {
+            let storedCandidates = try store.candidatesForTopic(id: topicId, limit: 36)
+            if storedCandidates.isEmpty {
+                return [.placeholder(topicId: topicId, title: "No candidates yet", message: "No unseen candidates were found from the current topic creators.")]
+            }
+            return storedCandidates.map(CandidateVideoViewModel.init(from:))
+        } catch {
+            return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error.localizedDescription)]
+        }
+    }
+
+    func candidateProgress(for topicId: Int64) -> Double {
+        candidateProgressByTopic[topicId] ?? 0
+    }
+
+    func candidateProgressTitle(for topicId: Int64) -> String {
+        let completed = candidateCompletedChannelsByTopic[topicId] ?? 0
+        let total = candidateTotalChannelsByTopic[topicId] ?? 0
+        guard total > 0 else { return "Finding candidates for this topic" }
+        return "Scanning top creators: \(completed) of \(total)"
+    }
+
+    func candidateProgressDetail(for topicId: Int64) -> String {
+        let completed = candidateCompletedChannelsByTopic[topicId] ?? 0
+        let total = candidateTotalChannelsByTopic[topicId] ?? 0
+        let channelName = candidateCurrentChannelNameByTopic[topicId]
+
+        guard total > 0 else {
+            return "Preparing topic sources and candidate ranking."
+        }
+
+        if completed >= total {
+            return "Finished checking \(total) creator\(total == 1 ? "" : "s"). Ranking the strongest matches now."
+        }
+
+        if let channelName, !channelName.isEmpty {
+            return "Checking recent uploads first, plus a smaller popular back-catalog pass, for \(channelName)."
+        }
+
+        return "Checking recent uploads first, plus a smaller popular back-catalog pass."
+    }
+
+    var candidateProgressOverlay: CandidateProgressOverlayState? {
+        let topicId: Int64?
+        if let selectedTopicId, candidateLoadingTopics.contains(selectedTopicId) {
+            topicId = selectedTopicId
+        } else {
+            topicId = candidateLoadingTopics.sorted().first
+        }
+
+        guard let topicId,
+              let topic = topics.first(where: { $0.id == topicId })
+        else {
+            return nil
+        }
+
+        return CandidateProgressOverlayState(
+            topicId: topicId,
+            topicName: topic.name,
+            progress: candidateProgress(for: topicId),
+            title: candidateProgressTitle(for: topicId),
+            detail: candidateProgressDetail(for: topicId)
+        )
+    }
+
+    func setCandidateState(topicId: Int64, videoId: String, state: CandidateState) {
+        do {
+            try store.setCandidateState(topicId: topicId, videoId: videoId, state: state)
+            AppLogger.discovery.info("Set candidate state for topic \(topicId, privacy: .public), video \(videoId, privacy: .public) to \(state.rawValue, privacy: .public)")
+            candidateRefreshToken += 1
+        } catch {
+            AppLogger.discovery.error("Failed to set candidate state for topic \(topicId, privacy: .public), video \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// Get all videos by a creator name, grouped by topic.
@@ -285,6 +467,10 @@ final class OrganizerStore {
         topicChannels = tChannels
         topicChannelCounts = tChannelCounts
         topicChannelRecent = tChannelRecent
+    }
+
+    private func rebuildPlaylistMaps() {
+        playlistsByVideoId = (try? store.allPlaylistsByVideo()) ?? [:]
     }
 
     /// Typeahead suggestions matching the current search text.
@@ -418,6 +604,247 @@ final class OrganizerStore {
             errorMessage = error.localizedDescription
         }
     }
+
+    private func ensureCandidates(for topicId: Int64) async {
+        guard !candidateLoadingTopics.contains(topicId) else { return }
+        candidateLoadingTopics.insert(topicId)
+        candidateProgressByTopic[topicId] = 0
+        candidateCompletedChannelsByTopic[topicId] = 0
+        candidateTotalChannelsByTopic[topicId] = 0
+        candidateCurrentChannelNameByTopic[topicId] = nil
+        candidateErrors[topicId] = nil
+        candidateRefreshToken += 1
+        AppLogger.discovery.info("Starting candidate refresh for topic \(topicId, privacy: .public)")
+        defer {
+            candidateLoadingTopics.remove(topicId)
+            candidateProgressByTopic[topicId] = nil
+            candidateCompletedChannelsByTopic[topicId] = nil
+            candidateTotalChannelsByTopic[topicId] = nil
+            candidateCurrentChannelNameByTopic[topicId] = nil
+            candidateRefreshToken += 1
+            AppLogger.discovery.info("Finished candidate refresh for topic \(topicId, privacy: .public)")
+        }
+
+        guard let youtubeClient else {
+            candidateErrors[topicId] = "No YouTube API key found. Configure `YOUTUBE_API_KEY` or `~/.config/youtube/api-key`."
+            AppLogger.discovery.error("Cannot refresh candidates for topic \(topicId, privacy: .public): missing YouTube client")
+            return
+        }
+
+        do {
+            let scanLimit = candidateCreatorScanLimit(for: topicId)
+            let channels = Array(channelsForTopic(topicId).prefix(scanLimit))
+            let channelIds = channels.map(\.channelId)
+            AppLogger.discovery.debug("Candidate refresh topic \(topicId, privacy: .public) using \(channels.count, privacy: .public) channels")
+            guard !channelIds.isEmpty else {
+                try store.replaceCandidates(forTopic: topicId, candidates: [], sources: [])
+                AppLogger.discovery.info("Topic \(topicId, privacy: .public) has no associated channels; cleared candidates")
+                return
+            }
+
+            let existingVideoIds = Set(videosForTopicIncludingSubtopics(topicId).map(\.videoId))
+            var aggregate: [String: AggregatedCandidate] = [:]
+            let totalChannels = max(channels.count, 1)
+            var completedChannels = 0
+            candidateTotalChannelsByTopic[topicId] = channels.count
+            candidateCompletedChannelsByTopic[topicId] = 0
+            candidateCurrentChannelNameByTopic[topicId] = channels.first?.name
+            candidateRefreshToken += 1
+
+            for channel in channels {
+                candidateCurrentChannelNameByTopic[topicId] = channel.name
+                candidateRefreshToken += 1
+                AppLogger.discovery.debug("Fetching candidates from channel \(channel.channelId, privacy: .public) (\(channel.name, privacy: .public)) for topic \(topicId, privacy: .public)")
+                let recent = try await youtubeClient.searchChannelVideos(channelId: channel.channelId, order: .date, maxResults: 8)
+                let popular = try await youtubeClient.searchChannelVideos(channelId: channel.channelId, order: .viewCount, maxResults: 8)
+                AppLogger.discovery.debug("Fetched \(recent.count, privacy: .public) recent and \(popular.count, privacy: .public) popular videos for channel \(channel.channelId, privacy: .public)")
+
+                for video in recent {
+                    accumulateCandidate(
+                        video: video,
+                        topicId: topicId,
+                        channel: channel,
+                        sourceKind: "channel_recent",
+                        sourceRef: channel.channelId,
+                        creatorAffinity: videoCountForChannel(channel.channelId, inTopic: topicId),
+                        existingVideoIds: existingVideoIds,
+                        aggregate: &aggregate
+                    )
+                }
+
+                for video in popular {
+                    accumulateCandidate(
+                        video: video,
+                        topicId: topicId,
+                        channel: channel,
+                        sourceKind: "channel_popular",
+                        sourceRef: channel.channelId,
+                        creatorAffinity: videoCountForChannel(channel.channelId, inTopic: topicId),
+                        existingVideoIds: existingVideoIds,
+                        aggregate: &aggregate
+                    )
+                }
+
+                completedChannels += 1
+                candidateCompletedChannelsByTopic[topicId] = completedChannels
+                candidateProgressByTopic[topicId] = Double(completedChannels) / Double(totalChannels)
+                candidateRefreshToken += 1
+            }
+
+            let ranked = aggregate.values
+                .sorted { lhs, rhs in
+                    if lhs.score == rhs.score {
+                        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                    }
+                    return lhs.score > rhs.score
+                }
+                .prefix(36)
+
+            let candidates = ranked.map { value in
+                TopicCandidate(
+                    topicId: topicId,
+                    videoId: value.videoId,
+                    title: value.title,
+                    channelId: value.channelId,
+                    channelName: value.channelName,
+                    videoUrl: "https://www.youtube.com/watch?v=\(value.videoId)",
+                    viewCount: value.viewCount,
+                    publishedAt: value.publishedAt,
+                    duration: value.duration,
+                    channelIconUrl: value.channelIconUrl,
+                    score: value.score,
+                    reason: value.reason
+                )
+            }
+
+            let sources = ranked.flatMap { value in
+                value.sources.map { source in
+                    CandidateSourceRecord(
+                        topicId: topicId,
+                        videoId: value.videoId,
+                        sourceKind: source.kind,
+                        sourceRef: source.ref
+                    )
+                }
+            }
+
+            try store.replaceCandidates(forTopic: topicId, candidates: candidates, sources: sources)
+            AppLogger.discovery.info("Stored \(candidates.count, privacy: .public) candidates and \(sources.count, privacy: .public) sources for topic \(topicId, privacy: .public)")
+        } catch {
+            candidateErrors[topicId] = error.localizedDescription
+            AppLogger.discovery.error("Candidate refresh failed for topic \(topicId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func accumulateCandidate(
+        video: DiscoveredVideo,
+        topicId: Int64,
+        channel: ChannelRecord,
+        sourceKind: String,
+        sourceRef: String,
+        creatorAffinity: Int,
+        existingVideoIds: Set<String>,
+        aggregate: inout [String: AggregatedCandidate]
+    ) {
+        guard !existingVideoIds.contains(video.videoId) else { return }
+
+        let publishedDays = parseAge(video.publishedAt ?? "")
+        let recencyBonus: Int
+        if sourceKind == "channel_recent" {
+            if publishedDays <= 7 {
+                recencyBonus = 30
+            } else if publishedDays <= 30 {
+                recencyBonus = 24
+            } else if publishedDays <= 90 {
+                recencyBonus = 16
+            } else if publishedDays <= 180 {
+                recencyBonus = 8
+            } else {
+                recencyBonus = 2
+            }
+        } else {
+            recencyBonus = 0
+        }
+
+        let archivalBonus = sourceKind == "channel_popular" ? min(max(publishedDays / 120, 0), 4) : 0
+        let creatorBonus = min(creatorAffinity, 16)
+        let qualityBonus = min(parseViewCount(video.viewCount ?? "") / 75_000, 6)
+        let freshnessSourceBonus = sourceKind == "channel_recent" ? 10 : 0
+        let score = Double(
+            freshnessSourceBonus +
+            recencyBonus * 4 +
+            creatorBonus * 3 +
+            archivalBonus * 2 +
+            qualityBonus
+        )
+
+        let reason: String = if sourceKind == "channel_recent" {
+            "Fresh upload from a creator already in this topic"
+        } else {
+            "Older popular video from a creator you already watch here"
+        }
+
+        if var existing = aggregate[video.videoId] {
+            existing.score += score + 3
+            existing.reason = existing.reason.contains("Recent upload") || reason.contains("Recent upload")
+                ? "Recent and popular pick from a creator already in this topic"
+                : existing.reason
+            existing.sources.insert(CandidateSource(kind: sourceKind, ref: sourceRef))
+            aggregate[video.videoId] = existing
+        } else {
+            aggregate[video.videoId] = AggregatedCandidate(
+                videoId: video.videoId,
+                title: video.title,
+                channelId: video.channelId,
+                channelName: video.channelTitle ?? channel.name,
+                viewCount: video.viewCount,
+                publishedAt: video.publishedAt,
+                duration: video.duration,
+                channelIconUrl: channel.iconUrl,
+                score: score,
+                reason: reason,
+                sources: [CandidateSource(kind: sourceKind, ref: sourceRef)]
+            )
+        }
+    }
+}
+
+private extension OrganizerStore {
+    func candidateCreatorScanLimit(for topicId: Int64) -> Int {
+        let count = channelsForTopic(topicId).count
+        switch count {
+        case 0...6:
+            return 6
+        case 7...12:
+            return 10
+        case 13...24:
+            return 12
+        default:
+            return 16
+        }
+    }
+}
+
+enum TopicDisplayMode: String, CaseIterable, Sendable {
+    case saved
+    case watchCandidates
+
+    var label: String {
+        switch self {
+        case .saved:
+            return "Saved"
+        case .watchCandidates:
+            return "Watch Candidates"
+        }
+    }
+}
+
+struct CandidateProgressOverlayState: Equatable {
+    let topicId: Int64
+    let topicName: String
+    let progress: Double
+    let title: String
+    let detail: String
 }
 
 // MARK: - View Models
@@ -445,6 +872,25 @@ struct TypeaheadSuggestion: Identifiable {
         }
         return text
     }
+}
+
+private struct CandidateSource: Hashable {
+    let kind: String
+    let ref: String
+}
+
+private struct AggregatedCandidate {
+    let videoId: String
+    let title: String
+    let channelId: String?
+    let channelName: String?
+    let viewCount: String?
+    let publishedAt: String?
+    let duration: String?
+    let channelIconUrl: String?
+    var score: Double
+    var reason: String
+    var sources: Set<CandidateSource>
 }
 
 struct TopicViewModel: Identifiable, Hashable {
@@ -515,6 +961,110 @@ struct VideoViewModel: Identifiable, Hashable {
         self.duration = duration
         self.channelIconUrl = channelIconUrl
         self.channelId = channelId
+    }
+
+    init(from candidate: CandidateVideoViewModel) {
+        self.videoId = candidate.videoId
+        self.title = candidate.title
+        self.channelName = candidate.channelName
+        self.videoUrl = "https://www.youtube.com/watch?v=\(candidate.videoId)"
+        self.sourceIndex = -1
+        self.topicId = candidate.topicId
+        self.viewCount = candidate.viewCount
+        self.publishedAt = candidate.publishedAt
+        self.duration = candidate.duration
+        self.channelIconUrl = candidate.channelIconUrl
+        self.channelId = candidate.channelId
+    }
+}
+
+struct InspectedVideoViewModel {
+    let video: VideoViewModel
+    let playlists: [PlaylistRecord]
+    let isWatchCandidate: Bool
+}
+
+struct CandidateVideoViewModel: Identifiable, Hashable {
+    let topicId: Int64
+    let videoId: String
+    let title: String
+    let channelId: String?
+    let channelName: String?
+    let viewCount: String?
+    let publishedAt: String?
+    let duration: String?
+    let channelIconUrl: String?
+    let score: Double
+    let secondaryText: String?
+    let isPlaceholder: Bool
+
+    var id: String { "\(topicId)-\(videoId)" }
+
+    var thumbnailUrl: URL? {
+        guard !isPlaceholder else { return nil }
+        return URL(string: "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg")
+    }
+
+    init(
+        topicId: Int64,
+        videoId: String,
+        title: String,
+        channelId: String?,
+        channelName: String?,
+        viewCount: String?,
+        publishedAt: String?,
+        duration: String?,
+        channelIconUrl: String?,
+        score: Double,
+        secondaryText: String?,
+        isPlaceholder: Bool
+    ) {
+        self.topicId = topicId
+        self.videoId = videoId
+        self.title = title
+        self.channelId = channelId
+        self.channelName = channelName
+        self.viewCount = viewCount
+        self.publishedAt = publishedAt
+        self.duration = duration
+        self.channelIconUrl = channelIconUrl
+        self.score = score
+        self.secondaryText = secondaryText
+        self.isPlaceholder = isPlaceholder
+    }
+
+    init(from stored: TopicCandidate) {
+        self.init(
+            topicId: stored.topicId,
+            videoId: stored.videoId,
+            title: stored.title,
+            channelId: stored.channelId,
+            channelName: stored.channelName,
+            viewCount: stored.viewCount,
+            publishedAt: stored.publishedAt,
+            duration: stored.duration,
+            channelIconUrl: stored.channelIconUrl,
+            score: stored.score,
+            secondaryText: stored.reason,
+            isPlaceholder: false
+        )
+    }
+
+    static func placeholder(topicId: Int64, title: String, message: String) -> CandidateVideoViewModel {
+        CandidateVideoViewModel(
+            topicId: topicId,
+            videoId: "candidate-placeholder-\(topicId)-\(title)",
+            title: title,
+            channelId: nil,
+            channelName: nil,
+            viewCount: nil,
+            publishedAt: nil,
+            duration: nil,
+            channelIconUrl: nil,
+            score: 0,
+            secondaryText: message,
+            isPlaceholder: true
+        )
     }
 }
 

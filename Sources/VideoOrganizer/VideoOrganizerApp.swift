@@ -6,6 +6,7 @@ struct VideoOrganizerApp: App {
     @State private var store: OrganizerStore?
     @State private var thumbnailCache = ThumbnailCache()
     @State private var displaySettings = DisplaySettings()
+    @State private var youTubeAuth = YouTubeAuthController()
     @State private var loadError: String?
     @State private var showSplash = true
 
@@ -13,7 +14,12 @@ struct VideoOrganizerApp: App {
         WindowGroup {
             Group {
                 if let store {
-                    OrganizerView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
+                    OrganizerView(
+                        store: store,
+                        thumbnailCache: thumbnailCache,
+                        displaySettings: displaySettings,
+                        youTubeAuth: youTubeAuth
+                    )
                 } else if let loadError {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle")
@@ -155,7 +161,9 @@ struct VideoOrganizerApp: App {
                     context.duration = 0.4
                     splashWindow.animator().alphaValue = 0
                 }, completionHandler: {
-                    splashWindow.orderOut(nil)
+                    Task { @MainActor in
+                        splashWindow.orderOut(nil)
+                    }
                 })
             }
         }

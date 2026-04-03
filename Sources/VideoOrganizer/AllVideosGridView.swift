@@ -290,131 +290,21 @@ struct AllVideosGridView: View {
             if sortOrder == .creator {
                 // Group by creator: explode each topic section into per-creator sub-sections
                 cachedFilteredSections = result.flatMap { section in
-                    groupByCreator(section: section, ascending: ascending)
+                    GridSectionLogic.groupByCreator(
+                        section: section,
+                        ascending: ascending,
+                        channelCounts: store.channelCounts,
+                        includeTopicMarker: false
+                    )
                 }
             } else {
                 cachedFilteredSections = result.map { section in
-                    let sorted = sortVideos(section.videos, by: sortOrder, ascending: ascending)
+                    let sorted = GridSectionLogic.sortVideos(section.videos, by: sortOrder, ascending: ascending)
                     return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: sorted, totalCount: section.totalCount, videoSubtopicMap: section.videoSubtopicMap)
                 }
             }
         } else {
             cachedFilteredSections = result
-        }
-    }
-
-    private func sortVideos(_ videos: [VideoGridItemModel], by order: SortOrder, ascending: Bool) -> [VideoGridItemModel] {
-        if order == .shuffle { return videos.shuffled() }
-        return videos.sorted { a, b in
-            let result: Bool
-            switch order {
-            case .views:
-                result = parseViewCount(a.viewCount) > parseViewCount(b.viewCount)
-            case .date:
-                result = parseAge(a.publishedAt) < parseAge(b.publishedAt)
-            case .duration:
-                result = parseDuration(a.duration) > parseDuration(b.duration)
-            case .creator:
-                let aName = a.channelName ?? ""
-                let bName = b.channelName ?? ""
-                if aName == bName {
-                    // Within same creator, sort by date (newest first)
-                    result = parseAge(a.publishedAt) < parseAge(b.publishedAt)
-                } else {
-                    result = aName.localizedStandardCompare(bName) == .orderedAscending
-                }
-            case .alphabetical:
-                result = a.title.localizedStandardCompare(b.title) == .orderedAscending
-            case .shuffle:
-                result = false
-            }
-            return ascending ? !result : result
-        }
-    }
-
-    /// Group a topic section's videos by creator, returning one sub-section per channel.
-    /// Each sub-section uses CreatorSectionHeaderView. Sorted by video count desc (most prolific first).
-    private func groupByCreator(section: TopicSection, ascending: Bool) -> [TopicSection] {
-        // Group videos by channel name
-        var grouped: [(name: String, videos: [VideoGridItemModel])] = []
-        var channelOrder: [String] = []
-        var channelMap: [String: [VideoGridItemModel]] = [:]
-
-        for video in section.videos {
-            let name = video.channelName ?? "Unknown"
-            if channelMap[name] == nil {
-                channelOrder.append(name)
-            }
-            channelMap[name, default: []].append(video)
-        }
-
-        for name in channelOrder {
-            if let videos = channelMap[name] {
-                grouped.append((name: name, videos: videos))
-            }
-        }
-
-        // Sort creators by video count descending (or ascending)
-        grouped.sort { a, b in
-            ascending ? a.videos.count < b.videos.count : a.videos.count > b.videos.count
-        }
-
-        // Sort videos within each creator by date (newest first)
-        return grouped.map { group in
-            let sorted = group.videos.sorted { a, b in
-                parseAge(a.publishedAt) < parseAge(b.publishedAt)
-            }
-            // Find the channel icon from the first video that has one
-            let iconUrl = sorted.first(where: { $0.channelIconUrl != nil })?.channelIconUrl
-            // Collect topic names this creator appears in
-            let topicNames = [section.topicName]
-
-            return TopicSection(
-                topicId: section.topicId,
-                topicName: section.topicName,
-                videos: sorted,
-                totalCount: store.channelCounts[group.name],
-                videoSubtopicMap: section.videoSubtopicMap,
-                creatorName: group.name,
-                channelIconUrl: iconUrl,
-                topicNames: topicNames
-            )
-        }
-    }
-
-    private func parseViewCount(_ str: String?) -> Int {
-        guard let str else { return 0 }
-        let cleaned = str.replacingOccurrences(of: " views", with: "")
-        if cleaned.hasSuffix("M") {
-            return Int((Double(cleaned.dropLast()) ?? 0) * 1_000_000)
-        } else if cleaned.hasSuffix("K") {
-            return Int((Double(cleaned.dropLast()) ?? 0) * 1_000)
-        }
-        return Int(cleaned) ?? 0
-    }
-
-    private func parseAge(_ str: String?) -> Int {
-        // Returns approximate days ago for sorting. Lower = newer.
-        guard let str else { return Int.max }
-        if str == "today" { return 0 }
-        let parts = str.split(separator: " ")
-        guard parts.count >= 2, let num = Int(parts[0]) else { return Int.max }
-        let unit = String(parts[1])
-        if unit.hasPrefix("day") { return num }
-        if unit.hasPrefix("month") { return num * 30 }
-        if unit.hasPrefix("year") { return num * 365 }
-        return Int.max
-    }
-
-    private func parseDuration(_ str: String?) -> Int {
-        // Parses "1:23", "12:34", "1:02:34" into total seconds
-        guard let str else { return 0 }
-        let parts = str.split(separator: ":").compactMap { Int($0) }
-        switch parts.count {
-        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
-        case 2: return parts[0] * 60 + parts[1]
-        case 1: return parts[0]
-        default: return 0
         }
     }
 
@@ -467,7 +357,9 @@ struct AllVideosGridView: View {
                 publishedAt: v.publishedAt,
                 duration: v.duration,
                 channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
-                channelId: v.channelId
+                channelId: v.channelId,
+                isPlaceholder: false,
+                placeholderMessage: nil
             )
         }
     }
@@ -604,6 +496,7 @@ struct TopicSection: Identifiable {
     var totalCount: Int?
     var headerCountOverride: Int? = nil
     var videoSubtopicMap: [String: Int64] = [:]
+    var displayMode: TopicDisplayMode = .saved
     // Creator-mode fields
     var creatorName: String? = nil
     var channelIconUrl: URL? = nil
@@ -627,6 +520,8 @@ struct VideoGridItemModel: Identifiable, Equatable {
     let duration: String?
     let channelIconUrl: URL?
     let channelId: String?
+    let isPlaceholder: Bool
+    let placeholderMessage: String?
 }
 
 // MARK: - Preference Keys
