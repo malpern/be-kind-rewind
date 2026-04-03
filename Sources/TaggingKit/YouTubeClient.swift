@@ -2,14 +2,25 @@ import Foundation
 
 /// Lightweight YouTube Data API v3 client for fetching video metadata.
 public struct YouTubeClient: Sendable {
-    private let apiKey: String
+    private enum AuthorizationMode {
+        case apiKeyOnly
+        case bearerIfAvailable
+    }
 
-    public init(apiKey: String) {
+    private let apiKey: String
+    private let accessToken: String?
+    private let session: URLSession
+
+    public init(apiKey: String, session: URLSession = .shared) {
         self.apiKey = apiKey
+        self.session = session
+        self.accessToken = ProcessInfo.processInfo.environment["YOUTUBE_ACCESS_TOKEN"]
+            ?? ProcessInfo.processInfo.environment["GOOGLE_OAUTH_ACCESS_TOKEN"]
+            ?? YouTubeOAuthTokenStore().load()?.accessToken
     }
 
     /// Resolve API key from parameter, env var, or config file.
-    public init() throws {
+    public init(session: URLSession = .shared) throws {
         if let key = ProcessInfo.processInfo.environment["YOUTUBE_API_KEY"] ?? ProcessInfo.processInfo.environment["GOOGLE_API_KEY"] {
             self.apiKey = key
         } else {
@@ -21,6 +32,10 @@ public struct YouTubeClient: Sendable {
             }
             self.apiKey = key
         }
+        self.session = session
+        self.accessToken = ProcessInfo.processInfo.environment["YOUTUBE_ACCESS_TOKEN"]
+            ?? ProcessInfo.processInfo.environment["GOOGLE_OAUTH_ACCESS_TOKEN"]
+            ?? YouTubeOAuthTokenStore().load()?.accessToken
     }
 
     /// Fetch metadata for up to 50 video IDs in a single request.
@@ -35,7 +50,7 @@ public struct YouTubeClient: Sendable {
             URLQueryItem(name: "key", value: apiKey)
         ]
 
-        let (data, response) = try await URLSession.shared.data(from: components.url!)
+        let (data, response) = try await requestData(from: components.url!, authorization: .apiKeyOnly)
 
         guard let http = response as? HTTPURLResponse else {
             throw YouTubeError.invalidResponse
@@ -71,7 +86,7 @@ public struct YouTubeClient: Sendable {
             URLQueryItem(name: "key", value: apiKey)
         ]
 
-        let (data, response) = try await URLSession.shared.data(from: components.url!)
+        let (data, response) = try await requestData(from: components.url!, authorization: .apiKeyOnly)
 
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             return [:]
@@ -90,7 +105,7 @@ public struct YouTubeClient: Sendable {
     /// Fetch metadata for all video IDs, batching 50 at a time.
     public func fetchAllVideoMetadata(
         ids: [String],
-        progress: ((Int, Int) -> Void)? = nil
+        progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> [VideoMetadata] {
         var results: [VideoMetadata] = []
         let batches = stride(from: 0, to: ids.count, by: 50).map {
@@ -143,7 +158,7 @@ public struct YouTubeClient: Sendable {
     /// Fetch full channel details (snippet + statistics) for multiple channel IDs, batching 50 at a time.
     public func fetchChannelDetails(
         channelIds: [String],
-        progress: ((Int, Int) -> Void)? = nil
+        progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> [ChannelRecord] {
         var results: [ChannelRecord] = []
         let batches = stride(from: 0, to: channelIds.count, by: 50).map {
@@ -167,7 +182,7 @@ public struct YouTubeClient: Sendable {
                     URLQueryItem(name: "key", value: apiKey)
                 ]
 
-                let (data, response) = try await URLSession.shared.data(from: components.url!)
+                let (data, response) = try await requestData(from: components.url!, authorization: .apiKeyOnly)
                 guard let http = response as? HTTPURLResponse else {
                     throw YouTubeError.invalidResponse
                 }
@@ -214,11 +229,108 @@ public struct YouTubeClient: Sendable {
 
     /// Download a channel icon image and return the raw bytes.
     public func downloadChannelIcon(url: URL) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw YouTubeError.invalidResponse
         }
         return data
+    }
+
+    public func searchChannelVideos(
+        channelId: String,
+        order: ChannelSearchOrder,
+        maxResults: Int = 8
+    ) async throws -> [DiscoveredVideo] {
+        var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/search")!
+        components.queryItems = [
+            URLQueryItem(name: "part", value: "snippet"),
+            URLQueryItem(name: "channelId", value: channelId),
+            URLQueryItem(name: "type", value: "video"),
+            URLQueryItem(name: "order", value: order.rawValue),
+            URLQueryItem(name: "maxResults", value: String(max(1, min(maxResults, 25)))),
+            URLQueryItem(name: "key", value: apiKey)
+        ]
+
+        let (data, response) = try await requestData(from: components.url!, authorization: .apiKeyOnly)
+        guard let http = response as? HTTPURLResponse else {
+            throw YouTubeError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw YouTubeError.apiError(statusCode: http.statusCode, message: body)
+        }
+
+        let result = try JSONDecoder().decode(SearchResponse.self, from: data)
+        let ids = result.items.compactMap { $0.id.videoId }
+        let metadataById = try await Dictionary(
+            uniqueKeysWithValues: fetchVideoMetadata(ids: ids).map { ($0.videoId, $0) }
+        )
+
+        return result.items.compactMap { item in
+            guard let videoId = item.id.videoId else { return nil }
+            let metadata = metadataById[videoId]
+            return DiscoveredVideo(
+                videoId: videoId,
+                title: item.snippet.title ?? "Untitled",
+                channelId: item.snippet.channelId ?? metadata?.channelId,
+                channelTitle: item.snippet.channelTitle ?? metadata?.channelTitle,
+                publishedAt: metadata?.formattedDate ?? VideoMetadata(videoId: videoId, viewCount: nil, publishedAt: item.snippet.publishedAt, duration: nil, channelId: nil, channelTitle: nil).formattedDate,
+                duration: metadata?.formattedDuration,
+                viewCount: metadata?.formattedViewCount,
+                sourceOrder: order
+            )
+        }
+    }
+
+    public func fetchPlaylistItems(playlistId: String) async throws -> [PlaylistVideoItem] {
+        var results: [PlaylistVideoItem] = []
+        var nextPageToken: String?
+
+        repeat {
+            var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/playlistItems")!
+            var queryItems = [
+                URLQueryItem(name: "part", value: "snippet"),
+                URLQueryItem(name: "playlistId", value: playlistId),
+                URLQueryItem(name: "maxResults", value: "50"),
+                URLQueryItem(name: "key", value: apiKey)
+            ]
+            if let nextPageToken {
+                queryItems.append(URLQueryItem(name: "pageToken", value: nextPageToken))
+            }
+            components.queryItems = queryItems
+
+            let (data, response) = try await requestData(from: components.url!, authorization: .bearerIfAvailable)
+            guard let http = response as? HTTPURLResponse else {
+                throw YouTubeError.invalidResponse
+            }
+            guard http.statusCode == 200 else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                throw YouTubeError.apiError(statusCode: http.statusCode, message: body)
+            }
+
+            let decoded = try JSONDecoder().decode(PlaylistItemsResponse.self, from: data)
+            for item in decoded.items {
+                guard let videoId = item.snippet.resourceId.videoId else { continue }
+                results.append(PlaylistVideoItem(
+                    videoId: videoId,
+                    title: item.snippet.title,
+                    channelId: item.snippet.videoOwnerChannelId ?? item.snippet.channelId,
+                    channelTitle: item.snippet.videoOwnerChannelTitle ?? item.snippet.channelTitle,
+                    position: item.snippet.position ?? results.count
+                ))
+            }
+            nextPageToken = decoded.nextPageToken
+        } while nextPageToken != nil
+
+        return results
+    }
+
+    private func requestData(from url: URL, authorization: AuthorizationMode) async throws -> (Data, URLResponse) {
+        var request = URLRequest(url: url)
+        if authorization == .bearerIfAvailable, let accessToken, !accessToken.isEmpty {
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        return try await session.data(for: request)
     }
 }
 
@@ -299,6 +411,30 @@ public struct VideoMetadata: Sendable {
     }
 }
 
+public struct DiscoveredVideo: Sendable {
+    public let videoId: String
+    public let title: String
+    public let channelId: String?
+    public let channelTitle: String?
+    public let publishedAt: String?
+    public let duration: String?
+    public let viewCount: String?
+    public let sourceOrder: ChannelSearchOrder
+}
+
+public enum ChannelSearchOrder: String, Sendable {
+    case date
+    case viewCount
+}
+
+public struct PlaylistVideoItem: Sendable {
+    public let videoId: String
+    public let title: String?
+    public let channelId: String?
+    public let channelTitle: String?
+    public let position: Int
+}
+
 // MARK: - API Response Types
 
 private struct YouTubeResponse: Decodable {
@@ -355,6 +491,49 @@ private struct ChannelDetailResponse: Decodable {
     let items: [ChannelDetailItem]
 }
 
+private struct SearchResponse: Decodable {
+    let items: [SearchItem]
+}
+
+private struct SearchItem: Decodable {
+    let id: SearchItemID
+    let snippet: SearchSnippet
+}
+
+private struct SearchItemID: Decodable {
+    let videoId: String?
+}
+
+private struct SearchSnippet: Decodable {
+    let publishedAt: String?
+    let channelId: String?
+    let channelTitle: String?
+    let title: String?
+}
+
+private struct PlaylistItemsResponse: Decodable {
+    let nextPageToken: String?
+    let items: [PlaylistItemsResponseItem]
+}
+
+private struct PlaylistItemsResponseItem: Decodable {
+    let snippet: PlaylistItemsSnippet
+}
+
+private struct PlaylistItemsSnippet: Decodable {
+    let title: String?
+    let channelId: String?
+    let channelTitle: String?
+    let videoOwnerChannelId: String?
+    let videoOwnerChannelTitle: String?
+    let position: Int?
+    let resourceId: PlaylistResourceID
+}
+
+private struct PlaylistResourceID: Decodable {
+    let videoId: String?
+}
+
 private struct ChannelDetailItem: Decodable {
     let id: String
     let snippet: ChannelDetailSnippet?
@@ -399,7 +578,29 @@ public enum YouTubeError: Error, LocalizedError {
         case .invalidResponse:
             return "Invalid response from YouTube API"
         case .apiError(let code, let message):
-            return "YouTube API error (\(code)): \(message)"
+            return "YouTube API error (\(code)): \(Self.compactMessage(from: message))"
         }
+    }
+
+    private static func compactMessage(from raw: String) -> String {
+        guard let data = raw.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
+        else {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        if let message = payload.error.message, !message.isEmpty {
+            return message
+        }
+
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private struct ErrorEnvelope: Decodable {
+        let error: ErrorPayload
+    }
+
+    private struct ErrorPayload: Decodable {
+        let message: String?
     }
 }

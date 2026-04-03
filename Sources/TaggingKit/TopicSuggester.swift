@@ -1,10 +1,21 @@
 import Foundation
 
+public protocol ClaudeCompleting: Sendable {
+    func complete(
+        prompt: String,
+        system: String?,
+        model: ClaudeClient.Model,
+        maxTokens: Int
+    ) async throws -> String
+}
+
+extension ClaudeClient: ClaudeCompleting {}
+
 /// Three-step topic suggestion: discover topics from channels, then classify videos.
 public actor TopicSuggester {
-    private let client: ClaudeClient
+    private let client: any ClaudeCompleting
 
-    public init(client: ClaudeClient) {
+    public init(client: any ClaudeCompleting) {
         self.client = client
     }
 
@@ -267,7 +278,7 @@ public actor TopicSuggester {
         Suggest a better 2-4 word topic name. Return ONLY the name.
         """
 
-        return try await client.complete(prompt: prompt, model: .sonnet, maxTokens: 50)
+        return try await client.complete(prompt: prompt, system: nil, model: .sonnet, maxTokens: 50)
             .trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
     }
 
@@ -353,7 +364,7 @@ public actor TopicSuggester {
             results.append(ClassifiedVideo(videoIndex: videoIndex, topic: topicName))
         }
 
-        return results
+        return results.sorted { $0.videoIndex < $1.videoIndex }
     }
 
     private func parseTopicSplitResponse(_ response: String) throws -> [(name: String, videoIndices: [Int])] {

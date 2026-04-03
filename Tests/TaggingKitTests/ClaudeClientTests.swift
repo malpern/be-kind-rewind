@@ -3,15 +3,17 @@ import Testing
 
 @Suite("ClaudeClient")
 struct ClaudeClientTests {
-    @Test("init throws without API key in environment or keychain")
-    func initThrowsWithoutKey() {
-        // This test verifies the error path — in CI where there's no keychain entry
-        // and no env var, init should throw
+    @Test("init without explicit key either resolves local credentials or throws missing-key")
+    func initWithoutExplicitKeyHasExpectedOutcome() {
         do {
             let _ = try ClaudeClient()
-            // If it succeeds, there's a key in the keychain — that's fine
         } catch {
             #expect(error is ClaudeClientError)
+            if case ClaudeClientError.missingAPIKey = error {
+                #expect(Bool(true))
+            } else {
+                Issue.record("Expected missingAPIKey when ClaudeClient init fails without an explicit key.")
+            }
         }
     }
 
@@ -26,5 +28,13 @@ struct ClaudeClientTests {
     func modelIds() {
         #expect(ClaudeClient.Model.haiku.rawValue == "claude-haiku-4-5-20251001")
         #expect(ClaudeClient.Model.sonnet.rawValue == "claude-sonnet-4-6")
+    }
+
+    @Test("error descriptions are stable for user-facing failures")
+    func errorDescriptions() {
+        #expect(ClaudeClientError.missingAPIKey.errorDescription == "ANTHROPIC_API_KEY environment variable is not set.")
+        #expect(ClaudeClientError.invalidResponse.errorDescription == "Received an invalid response from the Claude API.")
+        #expect(ClaudeClientError.emptyResponse.errorDescription == "Claude returned an empty response.")
+        #expect(ClaudeClientError.apiError(status: 401, body: "denied").errorDescription == "Claude API error (HTTP 401): denied")
     }
 }

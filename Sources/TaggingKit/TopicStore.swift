@@ -10,6 +10,11 @@ public final class TopicStore: Sendable {
     private let videos = Table("videos")
     private let commitLog = Table("commit_log")
     private let channels = Table("channels")
+    private let playlists = Table("playlists")
+    private let playlistMemberships = Table("playlist_memberships")
+    private let topicCandidates = Table("topic_candidates")
+    private let candidateSources = Table("candidate_sources")
+    private let candidateState = Table("candidate_state")
 
     // Topic columns
     private let topicId = SQLite.Expression<Int64>("id")
@@ -42,6 +47,37 @@ public final class TopicStore: Sendable {
     private let channelVideoCountTotal = SQLite.Expression<Int?>("video_count_total")
     private let channelFetchedAt = SQLite.Expression<String?>("fetched_at")
     private let channelIconFetchedAt = SQLite.Expression<String?>("icon_fetched_at")
+
+    // Playlist columns
+    private let playlistId = SQLite.Expression<String>("playlist_id")
+    private let playlistTitle = SQLite.Expression<String>("title")
+    private let playlistVisibility = SQLite.Expression<String?>("visibility")
+    private let playlistVideoCount = SQLite.Expression<Int?>("video_count")
+    private let playlistSource = SQLite.Expression<String?>("source")
+    private let playlistFetchedAt = SQLite.Expression<String?>("fetched_at")
+    private let membershipPlaylistId = SQLite.Expression<String>("playlist_id")
+    private let membershipVideoId = SQLite.Expression<String>("video_id")
+    private let membershipPosition = SQLite.Expression<Int?>("position")
+    private let membershipVerifiedAt = SQLite.Expression<String?>("verified_at")
+
+    // Candidate columns
+    private let candidateTopicId = SQLite.Expression<Int64>("topic_id")
+    private let candidateVideoId = SQLite.Expression<String>("video_id")
+    private let candidateTitle = SQLite.Expression<String>("title")
+    private let candidateChannelId = SQLite.Expression<String?>("channel_id")
+    private let candidateChannelName = SQLite.Expression<String?>("channel_name")
+    private let candidateVideoUrl = SQLite.Expression<String?>("video_url")
+    private let candidateViewCount = SQLite.Expression<String?>("view_count")
+    private let candidatePublishedAt = SQLite.Expression<String?>("published_at")
+    private let candidateDuration = SQLite.Expression<String?>("duration")
+    private let candidateChannelIconUrl = SQLite.Expression<String?>("channel_icon_url")
+    private let candidateScore = SQLite.Expression<Double>("score")
+    private let candidateReason = SQLite.Expression<String>("reason")
+    private let candidateDiscoveredAt = SQLite.Expression<String>("discovered_at")
+    private let candidateSourceKind = SQLite.Expression<String>("source_kind")
+    private let candidateSourceRef = SQLite.Expression<String>("source_ref")
+    private let candidateStateValue = SQLite.Expression<String>("state")
+    private let candidateStateUpdatedAt = SQLite.Expression<String>("updated_at")
 
     // Commit log columns
     private let commitId = SQLite.Expression<Int64>("id")
@@ -120,6 +156,22 @@ public final class TopicStore: Sendable {
             t.column(channelIconFetchedAt)
         })
 
+        try db.run(playlists.create(ifNotExists: true) { t in
+            t.column(playlistId, primaryKey: true)
+            t.column(playlistTitle)
+            t.column(playlistVisibility)
+            t.column(playlistVideoCount)
+            t.column(playlistSource)
+            t.column(playlistFetchedAt)
+        })
+
+        try db.run(playlistMemberships.create(ifNotExists: true) { t in
+            t.column(membershipPlaylistId)
+            t.column(membershipVideoId)
+            t.column(membershipPosition)
+            t.column(membershipVerifiedAt)
+        })
+
         try db.run(commitLog.create(ifNotExists: true) { t in
             t.column(commitId, primaryKey: .autoincrement)
             t.column(commitAction) // "add_to_playlist", "remove_from_playlist", "create_playlist"
@@ -129,9 +181,45 @@ public final class TopicStore: Sendable {
             t.column(commitSynced, defaultValue: false)
         })
 
+        try db.run(topicCandidates.create(ifNotExists: true) { t in
+            t.column(candidateTopicId)
+            t.column(candidateVideoId)
+            t.column(candidateTitle)
+            t.column(candidateChannelId)
+            t.column(candidateChannelName)
+            t.column(candidateVideoUrl)
+            t.column(candidateViewCount)
+            t.column(candidatePublishedAt)
+            t.column(candidateDuration)
+            t.column(candidateChannelIconUrl)
+            t.column(candidateScore)
+            t.column(candidateReason)
+            t.column(candidateDiscoveredAt, defaultValue: ISO8601DateFormatter().string(from: Date()))
+        })
+
+        try db.run(candidateSources.create(ifNotExists: true) { t in
+            t.column(candidateTopicId)
+            t.column(candidateVideoId)
+            t.column(candidateSourceKind)
+            t.column(candidateSourceRef)
+        })
+
+        try db.run(candidateState.create(ifNotExists: true) { t in
+            t.column(candidateTopicId)
+            t.column(candidateVideoId)
+            t.column(candidateStateValue)
+            t.column(candidateStateUpdatedAt, defaultValue: ISO8601DateFormatter().string(from: Date()))
+        })
+
         try db.run("CREATE INDEX IF NOT EXISTS idx_topics_parent_id ON topics(parent_id)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_source ON videos(topic_id, source_index)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_channel_source ON videos(topic_id, channel_id, source_index)")
+        try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_memberships_unique ON playlist_memberships(playlist_id, video_id)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_playlist_memberships_video ON playlist_memberships(video_id)")
+        try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_candidates_topic_video ON topic_candidates(topic_id, video_id)")
+        try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_sources_unique ON candidate_sources(topic_id, video_id, source_kind, source_ref)")
+        try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_state_unique ON candidate_state(topic_id, video_id)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_topic_candidates_topic_score ON topic_candidates(topic_id, score DESC)")
     }
 
     // MARK: - Import
@@ -551,6 +639,215 @@ public final class TopicStore: Sendable {
             videoPublishedAt <- publishedAt,
             videoDuration <- duration,
             videoChannelIconUrl <- channelIconUrl
+        ))
+    }
+
+    // MARK: - Playlists
+
+    public func upsertPlaylist(_ playlist: PlaylistRecord) throws {
+        try db.run(playlists.insert(or: .replace,
+            playlistId <- playlist.playlistId,
+            playlistTitle <- playlist.title,
+            playlistVisibility <- playlist.visibility,
+            playlistVideoCount <- playlist.videoCount,
+            playlistSource <- playlist.source,
+            playlistFetchedAt <- playlist.fetchedAt
+        ))
+    }
+
+    public func replacePlaylistMemberships(playlistId pid: String, memberships: [PlaylistMembershipRecord]) throws {
+        try db.transaction {
+            try db.run(playlistMemberships.filter(membershipPlaylistId == pid).delete())
+            for membership in memberships {
+                try db.run(playlistMemberships.insert(or: .replace,
+                    membershipPlaylistId <- membership.playlistId,
+                    membershipVideoId <- membership.videoId,
+                    membershipPosition <- membership.position,
+                    membershipVerifiedAt <- membership.verifiedAt
+                ))
+            }
+        }
+    }
+
+    public func playlistsForVideo(videoId vid: String) throws -> [PlaylistRecord] {
+        let query = """
+            SELECT p.playlist_id, p.title, p.visibility, p.video_count, p.source, p.fetched_at
+            FROM playlists p
+            INNER JOIN playlist_memberships pm ON pm.playlist_id = p.playlist_id
+            WHERE pm.video_id = ?
+            ORDER BY p.title ASC
+        """
+        var results: [PlaylistRecord] = []
+        for row in try db.prepare(query, vid) {
+            results.append(PlaylistRecord(
+                playlistId: row[0] as! String,
+                title: row[1] as! String,
+                visibility: row[2] as? String,
+                videoCount: row[3] as? Int64 != nil ? Int(row[3] as! Int64) : nil,
+                source: row[4] as? String,
+                fetchedAt: row[5] as? String
+            ))
+        }
+        return results
+    }
+
+    public func knownPlaylists() throws -> [PlaylistRecord] {
+        try db.prepare(playlists.order(playlistTitle.asc)).map { row in
+            PlaylistRecord(
+                playlistId: row[playlistId],
+                title: row[playlistTitle],
+                visibility: row[playlistVisibility],
+                videoCount: row[playlistVideoCount],
+                source: row[playlistSource],
+                fetchedAt: row[playlistFetchedAt]
+            )
+        }
+    }
+
+    public func allPlaylistsByVideo() throws -> [String: [PlaylistRecord]] {
+        let query = """
+            SELECT pm.video_id, p.playlist_id, p.title, p.visibility, p.video_count, p.source, p.fetched_at
+            FROM playlist_memberships pm
+            INNER JOIN playlists p ON p.playlist_id = pm.playlist_id
+            ORDER BY pm.video_id ASC, p.title ASC
+        """
+
+        var results: [String: [PlaylistRecord]] = [:]
+        for row in try db.prepare(query) {
+            let videoId = row[0] as! String
+            let playlist = PlaylistRecord(
+                playlistId: row[1] as! String,
+                title: row[2] as! String,
+                visibility: row[3] as? String,
+                videoCount: row[4] as? Int64 != nil ? Int(row[4] as! Int64) : nil,
+                source: row[5] as? String,
+                fetchedAt: row[6] as? String
+            )
+            results[videoId, default: []].append(playlist)
+        }
+        return results
+    }
+
+    // MARK: - Topic Candidates
+
+    public func replaceCandidates(
+        forTopic topicId: Int64,
+        candidates: [TopicCandidate],
+        sources: [CandidateSourceRecord]
+    ) throws {
+        try db.transaction {
+            try db.run(topicCandidates.filter(candidateTopicId == topicId).delete())
+            try db.run(candidateSources.filter(candidateTopicId == topicId).delete())
+
+            for candidate in candidates {
+                try db.run(topicCandidates.insert(or: .replace,
+                    candidateTopicId <- candidate.topicId,
+                    candidateVideoId <- candidate.videoId,
+                    candidateTitle <- candidate.title,
+                    candidateChannelId <- candidate.channelId,
+                    candidateChannelName <- candidate.channelName,
+                    candidateVideoUrl <- candidate.videoUrl,
+                    candidateViewCount <- candidate.viewCount,
+                    candidatePublishedAt <- candidate.publishedAt,
+                    candidateDuration <- candidate.duration,
+                    candidateChannelIconUrl <- candidate.channelIconUrl,
+                    candidateScore <- candidate.score,
+                    candidateReason <- candidate.reason,
+                    candidateDiscoveredAt <- (candidate.discoveredAt ?? ISO8601DateFormatter().string(from: Date()))
+                ))
+            }
+
+            for source in sources {
+                try db.run(candidateSources.insert(or: .replace,
+                    candidateTopicId <- source.topicId,
+                    candidateVideoId <- source.videoId,
+                    candidateSourceKind <- source.sourceKind,
+                    candidateSourceRef <- source.sourceRef
+                ))
+            }
+        }
+    }
+
+    public func candidatesForTopic(id topicId: Int64, limit: Int? = nil) throws -> [TopicCandidate] {
+        var query = """
+            SELECT c.topic_id, c.video_id, c.title, c.channel_id, c.channel_name, c.video_url,
+                   c.view_count, c.published_at, c.duration, c.channel_icon_url, c.score, c.reason,
+                   COALESCE(s.state, 'candidate') AS state, c.discovered_at
+            FROM topic_candidates c
+            LEFT JOIN candidate_state s
+              ON s.topic_id = c.topic_id AND s.video_id = c.video_id
+            WHERE c.topic_id = ?
+              AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched')
+            ORDER BY c.score DESC, c.published_at DESC
+        """
+        if let limit {
+            query += " LIMIT \(limit)"
+        }
+
+        var results: [TopicCandidate] = []
+        for row in try db.prepare(query, topicId) {
+            results.append(TopicCandidate(
+                topicId: row[0] as! Int64,
+                videoId: row[1] as! String,
+                title: row[2] as! String,
+                channelId: row[3] as? String,
+                channelName: row[4] as? String,
+                videoUrl: row[5] as? String,
+                viewCount: row[6] as? String,
+                publishedAt: row[7] as? String,
+                duration: row[8] as? String,
+                channelIconUrl: row[9] as? String,
+                score: row[10] as! Double,
+                reason: row[11] as! String,
+                state: row[12] as! String,
+                discoveredAt: row[13] as? String
+            ))
+        }
+        return results
+    }
+
+    public func candidateForTopic(id topicId: Int64, videoId vid: String) throws -> TopicCandidate? {
+        let query = """
+            SELECT c.topic_id, c.video_id, c.title, c.channel_id, c.channel_name, c.video_url,
+                   c.view_count, c.published_at, c.duration, c.channel_icon_url, c.score, c.reason,
+                   COALESCE(s.state, 'candidate') AS state, c.discovered_at
+            FROM topic_candidates c
+            LEFT JOIN candidate_state s
+              ON s.topic_id = c.topic_id AND s.video_id = c.video_id
+            WHERE c.topic_id = ?
+              AND c.video_id = ?
+              AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched')
+            LIMIT 1
+        """
+
+        for row in try db.prepare(query, topicId, vid) {
+            return TopicCandidate(
+                topicId: row[0] as! Int64,
+                videoId: row[1] as! String,
+                title: row[2] as! String,
+                channelId: row[3] as? String,
+                channelName: row[4] as? String,
+                videoUrl: row[5] as? String,
+                viewCount: row[6] as? String,
+                publishedAt: row[7] as? String,
+                duration: row[8] as? String,
+                channelIconUrl: row[9] as? String,
+                score: row[10] as! Double,
+                reason: row[11] as! String,
+                state: row[12] as! String,
+                discoveredAt: row[13] as? String
+            )
+        }
+
+        return nil
+    }
+
+    public func setCandidateState(topicId: Int64, videoId: String, state: CandidateState) throws {
+        try db.run(candidateState.insert(or: .replace,
+            candidateTopicId <- topicId,
+            candidateVideoId <- videoId,
+            candidateStateValue <- state.rawValue,
+            candidateStateUpdatedAt <- ISO8601DateFormatter().string(from: Date())
         ))
     }
 

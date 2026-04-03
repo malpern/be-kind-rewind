@@ -90,7 +90,7 @@ public actor ClaudeClient {
         model: Model = .haiku,
         maxTokens: Int = 4096
     ) async throws -> String {
-        var messages: [[String: Any]] = [
+        let messages: [[String: Any]] = [
             ["role": "user", "content": prompt]
         ]
 

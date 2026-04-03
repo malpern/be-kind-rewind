@@ -37,6 +37,9 @@ struct TopicStoreImportTests {
                              videoId: "v1", channelName: nil, metadataText: nil, unavailableKind: "none")]
         try store.importVideos(v2)
         #expect(try store.totalVideoCount() == 1) // Still 1, not 2
+        let stored = try #require(store.unassignedVideos().first)
+        #expect(stored.videoId == "v1")
+        #expect(stored.title == "Updated")
     }
 
     @Test("skips videos without videoId")
