@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import TaggingKit
 
 // MARK: - SwiftUI Wrapper (matches AllVideosGridView interface)
 
@@ -13,6 +14,7 @@ struct CollectionGridView: View {
 
     var body: some View {
         CollectionGridRepresentable(
+            store: store,
             sections: sections,
             sectionGeneration: sectionGeneration,
             cacheDir: thumbnailCache.cacheDirURL,
@@ -212,6 +214,7 @@ struct CollectionGridView: View {
 // MARK: - NSViewRepresentable
 
 private struct CollectionGridRepresentable: NSViewRepresentable {
+    let store: OrganizerStore
     let sections: [TopicSection]
     let sectionGeneration: Int
     let cacheDir: URL
@@ -236,6 +239,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.attach(to: container)
         coordinator.applySnapshot(
+            store: store,
             sections: sections,
             generation: sectionGeneration,
             cacheDir: cacheDir,
@@ -262,6 +266,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private weak var container: CollectionGridContainerView?
         private weak var collectionView: NSCollectionView?
 
+        private var store: OrganizerStore?
         private var pendingSections: [TopicSection] = []
         private var renderedSections: [TopicSection] = []
         private var pendingGeneration: Int = -1
@@ -286,12 +291,16 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             self.collectionView = container.collectionView
             container.collectionView.dataSource = self
             container.collectionView.delegate = self
+            container.collectionView.onDoubleClickItem = { [weak self] indexPath in
+                self?.handleDoubleClick(at: indexPath)
+            }
             container.onReadyForFlush = { [weak self] in
                 self?.flushIfReady()
             }
         }
 
         func applySnapshot(
+            store: OrganizerStore,
             sections: [TopicSection],
             generation: Int,
             cacheDir: URL,
@@ -301,6 +310,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             onSelect: @escaping (String) -> Void
         ) {
             self.onSelect = onSelect
+            self.store = store
             self.cacheDir = cacheDir
 
             if pendingGeneration != generation {
@@ -403,6 +413,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             refreshVisibleItems()
         }
 
+        private func handleDoubleClick(at indexPath: IndexPath) {
+            guard indexPath.section < renderedSections.count,
+                  indexPath.item < renderedSections[indexPath.section].videos.count else { return }
+            let video = renderedSections[indexPath.section].videos[indexPath.item]
+            openOnYouTube(video)
+        }
+
         // MARK: Layout
 
         func collectionView(
@@ -456,7 +473,10 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             layout collectionViewLayout: NSCollectionViewLayout,
             referenceSizeForHeaderInSection section: Int
         ) -> NSSize {
-            let height: CGFloat = renderedSections.indices.contains(section) && renderedSections[section].creatorName != nil ? 56 : 48
+            guard renderedSections.indices.contains(section) else {
+                return NSSize(width: max(collectionView.bounds.width, 1), height: 48)
+            }
+            let height = headerModel(for: renderedSections[section]).height
             return NSSize(width: max(collectionView.bounds.width, 1), height: height)
         }
 
@@ -512,7 +532,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     count: section.videos.count,
                     totalCount: section.totalCount,
                     topicNames: section.topicNames,
-                    sectionId: section.id
+                    sectionId: section.id,
+                    highlightTerms: store?.parsedQuery.includeTerms ?? [],
+                    onInspect: { [weak store] in
+                        store?.inspectedCreatorName = creatorName
+                    }
                 )
             }
 
@@ -520,15 +544,39 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 name: section.topicName,
                 count: section.videos.count,
                 totalCount: section.totalCount,
-                topicId: section.topicId
+                topicId: section.topicId,
+                highlightTerms: store?.parsedQuery.includeTerms ?? [],
+                channels: store?.channelsForTopic(section.topicId) ?? [],
+                selectedChannelId: store?.selectedChannelId,
+                videoCountForChannel: { [weak store] channelId in
+                    store?.videoCountForChannel(channelId, inTopic: section.topicId) ?? 0
+                },
+                hasRecentContent: { [weak store] channelId in
+                    store?.channelHasRecentContent(channelId, inTopic: section.topicId) ?? false
+                },
+                onSelectChannel: { [weak store] channelId in
+                    guard let store else { return }
+                    let channel = store.channelsForTopic(section.topicId).first(where: { $0.channelId == channelId })
+                    if store.selectedChannelId == channelId {
+                        store.inspectedCreatorName = nil
+                    } else {
+                        store.inspectedCreatorName = channel?.name
+                    }
+                    store.toggleChannelFilter(channelId)
+                }
             )
+        }
+
+        private func openOnYouTube(_ video: VideoGridItemModel) {
+            guard let url = URL(string: "https://www.youtube.com/watch?v=\(video.id)") else { return }
+            NSWorkspace.shared.open(url)
         }
     }
 }
 
 private final class CollectionGridContainerView: NSView {
     let scrollView = NSScrollView()
-    let collectionView = NSCollectionView()
+    let collectionView = ClickableCollectionView()
     let flowLayout = NSCollectionViewFlowLayout()
 
     var onReadyForFlush: (() -> Void)?
@@ -617,8 +665,37 @@ private final class CollectionGridContainerView: NSView {
 }
 
 enum CollectionSectionHeaderModel {
-    case topic(name: String, count: Int, totalCount: Int?, topicId: Int64)
-    case creator(channelName: String, channelIconUrl: URL?, count: Int, totalCount: Int?, topicNames: [String], sectionId: String)
+    case topic(
+        name: String,
+        count: Int,
+        totalCount: Int?,
+        topicId: Int64,
+        highlightTerms: [String],
+        channels: [ChannelRecord],
+        selectedChannelId: String?,
+        videoCountForChannel: (String) -> Int,
+        hasRecentContent: (String) -> Bool,
+        onSelectChannel: (String) -> Void
+    )
+    case creator(
+        channelName: String,
+        channelIconUrl: URL?,
+        count: Int,
+        totalCount: Int?,
+        topicNames: [String],
+        sectionId: String,
+        highlightTerms: [String],
+        onInspect: () -> Void
+    )
+
+    var height: CGFloat {
+        switch self {
+        case let .topic(_, _, _, _, _, channels, _, _, _, _):
+            channels.isEmpty ? 48 : 112
+        case .creator:
+            56
+        }
+    }
 }
 
 // MARK: - Video Cell (custom NSCollectionViewItem subclass)
@@ -771,17 +848,31 @@ private struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId):
-            SectionHeaderView(
-                name: name,
-                count: count,
-                totalCount: totalCount,
-                topicId: topicId,
-                progress: 0,
-                showProgress: false
-            )
-            .accessibilityIdentifier("topic-\(topicId)")
-        case let .creator(channelName, channelIconUrl, count, totalCount, topicNames, sectionId):
+        case let .topic(name, count, totalCount, topicId, highlightTerms, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
+            VStack(spacing: 0) {
+                SectionHeaderView(
+                    name: name,
+                    count: count,
+                    totalCount: totalCount,
+                    topicId: topicId,
+                    progress: 0,
+                    showProgress: false,
+                    highlightTerms: highlightTerms
+                )
+                .accessibilityIdentifier("topic-\(topicId)")
+
+                if !channels.isEmpty {
+                    CreatorCirclesBar(
+                        channels: channels,
+                        selectedChannelId: selectedChannelId,
+                        topicId: topicId,
+                        videoCountForChannel: videoCountForChannel,
+                        hasRecentContent: hasRecentContent,
+                        onSelect: onSelectChannel
+                    )
+                }
+            }
+        case let .creator(channelName, channelIconUrl, count, totalCount, topicNames, sectionId, highlightTerms, onInspect):
             CreatorSectionHeaderView(
                 channelName: channelName,
                 channelIconUrl: channelIconUrl,
@@ -789,8 +880,28 @@ private struct SectionHeaderContent: View {
                 totalCount: totalCount,
                 topicNames: topicNames,
                 sectionId: sectionId,
-                progress: 0
+                progress: 0,
+                highlightTerms: highlightTerms
             )
+            .onTapGesture(perform: onInspect)
+            .onHover { hovering in
+                if hovering {
+                    onInspect()
+                }
+            }
         }
+    }
+}
+
+private final class ClickableCollectionView: NSCollectionView {
+    var onDoubleClickItem: ((IndexPath) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+
+        guard event.clickCount == 2 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let indexPath = indexPathForItem(at: point) else { return }
+        onDoubleClickItem?(indexPath)
     }
 }
