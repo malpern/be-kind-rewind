@@ -8,7 +8,6 @@ struct VideoOrganizerApp: App {
     @State private var displaySettings = DisplaySettings()
     @State private var youTubeAuth = YouTubeAuthController()
     @State private var loadError: String?
-    @State private var showSplash = true
 
     var body: some Scene {
         WindowGroup {
@@ -133,18 +132,12 @@ struct VideoOrganizerApp: App {
     }
 
     private func resolveDbPath() -> String {
-        let candidates = [
-            "/tmp/full-tagger-v2.db",
-            FileManager.default.currentDirectoryPath + "/video-tagger.db"
+        let environment = RuntimeEnvironment()
+        let legacyCandidates = [
+            URL(fileURLWithPath: "/tmp/full-tagger-v2.db"),
+            environment.currentDirectoryURL.appendingPathComponent("video-tagger.db")
         ]
-
-        for path in candidates {
-            if FileManager.default.fileExists(atPath: path) {
-                return path
-            }
-        }
-
-        return candidates.last!
+        return environment.preferredDatabaseURL(legacyCandidates: legacyCandidates).path
     }
 }
 
@@ -169,39 +162,39 @@ private struct AppMenuCommands: Commands {
 
         CommandGroup(after: .appSettings) {
             Button("Save to Watch Later") {
-                NotificationCenter.default.post(name: .videoOrganizerSaveToWatchLater, object: nil)
+                AppCommandBridge.post(AppCommandBridge.saveToWatchLater)
             }
             .keyboardShortcut("w", modifiers: [])
 
             Button("Save to Playlist…") {
-                NotificationCenter.default.post(name: .videoOrganizerSaveToPlaylist, object: nil)
+                AppCommandBridge.post(AppCommandBridge.saveToPlaylist)
             }
             .keyboardShortcut("p", modifiers: [])
 
             Button("Move to Playlist…") {
-                NotificationCenter.default.post(name: .videoOrganizerMoveToPlaylist, object: nil)
+                AppCommandBridge.post(AppCommandBridge.moveToPlaylist)
             }
             .keyboardShortcut("p", modifiers: [.shift])
 
             Button("Dismiss") {
-                NotificationCenter.default.post(name: .videoOrganizerDismissCandidates, object: nil)
+                AppCommandBridge.post(AppCommandBridge.dismissCandidates)
             }
             .keyboardShortcut("d", modifiers: [])
 
             Button("Not Interested") {
-                NotificationCenter.default.post(name: .videoOrganizerNotInterested, object: nil)
+                AppCommandBridge.post(AppCommandBridge.notInterested)
             }
             .keyboardShortcut("n", modifiers: [])
 
             Divider()
 
             Button("Open on YouTube") {
-                NotificationCenter.default.post(name: .videoOrganizerOpenOnYouTube, object: nil)
+                AppCommandBridge.post(AppCommandBridge.openOnYouTube)
             }
             .keyboardShortcut(.return, modifiers: [])
 
             Button("Clear Selection") {
-                NotificationCenter.default.post(name: .videoOrganizerClearSelection, object: nil)
+                AppCommandBridge.post(AppCommandBridge.clearSelection)
             }
             .keyboardShortcut(.escape, modifiers: [])
         }
@@ -210,11 +203,7 @@ private struct AppMenuCommands: Commands {
             if let store {
                 ForEach(Array(store.knownPlaylists().prefix(9).enumerated()), id: \.element.id) { index, playlist in
                     Button("\(index + 1). \(playlist.title)") {
-                        NotificationCenter.default.post(
-                            name: .videoOrganizerSaveToFavoritePlaylist,
-                            object: nil,
-                            userInfo: ["index": index]
-                        )
+                        AppCommandBridge.post(AppCommandBridge.saveToFavoritePlaylist, userInfo: ["index": index])
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [])
                 }
@@ -292,41 +281,41 @@ private struct AppMenuCommands: Commands {
 
         CommandMenu("Actions") {
             Button("Save to Watch Later") {
-                NotificationCenter.default.post(name: .videoOrganizerSaveToWatchLater, object: nil)
+                AppCommandBridge.post(AppCommandBridge.saveToWatchLater)
             }
             .keyboardShortcut("w", modifiers: [])
 
             Button("Save to Playlist…") {
-                NotificationCenter.default.post(name: .videoOrganizerSaveToPlaylist, object: nil)
+                AppCommandBridge.post(AppCommandBridge.saveToPlaylist)
             }
             .keyboardShortcut("p", modifiers: [])
 
             Button("Move to Playlist…") {
-                NotificationCenter.default.post(name: .videoOrganizerMoveToPlaylist, object: nil)
+                AppCommandBridge.post(AppCommandBridge.moveToPlaylist)
             }
             .keyboardShortcut("p", modifiers: [.shift])
 
             Divider()
 
             Button("Dismiss") {
-                NotificationCenter.default.post(name: .videoOrganizerDismissCandidates, object: nil)
+                AppCommandBridge.post(AppCommandBridge.dismissCandidates)
             }
             .keyboardShortcut("d", modifiers: [])
 
             Button("Not Interested") {
-                NotificationCenter.default.post(name: .videoOrganizerNotInterested, object: nil)
+                AppCommandBridge.post(AppCommandBridge.notInterested)
             }
             .keyboardShortcut("n", modifiers: [])
 
             Divider()
 
             Button("Open on YouTube") {
-                NotificationCenter.default.post(name: .videoOrganizerOpenOnYouTube, object: nil)
+                AppCommandBridge.post(AppCommandBridge.openOnYouTube)
             }
             .keyboardShortcut(.return, modifiers: [])
 
             Button("Clear Selection") {
-                NotificationCenter.default.post(name: .videoOrganizerClearSelection, object: nil)
+                AppCommandBridge.post(AppCommandBridge.clearSelection)
             }
             .keyboardShortcut(.escape, modifiers: [])
         }

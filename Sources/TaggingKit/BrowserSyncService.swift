@@ -16,13 +16,14 @@ public struct BrowserExecutorStatus: Sendable {
 }
 
 public struct BrowserSyncService: Sendable {
-    private let repoRoot: URL
-    private let profileDir: URL
+    private let environment: RuntimeEnvironment
+
+    public init(environment: RuntimeEnvironment) {
+        self.environment = environment
+    }
 
     public init(repoRoot: URL) {
-        self.repoRoot = repoRoot
-        self.profileDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/be-kind-rewind/playwright-profile")
+        self.environment = RuntimeEnvironment(currentDirectoryURL: repoRoot, bundleURL: nil)
     }
 
     public func execute(actions: [SyncAction]) async throws -> BrowserSyncResult {
@@ -30,7 +31,7 @@ public struct BrowserSyncService: Sendable {
             return BrowserSyncResult(syncedActionIDs: [], failures: [])
         }
 
-        let scriptURL = repoRoot.appendingPathComponent("scripts/youtube_browser_sync.mjs")
+        let scriptURL = environment.scriptURL(named: "youtube_browser_sync.mjs")
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("youtube-browser-sync-\(UUID().uuidString).json")
 
@@ -47,8 +48,8 @@ public struct BrowserSyncService: Sendable {
         try data.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
-        let artifactDir = repoRoot
-            .appendingPathComponent("output/playwright/browser-sync")
+        let artifactDir = environment
+            .browserSyncArtifactsDirectory()
             .appendingPathComponent(Self.timestampedRunDirectory())
         let arguments = [
             "npx", "--yes", "--package", "playwright",
@@ -72,9 +73,9 @@ public struct BrowserSyncService: Sendable {
     }
 
     public func openLoginSetup() async throws {
-        let scriptURL = repoRoot.appendingPathComponent("scripts/youtube_browser_sync.mjs")
+        let scriptURL = environment.scriptURL(named: "youtube_browser_sync.mjs")
         let process = Process()
-        process.currentDirectoryURL = repoRoot
+        process.currentDirectoryURL = environment.repoRoot()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = [
             "npx", "--yes", "--package", "playwright",
@@ -130,7 +131,7 @@ public struct BrowserSyncService: Sendable {
 
     private func runProcess(arguments: [String]) async throws -> ProcessExecutionResult {
         let process = Process()
-        process.currentDirectoryURL = repoRoot
+        process.currentDirectoryURL = environment.repoRoot()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
 
@@ -154,6 +155,7 @@ public struct BrowserSyncService: Sendable {
     }
 
     private func isBrowserProfileProcessRunning() throws -> Bool {
+        let profileDir = environment.playwrightProfileDirectory()
         let execution = try runProcessSync(arguments: ["pgrep", "-fal", profileDir.path])
         guard execution.terminationStatus == 0,
               let output = String(data: execution.stdout, encoding: .utf8)?
@@ -166,7 +168,7 @@ public struct BrowserSyncService: Sendable {
 
     private func runProcessSync(arguments: [String]) throws -> ProcessExecutionResult {
         let process = Process()
-        process.currentDirectoryURL = repoRoot
+        process.currentDirectoryURL = environment.repoRoot()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
 
@@ -185,7 +187,7 @@ public struct BrowserSyncService: Sendable {
     }
 
     private func profileHasSignedInYouTubeSession() throws -> Bool {
-        let cookiesPath = profileDir
+        let cookiesPath = environment.playwrightProfileDirectory()
             .appendingPathComponent("Default")
             .appendingPathComponent("Cookies")
             .path

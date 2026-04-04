@@ -1,24 +1,89 @@
 import Foundation
+@testable import VideoOrganizer
 @testable import TaggingKit
 
-func withTemporaryDirectory<Result>(
-    _ body: (URL) throws -> Result
-) throws -> Result {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    return try body(directory)
+struct FileBackedOrganizerFixture {
+    let directoryURL: URL
+    let dbPath: String
+
+    init() throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        self.directoryURL = directoryURL
+        self.dbPath = directoryURL.appendingPathComponent("organizer.db").path
+    }
+
+    func seed() throws {
+        try makeOrganizerStoreFixture(at: dbPath)
+    }
+
+    func makeTopicStore() throws -> TopicStore {
+        try TopicStore(path: dbPath)
+    }
+
+    @MainActor
+    func makeOrganizerStore() throws -> OrganizerStore {
+        try OrganizerStore(dbPath: dbPath, startBackgroundTasks: false)
+    }
+
+    func teardown() throws {
+        try FileManager.default.removeItem(at: directoryURL)
+    }
 }
 
-func withTemporaryDirectory<Result>(
-    _ body: (URL) async throws -> Result
+@MainActor
+func withFileBackedOrganizerFixture<Result>(
+    _ body: (FileBackedOrganizerFixture) throws -> Result
+) throws -> Result {
+    let fixture = try FileBackedOrganizerFixture()
+    try fixture.seed()
+
+    var capturedError: Error?
+    do {
+        let result = try body(fixture)
+        try fixture.teardown()
+        return result
+    } catch {
+        capturedError = error
+    }
+
+    do {
+        try fixture.teardown()
+    } catch let teardownError {
+        if capturedError == nil {
+            capturedError = teardownError
+        }
+    }
+
+    throw capturedError!
+}
+
+@MainActor
+func withFileBackedOrganizerFixture<Result>(
+    _ body: (FileBackedOrganizerFixture) async throws -> Result
 ) async throws -> Result {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    return try await body(directory)
+    let fixture = try FileBackedOrganizerFixture()
+    try fixture.seed()
+
+    var capturedError: Error?
+    do {
+        let result = try await body(fixture)
+        try fixture.teardown()
+        return result
+    } catch {
+        capturedError = error
+    }
+
+    do {
+        try fixture.teardown()
+    } catch let teardownError {
+        if capturedError == nil {
+            capturedError = teardownError
+        }
+    }
+
+    throw capturedError!
 }
 
 func makeOrganizerStoreFixture(at dbPath: String) throws {
@@ -83,4 +148,9 @@ func makeOrganizerStoreFixture(at dbPath: String) throws {
         PlaylistMembershipRecord(playlistId: "PL-ALPHA", videoId: "vid-0", position: 0, verifiedAt: "2026-04-03T00:00:00Z"),
         PlaylistMembershipRecord(playlistId: "PL-ALPHA", videoId: "vid-1", position: 1, verifiedAt: "2026-04-03T00:00:00Z")
     ])
+}
+
+@MainActor
+func makeTestOrganizerStore(dbPath: String) throws -> OrganizerStore {
+    try OrganizerStore(dbPath: dbPath, startBackgroundTasks: false)
 }

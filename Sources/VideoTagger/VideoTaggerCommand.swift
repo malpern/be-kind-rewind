@@ -893,7 +893,6 @@ func backfillMetadata(
         )
 
         if let channelId = item.channelId {
-            try store.setVideoChannelId(videoId: item.videoId, channelId: channelId)
             if try store.channelById(channelId) == nil {
                 try store.upsertChannel(ChannelRecord(
                     channelId: channelId,
@@ -902,6 +901,7 @@ func backfillMetadata(
                 ))
                 channelStubs += 1
             }
+            try store.setVideoChannelId(videoId: item.videoId, channelId: channelId)
         }
         updated += 1
     }
@@ -946,7 +946,6 @@ func enrichChannels(
         quotaUsed += batchCount
         for item in metadata {
             if let channelId = item.channelId {
-                try store.setVideoChannelId(videoId: item.videoId, channelId: channelId)
                 if try store.channelById(channelId) == nil {
                     try store.upsertChannel(ChannelRecord(
                         channelId: channelId,
@@ -954,6 +953,7 @@ func enrichChannels(
                         channelUrl: "https://www.youtube.com/channel/\(channelId)"
                     ))
                 }
+                try store.setVideoChannelId(videoId: item.videoId, channelId: channelId)
                 backfilled += 1
             }
         }

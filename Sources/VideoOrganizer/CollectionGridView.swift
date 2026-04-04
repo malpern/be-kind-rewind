@@ -2,18 +2,7 @@ import SwiftUI
 import AppKit
 import TaggingKit
 
-extension Notification.Name {
-    static let videoOrganizerSaveToWatchLater = Notification.Name("videoOrganizer.saveToWatchLater")
-    static let videoOrganizerSaveToPlaylist = Notification.Name("videoOrganizer.saveToPlaylist")
-    static let videoOrganizerMoveToPlaylist = Notification.Name("videoOrganizer.moveToPlaylist")
-    static let videoOrganizerDismissCandidates = Notification.Name("videoOrganizer.dismissCandidates")
-    static let videoOrganizerNotInterested = Notification.Name("videoOrganizer.notInterested")
-    static let videoOrganizerOpenOnYouTube = Notification.Name("videoOrganizer.openOnYouTube")
-    static let videoOrganizerClearSelection = Notification.Name("videoOrganizer.clearSelection")
-    static let videoOrganizerSaveToFavoritePlaylist = Notification.Name("videoOrganizer.saveToFavoritePlaylist")
-}
-
-// MARK: - SwiftUI Wrapper (matches AllVideosGridView interface)
+// MARK: - SwiftUI Wrapper
 
 struct CollectionGridView: View {
     @Bindable var store: OrganizerStore
@@ -69,109 +58,30 @@ struct CollectionGridView: View {
         .onChange(of: store.candidateRefreshToken) { _, _ in loadAndFilter() }
     }
 
-    // MARK: - Section Computation (replicated from AllVideosGridView)
-
     private func loadAndFilter() {
-        var baseSections: [TopicSection] = []
+        let result = GridSectionBuilder.build(
+            context: GridSectionBuilder.Context(
+                topics: store.topics,
+                parsedQuery: store.parsedQuery,
+                selectedSubtopicId: store.selectedSubtopicId,
+                selectedChannelId: store.selectedChannelId,
+                selectedPlaylistId: store.selectedPlaylistId,
+                sortOrder: displaySettings.sortOrder,
+                sortAscending: displaySettings.sortAscending,
+                channelCounts: store.channelCounts,
+                displayModeForTopic: { store.displayMode(for: $0) },
+                videosForTopic: { topicId, displayMode in
+                    videosForTopic(topicId, displayMode: displayMode)
+                },
+                videosForSubtopic: { subtopicId in
+                    mapVideos(store.videosForTopic(subtopicId))
+                },
+                videoIsInSelectedPlaylist: { store.videoIsInSelectedPlaylist($0) }
+            )
+        )
 
-        for topic in store.topics {
-            let displayMode = store.displayMode(for: topic.id)
-            if topic.subtopics.isEmpty {
-                let videos = videosForTopic(topic.id, name: topic.name, displayMode: displayMode)
-                if !videos.isEmpty {
-                    baseSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: videos, displayMode: displayMode))
-                }
-            } else {
-                var allVideos: [VideoGridItemModel] = []
-                var subtopicMap: [String: Int64] = [:]
-                if displayMode == .saved {
-                    for sub in topic.subtopics {
-                        let videos = mapVideos(store.videosForTopic(sub.id))
-                        for v in videos { subtopicMap[v.id] = sub.id }
-                        allVideos.append(contentsOf: videos)
-                    }
-                    let parentVideos = mapVideos(store.videosForTopic(topic.id))
-                    allVideos.append(contentsOf: parentVideos)
-                } else {
-                    allVideos = videosForTopic(topic.id, name: topic.name, displayMode: displayMode)
-                }
-                if !allVideos.isEmpty {
-                    baseSections.append(TopicSection(topicId: topic.id, topicName: topic.name, videos: allVideos, videoSubtopicMap: subtopicMap, displayMode: displayMode))
-                }
-            }
-        }
-
-        let query = store.parsedQuery
-        var result: [TopicSection]
-        if query.isEmpty {
-            result = baseSections
-            store.searchResultCount = 0
-        } else {
-            result = []
-            for section in baseSections {
-                if query.matches(fields: [section.topicName]) {
-                    result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: section.videos, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode))
-                } else {
-                    let matching = section.videos.filter { video in
-                        query.matches(fields: [video.title, video.channelName ?? "", section.topicName])
-                    }
-                    if !matching.isEmpty {
-                        result.append(TopicSection(topicId: section.topicId, topicName: section.topicName, videos: matching, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode))
-                    }
-                }
-            }
-            store.searchResultCount = result.reduce(0) { $0 + $1.videos.count }
-        }
-
-        if let subId = store.selectedSubtopicId {
-            result = result.compactMap { section in
-                guard section.displayMode == .saved else { return section }
-                let filtered = section.videos.filter { section.videoSubtopicMap[$0.id] == subId }
-                guard !filtered.isEmpty else { return nil }
-                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode)
-            }
-        }
-
-        if let channelId = store.selectedChannelId {
-            result = result.compactMap { section in
-                guard section.displayMode == .saved else { return section }
-                let filtered = section.videos.filter { $0.channelId == channelId }
-                guard !filtered.isEmpty else { return nil }
-                return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: filtered, totalCount: section.videos.count, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode)
-            }
-        }
-
-        if store.selectedPlaylistId != nil {
-            result = result.compactMap { section in
-                guard section.displayMode == .saved else { return section }
-                let filtered = section.videos.filter { store.videoIsInSelectedPlaylist($0.id) }
-                guard !filtered.isEmpty else { return nil }
-                return TopicSection(
-                    topicId: section.topicId,
-                    topicName: section.topicName,
-                    videos: filtered,
-                    totalCount: section.videos.count,
-                    videoSubtopicMap: section.videoSubtopicMap,
-                    displayMode: section.displayMode
-                )
-            }
-        }
-
-        if let sortOrder = displaySettings.sortOrder {
-            if sortOrder == .creator {
-                result = result.flatMap { section in
-                    section.displayMode == .saved ? groupByCreator(section: section, ascending: displaySettings.sortAscending) : [section]
-                }
-            } else {
-                result = result.map { section in
-                    guard section.displayMode == .saved else { return section }
-                    let sorted = sortVideos(section.videos, by: sortOrder, ascending: displaySettings.sortAscending)
-                    return TopicSection(topicId: section.topicId, topicName: section.topicName, videos: sorted, totalCount: section.totalCount, videoSubtopicMap: section.videoSubtopicMap, displayMode: section.displayMode)
-                }
-            }
-        }
-
-        sections = result
+        store.searchResultCount = result.searchResultCount
+        sections = result.sections
         sectionGeneration += 1
     }
 
@@ -190,7 +100,7 @@ struct CollectionGridView: View {
         }
     }
 
-    private func videosForTopic(_ topicId: Int64, name: String, displayMode: TopicDisplayMode) -> [VideoGridItemModel] {
+    private func videosForTopic(_ topicId: Int64, displayMode: TopicDisplayMode) -> [VideoGridItemModel] {
         switch displayMode {
         case .saved:
             return mapVideos(store.videosForTopic(topicId))
@@ -214,30 +124,6 @@ struct CollectionGridView: View {
         }
     }
 
-    private func groupByCreator(section: TopicSection, ascending: Bool) -> [TopicSection] {
-        GridSectionLogic.groupByCreator(
-            section: section,
-            ascending: ascending,
-            channelCounts: store.channelCounts,
-            includeTopicMarker: true
-        )
-    }
-
-    private func sortVideos(_ videos: [VideoGridItemModel], by order: SortOrder, ascending: Bool) -> [VideoGridItemModel] {
-        GridSectionLogic.sortVideos(videos, by: order, ascending: ascending)
-    }
-
-    private func parseViewCount(_ str: String?) -> Int {
-        GridSectionLogic.parseViewCount(str)
-    }
-
-    private func parseAge(_ str: String?) -> Int {
-        GridSectionLogic.parseAge(str)
-    }
-
-    private func parseDuration(_ str: String?) -> Int {
-        GridSectionLogic.parseDuration(str)
-    }
 }
 
 // MARK: - NSViewRepresentable
@@ -1242,28 +1128,28 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard actionObservers.isEmpty else { return }
             let center = NotificationCenter.default
             actionObservers = [
-                center.addObserver(forName: .videoOrganizerSaveToWatchLater, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: AppCommandBridge.saveToWatchLater, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleSaveToWatchLaterShortcut() }
                 },
-                center.addObserver(forName: .videoOrganizerSaveToPlaylist, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: AppCommandBridge.saveToPlaylist, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleSaveToPlaylistShortcut() }
                 },
-                center.addObserver(forName: .videoOrganizerMoveToPlaylist, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: AppCommandBridge.moveToPlaylist, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleMoveToPlaylistShortcut() }
                 },
-                center.addObserver(forName: .videoOrganizerDismissCandidates, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: AppCommandBridge.dismissCandidates, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleDismissShortcut() }
                 },
-                center.addObserver(forName: .videoOrganizerNotInterested, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: AppCommandBridge.notInterested, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleNotInterestedShortcut() }
                 },
-                center.addObserver(forName: .videoOrganizerOpenOnYouTube, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: AppCommandBridge.openOnYouTube, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleOpenSelectedShortcut() }
                 },
-                center.addObserver(forName: .videoOrganizerClearSelection, object: nil, queue: .main) { [weak self] _ in
+                center.addObserver(forName: AppCommandBridge.clearSelection, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleClearSelectionShortcut() }
                 },
-                center.addObserver(forName: .videoOrganizerSaveToFavoritePlaylist, object: nil, queue: .main) { [weak self] note in
+                center.addObserver(forName: AppCommandBridge.saveToFavoritePlaylist, object: nil, queue: .main) { [weak self] note in
                     let index = note.userInfo?["index"] as? Int ?? -1
                     Task { @MainActor in self?.handleFavoritePlaylistShortcut(index: index) }
                 }

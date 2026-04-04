@@ -4,6 +4,7 @@ import Foundation
 /// SQLite-backed store for topics, video assignments, and the commit table.
 public final class TopicStore: Sendable {
     private let db: Connection
+    private let isInMemory: Bool
 
     // Tables
     private let topics = Table("topics")
@@ -121,12 +122,24 @@ public final class TopicStore: Sendable {
 
     public init(path: String) throws {
         db = try Connection(path)
+        isInMemory = false
+        try configureDatabase()
         try createTables()
     }
 
     public init(inMemory: Bool = true) throws {
         db = try Connection(.inMemory)
+        isInMemory = true
+        try configureDatabase()
         try createTables()
+    }
+
+    private func configureDatabase() throws {
+        try db.run("PRAGMA foreign_keys = ON")
+        try db.run("PRAGMA busy_timeout = 5000")
+        if !isInMemory {
+            try db.run("PRAGMA journal_mode = WAL")
+        }
     }
 
     private func createTables() throws {

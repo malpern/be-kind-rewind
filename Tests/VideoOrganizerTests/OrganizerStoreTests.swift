@@ -8,11 +8,8 @@ struct OrganizerStoreTests {
     @Test("loadTopics selects the first topic and exposes channel caches")
     @MainActor
     func loadTopicsBuildsInitialState() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
 
             #expect(store.totalVideoCount == 4)
             #expect(store.unassignedCount == 1)
@@ -27,11 +24,8 @@ struct OrganizerStoreTests {
     @Test("changing selected topic clears selected channel filter")
     @MainActor
     func selectedTopicChangeClearsChannelFilter() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
             let betaTopic = try #require(store.topics.first(where: { $0.name == "Beta Topic" }))
 
@@ -48,11 +42,8 @@ struct OrganizerStoreTests {
     @Test("selecting a video exits creator inspection")
     @MainActor
     func selectingVideoClearsCreatorInspection() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
 
             store.inspectedCreatorName = "Alpha Channel"
             store.selectedVideoId = "vid-0"
@@ -64,11 +55,8 @@ struct OrganizerStoreTests {
     @Test("playlist filter state is applied and cleared consistently")
     @MainActor
     func playlistFiltering() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let playlist = try #require(store.playlistsForVideo("vid-0").first)
 
             store.applyPlaylistFilter(playlist)
@@ -87,11 +75,8 @@ struct OrganizerStoreTests {
     @Test("typeahead suggestions include topics subtopics and channels sorted by count")
     @MainActor
     func typeaheadSuggestions() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             store.searchText = "alpha"
 
             let suggestions = store.typeaheadSuggestions()
@@ -106,11 +91,8 @@ struct OrganizerStoreTests {
     @Test("creator detail aggregates views ages and coverage")
     @MainActor
     func creatorDetailAggregation() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let detail = store.creatorDetail(channelName: "Alpha Channel")
 
             #expect(detail.totalVideoCount == 2)
@@ -130,11 +112,8 @@ struct OrganizerStoreTests {
     @Test("channel filter toggles on and off")
     @MainActor
     func toggleChannelFilter() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
 
             store.toggleChannelFilter("chan-alpha")
             #expect(store.selectedChannelId == "chan-alpha")
@@ -147,11 +126,8 @@ struct OrganizerStoreTests {
     @Test("moreFromChannel excludes the current video and respects the limit")
     @MainActor
     func moreFromChannelExcludesCurrentVideo() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let related = store.moreFromChannel(videoId: "vid-0", limit: 5)
 
             #expect(related.map(\.videoId) == ["vid-1"])
@@ -161,11 +137,8 @@ struct OrganizerStoreTests {
     @Test("typeahead ignores short queries and exclude prefixes")
     @MainActor
     func typeaheadIgnoresShortAndExcludeQueries() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
 
             store.searchText = "a"
             #expect(store.typeaheadSuggestions().isEmpty)
@@ -178,11 +151,8 @@ struct OrganizerStoreTests {
     @Test("candidate progress copy defaults to idle state")
     @MainActor
     func candidateProgressText() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
 
             #expect(store.candidateProgress(for: alphaTopic.id) == 0)
@@ -195,11 +165,8 @@ struct OrganizerStoreTests {
     @Test("setDisplayMode clears selection state when entering watch candidates")
     @MainActor
     func setDisplayModeClearsSelectionState() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
 
             store.selectedTopicId = alphaTopic.id
@@ -220,32 +187,23 @@ struct OrganizerStoreTests {
     @Test("activateDisplayMode for saved mode bumps refresh token")
     @MainActor
     func activateDisplayModeSavedRefreshesToken() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+            let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
+            let before = store.candidateRefreshToken
 
-        let dbPath = directory.appendingPathComponent("organizer.db").path
-        try makeOrganizerStoreFixture(at: dbPath)
+            await store.activateDisplayMode(TopicDisplayMode.saved, for: alphaTopic.id)
 
-        let store = try OrganizerStore(dbPath: dbPath)
-        let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
-        let before = store.candidateRefreshToken
-
-        await store.activateDisplayMode(.saved, for: alphaTopic.id)
-
-        #expect(store.displayMode(for: alphaTopic.id) == .saved)
-        #expect(store.candidateRefreshToken == before + 1)
+            #expect(store.displayMode(for: alphaTopic.id) == .saved)
+            #expect(store.candidateRefreshToken == before + 1)
+        }
     }
 
     @Test("watch later badge takes precedence for saved candidates")
     @MainActor
     func watchLaterBadgeForCandidate() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let fixtureStore = try TopicStore(path: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
             let alphaTopic = try fixtureStore.topicIdByName("Alpha Topic").unsafelyUnwrapped
             try fixtureStore.replaceCandidates(
                 forTopic: alphaTopic,
@@ -258,7 +216,7 @@ struct OrganizerStoreTests {
             try fixtureStore.addPlaylistMembership(PlaylistMembershipRecord(playlistId: "WL", videoId: "vid-3", position: nil, verifiedAt: "2026-04-04T00:00:00Z"))
             try fixtureStore.setCandidateState(topicId: alphaTopic, videoId: "vid-3", state: .saved)
 
-            let store = try OrganizerStore(dbPath: dbPath)
+            let store = try fixture.makeOrganizerStore()
 
             let candidates = store.candidateVideosForTopic(alphaTopic)
             #expect(candidates.map(\.videoId) == ["vid-3"])
@@ -266,14 +224,58 @@ struct OrganizerStoreTests {
         }
     }
 
+    @Test("refreshSyncQueueSummary exposes queued and browser deferred work")
+    @MainActor
+    func refreshSyncQueueSummaryExposure() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+            try store.store.queueCommit(action: "add_to_playlist", videoId: "vid-0", playlist: "PL-ALPHA")
+            try store.store.queueCommit(action: "not_interested", videoId: "vid-2", playlist: "__youtube__")
+
+            store.refreshSyncQueueSummary()
+            #expect(store.syncQueueSummary.queued == 2)
+            #expect(store.syncQueueSummary.deferred == 0)
+            #expect(store.syncQueueSummary.browserDeferred == 0)
+
+            let browserActions = try store.store.pendingSyncPlan(executor: .browser)
+            try store.store.markDeferred(ids: browserActions.map(\.id), error: "Waiting for browser executor")
+
+            store.refreshSyncQueueSummary()
+            #expect(store.syncQueueSummary.queued == 1)
+            #expect(store.syncQueueSummary.deferred == 1)
+            #expect(store.syncQueueSummary.browserDeferred == 1)
+        }
+    }
+
+    @Test("markCandidateNotInterested updates the user-facing alert")
+    @MainActor
+    func markCandidateNotInterestedAlert() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "vid-3", title: "Gamma Debugging", channelId: "chan-gamma", channelName: "Gamma Channel", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 10, reason: "adjacent creator", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            store.browserExecutorReady = false
+
+            store.markCandidateNotInterested(topicId: alphaTopic, videoId: "vid-3")
+
+            #expect(store.alert?.title == "Queued Not Interested")
+            #expect(store.alert?.message.contains("queued") == true)
+        }
+    }
+
     @Test("renameTopic updates the topic list")
     @MainActor
     func renameTopicMutation() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
 
             store.renameTopic(alphaTopic.id, to: "Renamed Topic")
@@ -285,11 +287,8 @@ struct OrganizerStoreTests {
     @Test("deleteTopic clears selection when deleting the selected topic")
     @MainActor
     func deleteTopicMutation() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let betaTopic = try #require(store.topics.first(where: { $0.name == "Beta Topic" }))
             store.selectedTopicId = betaTopic.id
 
@@ -303,11 +302,8 @@ struct OrganizerStoreTests {
     @Test("mergeTopics moves selection to the destination topic")
     @MainActor
     func mergeTopicsMutation() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
             let betaTopic = try #require(store.topics.first(where: { $0.name == "Beta Topic" }))
             store.selectedTopicId = betaTopic.id
@@ -322,11 +318,8 @@ struct OrganizerStoreTests {
     @Test("moveVideo and moveVideos update topic membership")
     @MainActor
     func moveVideoMutations() throws {
-        try withTemporaryDirectory { directory in
-            let dbPath = directory.appendingPathComponent("organizer.db").path
-            try makeOrganizerStoreFixture(at: dbPath)
-
-            let store = try OrganizerStore(dbPath: dbPath)
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
             let betaTopic = try #require(store.topics.first(where: { $0.name == "Beta Topic" }))
 
@@ -338,6 +331,21 @@ struct OrganizerStoreTests {
             #expect(store.selectedVideoId == nil)
             #expect(store.topicNameForVideo("vid-0") == "Beta Topic")
             #expect(store.topicNameForVideo("vid-1") == "Beta Topic")
+        }
+    }
+
+    @Test("file-backed organizer fixture tears down cleanly across repeated runs")
+    @MainActor
+    func repeatedFileBackedFixtureTeardown() throws {
+        for iteration in 0..<25 {
+            try withFileBackedOrganizerFixture { fixture in
+                let topicStore = try fixture.makeTopicStore()
+                let organizerStore = try fixture.makeOrganizerStore()
+
+                #expect(try topicStore.totalVideoCount() == 4, "topic store setup failed on iteration \(iteration)")
+                #expect(organizerStore.totalVideoCount == 4, "organizer store setup failed on iteration \(iteration)")
+                #expect(try topicStore.listTopics().count == 2, "topics missing on iteration \(iteration)")
+            }
         }
     }
 }

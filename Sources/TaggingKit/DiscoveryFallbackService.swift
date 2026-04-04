@@ -11,12 +11,12 @@ public struct DiscoveryFallbackVideo: Sendable {
 }
 
 public struct DiscoveryFallbackService: Sendable {
-    private let repoRoot: URL
+    private let environment: RuntimeEnvironment
     private let pythonExecutable: URL
 
-    public init(repoRoot: URL) {
-        self.repoRoot = repoRoot
-        let bundledPython = repoRoot
+    public init(environment: RuntimeEnvironment) {
+        self.environment = environment
+        let bundledPython = environment.repoRoot()
             .appendingPathComponent(".runtime/discovery-venv/bin/python3")
         if FileManager.default.isExecutableFile(atPath: bundledPython.path) {
             self.pythonExecutable = bundledPython
@@ -25,8 +25,12 @@ public struct DiscoveryFallbackService: Sendable {
         }
     }
 
+    public init(repoRoot: URL) {
+        self.init(environment: RuntimeEnvironment(currentDirectoryURL: repoRoot, bundleURL: nil))
+    }
+
     public func fetchRecentChannelUploads(channelId: String, maxResults: Int = 16) async throws -> [DiscoveryFallbackVideo] {
-        let scriptURL = repoRoot.appendingPathComponent("scripts/youtube_channel_fallback.py")
+        let scriptURL = environment.scriptURL(named: "youtube_channel_fallback.py")
         let arguments = [
             pythonExecutable.path,
             scriptURL.path,
@@ -57,7 +61,7 @@ public struct DiscoveryFallbackService: Sendable {
 
     private func runProcess(arguments: [String]) async throws -> ProcessExecutionResult {
         let process = Process()
-        process.currentDirectoryURL = repoRoot
+        process.currentDirectoryURL = environment.repoRoot()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
 
