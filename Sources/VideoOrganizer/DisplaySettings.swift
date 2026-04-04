@@ -72,4 +72,11 @@ final class DisplaySettings {
     var focusGridRequested = false
     var scrollToTopicRequested: Int64?
     var scrollToSectionRequested: String?
+    var alert: AppAlertState?
+}
+
+struct AppAlertState: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
 }

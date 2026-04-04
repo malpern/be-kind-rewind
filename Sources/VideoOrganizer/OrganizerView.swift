@@ -4,11 +4,10 @@ struct OrganizerView: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache
     @Bindable var displaySettings: DisplaySettings
-    @Bindable var youTubeAuth: YouTubeAuthController
 
     var body: some View {
         NavigationSplitView {
-            TopicSidebar(store: store, displaySettings: displaySettings, youTubeAuth: youTubeAuth)
+            TopicSidebar(store: store, displaySettings: displaySettings)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         } detail: {
             CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
@@ -53,6 +52,13 @@ struct OrganizerView: View {
         .overlay(alignment: .top) {
             ActionToast(state: displaySettings.toast)
                 .padding(.top, 4)
+        }
+        .alert(item: $store.alert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
         .accessibilityIdentifier("mainWindow")
     }

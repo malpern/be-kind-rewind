@@ -12,7 +12,7 @@ final class YouTubeAuthController {
     private(set) var isBusy = false
     private(set) var isConnected = false
     private(set) var statusTitle = "YouTube not connected"
-    private(set) var statusDetail = "Authorize YouTube read access so the app can verify private playlist membership like Old Watch."
+    private(set) var statusDetail = "Authorize YouTube access so the app can verify private playlists and save videos to your playlists."
     private(set) var buttonTitle = "Connect YouTube"
     private(set) var buttonSubtitle = "Open the browser and approve access for private playlist sync"
     private(set) var errorMessage: String?
@@ -44,17 +44,22 @@ final class YouTubeAuthController {
         if let tokens = tokenStore.load() {
             isConnected = true
             let expiryText = tokens.expiresAt.map { Self.statusDateFormatter.string(from: $0) } ?? "unknown expiry"
-            statusTitle = "YouTube connected"
-            statusDetail = "Stored OAuth token is available. Current access token expires \(expiryText)."
+            if tokens.includesScope(YouTubeOAuthService.writeScope) {
+                statusTitle = "YouTube connected"
+                statusDetail = "Stored OAuth token can read private playlists and save videos. Current access token expires \(expiryText)."
+            } else {
+                statusTitle = "Reconnect YouTube"
+                statusDetail = "The stored OAuth token is read-only. Reconnect YouTube to enable playlist saves and Watch Later actions."
+            }
             buttonTitle = "Reconnect YouTube"
             buttonSubtitle = "Refresh browser authorization or switch to a different Google account"
             AppLogger.auth.info("OAuth tokens loaded. Expired: \(tokens.isExpired, privacy: .public)")
         } else {
             isConnected = false
             statusTitle = "YouTube not connected"
-            statusDetail = "Authorize YouTube read access so the app can verify private playlist membership like Old Watch."
+            statusDetail = "Authorize YouTube access so the app can verify private playlists and save videos to your playlists."
             buttonTitle = "Connect YouTube"
-            buttonSubtitle = "Open the browser and approve access for private playlist sync"
+            buttonSubtitle = "Open the browser and approve access for private playlist sync and saves"
             AppLogger.auth.info("OAuth client config present but no stored tokens")
         }
     }

@@ -21,10 +21,14 @@ struct CollectionGridView: View {
             thumbnailSize: displaySettings.thumbnailSize,
             showMetadata: displaySettings.showMetadata,
             selectedVideoId: store.selectedVideoId,
+            selectedVideoIds: store.selectedVideoIds,
             scrollToTopicRequested: displaySettings.scrollToTopicRequested,
             scrollToSectionRequested: displaySettings.scrollToSectionRequested,
             onSelect: { videoId in
                 store.selectedVideoId = videoId
+            },
+            onSelectionChange: { primary, ids in
+                store.updateSelection(primary: primary, all: ids)
             },
             onClearScrollRequest: {
                 displaySettings.scrollToTopicRequested = nil
@@ -233,13 +237,15 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
     let thumbnailSize: Double
     let showMetadata: Bool
     let selectedVideoId: String?
+    let selectedVideoIds: Set<String>
     let scrollToTopicRequested: Int64?
     let scrollToSectionRequested: String?
     let onSelect: (String) -> Void
+    let onSelectionChange: (String?, Set<String>) -> Void
     let onClearScrollRequest: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSelect: onSelect)
+        Coordinator(onSelect: onSelect, onSelectionChange: onSelectionChange)
     }
 
     func makeNSView(context: Context) -> CollectionGridContainerView {
@@ -259,6 +265,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             thumbnailSize: thumbnailSize,
             showMetadata: showMetadata,
             selectedVideoId: selectedVideoId,
+            selectedVideoIds: selectedVideoIds,
             onSelect: onSelect
         )
 
@@ -295,16 +302,21 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private var pendingScrollSectionId: String?
         private var pendingSelectedVideoId: String?
         private var renderedSelectedVideoId: String?
+        private var pendingSelectedVideoIds: Set<String> = []
+        private var renderedSelectedVideoIds: Set<String> = []
         private var needsLayoutInvalidation = false
         private var renderedContentWidth: CGFloat = 0
+        private var isApplyingSelectionToCollectionView = false
 
         var cacheDir: URL = URL(fileURLWithPath: "/tmp")
         var thumbnailSize: Double = 220
         var showMetadata: Bool = true
         var onSelect: (String) -> Void
+        var onSelectionChange: (String?, Set<String>) -> Void
 
-        init(onSelect: @escaping (String) -> Void) {
+        init(onSelect: @escaping (String) -> Void, onSelectionChange: @escaping (String?, Set<String>) -> Void) {
             self.onSelect = onSelect
+            self.onSelectionChange = onSelectionChange
         }
 
         func attach(to container: CollectionGridContainerView) {
@@ -316,8 +328,17 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             container.collectionView.onDoubleClickItem = { [weak self] indexPath in
                 self?.handleDoubleClick(at: indexPath)
             }
+            container.collectionView.onContextMenuRequest = { [weak self] point in
+                self?.menuForInteraction(at: point)
+            }
+            container.collectionView.onMarqueeSelection = { [weak self] rect, modifiers, finalize in
+                self?.handleMarqueeSelection(in: rect, modifiers: modifiers, finalize: finalize)
+            }
             container.onReadyForFlush = { [weak self] in
                 self?.flushIfReady()
+            }
+            container.onBoundsChanged = { [weak self] in
+                self?.refreshVisibleHeaders()
             }
         }
 
@@ -329,6 +350,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             thumbnailSize: Double,
             showMetadata: Bool,
             selectedVideoId: String?,
+            selectedVideoIds: Set<String>,
             onSelect: @escaping (String) -> Void
         ) {
             self.onSelect = onSelect
@@ -347,6 +369,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
 
             pendingSelectedVideoId = selectedVideoId
+            pendingSelectedVideoIds = selectedVideoIds
         }
 
         func enqueueScroll(to topicId: Int64) {
@@ -391,8 +414,10 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 didApplyScroll = scrollToSection(sectionId) || didApplyScroll
             }
 
-            if renderedSelectedVideoId != pendingSelectedVideoId || shouldReload || shouldInvalidateLayout || didApplyScroll {
+            if renderedSelectedVideoId != pendingSelectedVideoId || renderedSelectedVideoIds != pendingSelectedVideoIds || shouldReload || shouldInvalidateLayout || didApplyScroll {
                 renderedSelectedVideoId = pendingSelectedVideoId
+                renderedSelectedVideoIds = pendingSelectedVideoIds
+                applySelectionToCollectionView()
                 refreshVisibleItems()
             }
         }
@@ -436,16 +461,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         // MARK: Delegate
 
         func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
-            guard let indexPath = indexPaths.first,
-                  indexPath.section < renderedSections.count,
-                  indexPath.item < renderedSections[indexPath.section].videos.count else { return }
+            syncSelectionFromCollectionView()
+        }
 
-            let video = renderedSections[indexPath.section].videos[indexPath.item]
-            guard !video.isPlaceholder else { return }
-            pendingSelectedVideoId = video.id
-            renderedSelectedVideoId = video.id
-            onSelect(video.id)
-            refreshVisibleItems()
+        func collectionView(_ collectionView: NSCollectionView, didDeselectItemsAt indexPaths: Set<IndexPath>) {
+            syncSelectionFromCollectionView()
         }
 
         private func handleDoubleClick(at indexPath: IndexPath) {
@@ -512,7 +532,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard renderedSections.indices.contains(section) else {
                 return NSSize(width: max(collectionView.bounds.width, 1), height: 48)
             }
-            let height = headerModel(for: renderedSections[section]).height
+            let height = headerHeight(for: renderedSections[section])
             return NSSize(width: max(collectionView.bounds.width, 1), height: height)
         }
 
@@ -529,8 +549,41 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 cacheDir: cacheDir,
                 thumbnailSize: thumbnailSize,
                 showMetadata: showMetadata,
-                isSelected: video.id == renderedSelectedVideoId
+                isSelected: renderedSelectedVideoIds.contains(video.id)
             )
+        }
+
+        private func applySelectionToCollectionView() {
+            guard let collectionView else { return }
+            isApplyingSelectionToCollectionView = true
+            collectionView.deselectAll(nil)
+            let selectedIndexPaths = Set(indexPaths(for: renderedSelectedVideoIds))
+            if !selectedIndexPaths.isEmpty {
+                collectionView.selectItems(at: selectedIndexPaths, scrollPosition: [])
+            }
+            isApplyingSelectionToCollectionView = false
+        }
+
+        private func syncSelectionFromCollectionView() {
+            guard let collectionView, !isApplyingSelectionToCollectionView else { return }
+            let selectedIndexPaths = collectionView.selectionIndexPaths
+            let selectedVideos = selectedIndexPaths
+                .sorted()
+                .compactMap { video(at: $0) }
+                .filter { !$0.isPlaceholder }
+            let ids = Set(selectedVideos.map(\.id))
+            let primary = selectedVideos.last?.id
+            pendingSelectedVideoIds = ids
+            renderedSelectedVideoIds = ids
+            pendingSelectedVideoId = primary
+            renderedSelectedVideoId = primary
+            if let primary {
+                onSelect(primary)
+            } else {
+                onSelectionChange(nil, Set<String>())
+            }
+            onSelectionChange(primary, ids)
+            refreshVisibleItems()
         }
 
         private func refreshVisibleItems() {
@@ -600,6 +653,25 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func headerModel(for section: TopicSection) -> CollectionSectionHeaderModel {
+            let sectionIndex = renderedSections.firstIndex(where: { $0.id == section.id })
+            return headerModel(for: section, at: sectionIndex)
+        }
+
+        private func headerHeight(for section: TopicSection) -> CGFloat {
+            if section.creatorName != nil {
+                return 56
+            }
+
+            let isCandidateLoading = store?.candidateLoadingTopics.contains(section.topicId) ?? false
+            let channels = section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : []
+            if isCandidateLoading {
+                return channels.isEmpty ? 104 : 168
+            }
+            return channels.isEmpty ? 48 : 112
+        }
+
+        private func headerModel(for section: TopicSection, at sectionIndex: Int?) -> CollectionSectionHeaderModel {
+            let scrollProgress = sectionIndex.map(sectionScrollProgress(forSectionAt:)) ?? 0
             if let creatorName = section.creatorName {
                 return .creator(
                     channelName: creatorName,
@@ -608,6 +680,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     totalCount: section.totalCount,
                     topicNames: section.topicNames,
                     sectionId: section.id,
+                    scrollProgress: scrollProgress,
                     highlightTerms: store?.parsedQuery.includeTerms ?? [],
                     onInspect: { [weak store] in
                         store?.inspectedCreatorName = creatorName
@@ -620,6 +693,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 count: section.headerCountOverride ?? section.videos.count,
                 totalCount: section.totalCount,
                 topicId: section.topicId,
+                scrollProgress: scrollProgress,
                 highlightTerms: store?.parsedQuery.includeTerms ?? [],
                 displayMode: section.displayMode,
                 candidateProgress: store?.candidateProgress(for: section.topicId) ?? 0,
@@ -652,9 +726,197 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             )
         }
 
+        private func sectionScrollProgress(forSectionAt sectionIndex: Int) -> Double {
+            guard let collectionView,
+                  let scrollView = collectionView.enclosingScrollView,
+                  renderedSections.indices.contains(sectionIndex) else { return 0 }
+
+            let visibleBounds = scrollView.contentView.bounds
+            guard visibleBounds.height > 0 else { return 0 }
+
+            let headerIndexPath = IndexPath(item: 0, section: sectionIndex)
+            var sectionFrame = collectionView.collectionViewLayout?.layoutAttributesForSupplementaryView(
+                ofKind: NSCollectionView.elementKindSectionHeader,
+                at: headerIndexPath
+            )?.frame
+
+            let itemCount = collectionView.numberOfItems(inSection: sectionIndex)
+            if itemCount > 0,
+               let firstItemFrame = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: sectionIndex))?.frame,
+               let lastItemFrame = collectionView.layoutAttributesForItem(at: IndexPath(item: itemCount - 1, section: sectionIndex))?.frame {
+                let itemsFrame = firstItemFrame.union(lastItemFrame)
+                sectionFrame = sectionFrame.map { $0.union(itemsFrame) } ?? itemsFrame
+            }
+
+            guard let frame = sectionFrame else { return 0 }
+            let scrollableDistance = max(frame.height - visibleBounds.height, 1)
+            let scrolled = visibleBounds.minY - frame.minY
+            return min(max(scrolled / scrollableDistance, 0), 1)
+        }
+
+        private func refreshVisibleHeaders() {
+            guard let collectionView else { return }
+            let visibleRect = collectionView.visibleRect
+            for sectionIndex in renderedSections.indices {
+                let headerIndexPath = IndexPath(item: 0, section: sectionIndex)
+                guard let attributes = collectionView.collectionViewLayout?.layoutAttributesForSupplementaryView(
+                    ofKind: NSCollectionView.elementKindSectionHeader,
+                    at: headerIndexPath
+                ) else { continue }
+                guard attributes.frame.intersects(visibleRect),
+                      let header = collectionView.supplementaryView(
+                        forElementKind: NSCollectionView.elementKindSectionHeader,
+                        at: headerIndexPath
+                      ) as? CollectionSectionHeaderView else { continue }
+                header.configure(model: headerModel(for: renderedSections[sectionIndex], at: sectionIndex))
+            }
+        }
+
         private func openOnYouTube(_ video: VideoGridItemModel) {
             guard let url = URL(string: "https://www.youtube.com/watch?v=\(video.id)") else { return }
             NSWorkspace.shared.open(url)
+        }
+
+        private func handleMarqueeSelection(in rect: NSRect, modifiers: NSEvent.ModifierFlags, finalize: Bool) {
+            guard let collectionView else { return }
+            var base = Set<IndexPath>()
+            if modifiers.contains(.command) || modifiers.contains(.shift) {
+                base = collectionView.selectionIndexPaths
+            }
+            let hits = Set(
+                collectionView.indexPathsForVisibleItems().filter { indexPath in
+                    guard let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return false }
+                    return attributes.frame.intersects(rect)
+                }
+            )
+            let merged = base.union(hits)
+            isApplyingSelectionToCollectionView = true
+            collectionView.deselectAll(nil)
+            collectionView.selectItems(at: merged, scrollPosition: [])
+            isApplyingSelectionToCollectionView = false
+            if finalize {
+                syncSelectionFromCollectionView()
+            } else {
+                refreshVisibleItems()
+            }
+        }
+
+        private func menuForInteraction(at point: NSPoint) -> NSMenu? {
+            guard let collectionView else { return nil }
+            if let hitIndexPath = collectionView.indexPathForItem(at: point),
+               let hitVideo = video(at: hitIndexPath),
+               !renderedSelectedVideoIds.contains(hitVideo.id) {
+                pendingSelectedVideoId = hitVideo.id
+                pendingSelectedVideoIds = [hitVideo.id]
+                renderedSelectedVideoId = hitVideo.id
+                renderedSelectedVideoIds = [hitVideo.id]
+                applySelectionToCollectionView()
+                onSelectionChange(hitVideo.id, [hitVideo.id])
+            }
+
+            let selectedItems = renderedSelectedVideoIds.compactMap(videoById)
+            guard !selectedItems.isEmpty else { return nil }
+
+            let menu = NSMenu()
+            let selectionCount = selectedItems.count
+            let allCandidates = selectedItems.allSatisfy { isCandidateVideo($0.id) }
+
+            let openTitle = selectionCount == 1 ? "Open on YouTube" : "Open \(selectionCount) on YouTube"
+            menu.addItem(withTitle: openTitle, action: #selector(contextOpenOnYouTube(_:)), keyEquivalent: "")
+            let copyTitle = selectionCount == 1 ? "Copy Link" : "Copy \(selectionCount) Links"
+            menu.addItem(withTitle: copyTitle, action: #selector(contextCopyLinks(_:)), keyEquivalent: "")
+
+            if allCandidates, let store, let topicId = store.selectedTopicId {
+                menu.addItem(.separator())
+                menu.addItem(withTitle: "Dismiss", action: #selector(contextDismissCandidates(_:)), keyEquivalent: "")
+                menu.addItem(withTitle: "Save to Watch Later", action: #selector(contextSaveToWatchLater(_:)), keyEquivalent: "")
+
+                let playlistsMenu = NSMenu(title: "Save to Playlist")
+                for playlist in store.knownPlaylists() {
+                    let item = NSMenuItem(title: playlist.title, action: #selector(contextSaveToPlaylist(_:)), keyEquivalent: "")
+                    item.representedObject = playlist
+                    item.target = self
+                    playlistsMenu.addItem(item)
+                }
+                let saveToPlaylist = NSMenuItem(title: "Save to Playlist", action: nil, keyEquivalent: "")
+                saveToPlaylist.submenu = playlistsMenu
+                menu.addItem(saveToPlaylist)
+
+                let notInterested = NSMenuItem(title: "Not Interested", action: #selector(contextNotInterested(_:)), keyEquivalent: "")
+                notInterested.target = self
+                menu.addItem(notInterested)
+
+                for item in menu.items {
+                    item.target = self
+                }
+
+                menu.autoenablesItems = false
+                saveToPlaylist.isEnabled = !store.knownPlaylists().isEmpty
+                _ = topicId
+            } else {
+                for item in menu.items {
+                    item.target = self
+                }
+            }
+
+            return menu
+        }
+
+        private func indexPaths(for ids: Set<String>) -> [IndexPath] {
+            renderedSections.enumerated().flatMap { sectionIndex, section in
+                section.videos.enumerated().compactMap { itemIndex, video in
+                    ids.contains(video.id) ? IndexPath(item: itemIndex, section: sectionIndex) : nil
+                }
+            }
+        }
+
+        private func video(at indexPath: IndexPath) -> VideoGridItemModel? {
+            guard indexPath.section < renderedSections.count,
+                  indexPath.item < renderedSections[indexPath.section].videos.count else { return nil }
+            return renderedSections[indexPath.section].videos[indexPath.item]
+        }
+
+        private func videoById(_ id: String) -> VideoGridItemModel? {
+            renderedSections.lazy.flatMap(\.videos).first(where: { $0.id == id })
+        }
+
+        private func isCandidateVideo(_ videoId: String) -> Bool {
+            renderedSections.contains { section in
+                section.displayMode == .watchCandidates && section.videos.contains(where: { $0.id == videoId })
+            }
+        }
+
+        @objc private func contextOpenOnYouTube(_ sender: Any?) {
+            for item in renderedSelectedVideoIds.compactMap(videoById) {
+                openOnYouTube(item)
+            }
+        }
+
+        @objc private func contextCopyLinks(_ sender: Any?) {
+            let links = renderedSelectedVideoIds.map { "https://www.youtube.com/watch?v=\($0)" }.sorted()
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(links.joined(separator: "\n"), forType: .string)
+        }
+
+        @objc private func contextDismissCandidates(_ sender: Any?) {
+            guard let store, let topicId = store.selectedTopicId else { return }
+            store.dismissCandidates(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
+        }
+
+        @objc private func contextSaveToWatchLater(_ sender: Any?) {
+            guard let store, let topicId = store.selectedTopicId else { return }
+            store.saveCandidatesToWatchLater(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
+        }
+
+        @objc private func contextSaveToPlaylist(_ sender: NSMenuItem) {
+            guard let store, let topicId = store.selectedTopicId,
+                  let playlist = sender.representedObject as? PlaylistRecord else { return }
+            store.saveCandidatesToPlaylist(topicId: topicId, videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+        }
+
+        @objc private func contextNotInterested(_ sender: Any?) {
+            guard let store, let topicId = store.selectedTopicId else { return }
+            store.markCandidatesNotInterested(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
         }
     }
 }
@@ -665,6 +927,7 @@ private final class CollectionGridContainerView: NSView {
     let flowLayout = NSCollectionViewFlowLayout()
 
     var onReadyForFlush: (() -> Void)?
+    var onBoundsChanged: (() -> Void)?
 
     private var flushScheduled = false
     private var lastContentWidth: CGFloat = 0
@@ -732,7 +995,7 @@ private final class CollectionGridContainerView: NSView {
 
         collectionView.collectionViewLayout = flowLayout
         collectionView.isSelectable = true
-        collectionView.allowsMultipleSelection = false
+        collectionView.allowsMultipleSelection = true
         collectionView.backgroundColors = [.clear]
         collectionView.frame = NSRect(x: 0, y: 0, width: 1, height: 1)
         collectionView.autoresizingMask = [.width]
@@ -769,6 +1032,7 @@ private final class CollectionGridContainerView: NSView {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.handleWidthChangeIfNeeded()
+                self?.onBoundsChanged?()
             }
         }
     }
@@ -827,6 +1091,7 @@ enum CollectionSectionHeaderModel {
         count: Int,
         totalCount: Int?,
         topicId: Int64,
+        scrollProgress: Double,
         highlightTerms: [String],
         displayMode: TopicDisplayMode,
         candidateProgress: Double,
@@ -847,13 +1112,14 @@ enum CollectionSectionHeaderModel {
         totalCount: Int?,
         topicNames: [String],
         sectionId: String,
+        scrollProgress: Double,
         highlightTerms: [String],
         onInspect: () -> Void
     )
 
     var height: CGFloat {
         switch self {
-        case let .topic(name: _, count: _, totalCount: _, topicId: _, highlightTerms: _, displayMode: _, candidateProgress: _, isCandidateLoading: isCandidateLoading, candidateProgressTitle: _, candidateProgressDetail: _, onSelectDisplayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, onSelectChannel: _):
+        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, candidateProgress: _, isCandidateLoading: isCandidateLoading, candidateProgressTitle: _, candidateProgressDetail: _, onSelectDisplayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, onSelectChannel: _):
             if isCandidateLoading {
                 return channels.isEmpty ? 104 : 168
             }
@@ -1013,7 +1279,7 @@ private struct VideoCellContent: View {
 
 // MARK: - Section Header (custom NSView subclass)
 
-final class CollectionSectionHeaderView: NSView {
+final class CollectionSectionHeaderView: NSView, NSCollectionViewElement {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("SectionHeader")
 
     private var hostingView: NSHostingView<SectionHeaderContent>?
@@ -1056,15 +1322,15 @@ private struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId, highlightTerms, displayMode, candidateProgress, _, candidateProgressTitle, candidateProgressDetail, onSelectDisplayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
+        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, _, _, candidateProgressTitle, candidateProgressDetail, onSelectDisplayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
             VStack(spacing: 0) {
                 SectionHeaderView(
                     name: name,
                     count: count,
                     totalCount: totalCount,
                     topicId: topicId,
-                    progress: candidateProgress,
-                    showProgress: false,
+                    progress: scrollProgress,
+                    showProgress: true,
                     highlightTerms: highlightTerms,
                     displayMode: displayMode,
                     progressTitle: candidateProgressTitle,
@@ -1084,7 +1350,7 @@ private struct SectionHeaderContent: View {
                     )
                 }
             }
-        case let .creator(channelName, channelIconUrl, count, totalCount, topicNames, sectionId, highlightTerms, onInspect):
+        case let .creator(channelName, channelIconUrl, count, totalCount, topicNames, sectionId, scrollProgress, highlightTerms, onInspect):
             CreatorSectionHeaderView(
                 channelName: channelName,
                 channelIconUrl: channelIconUrl,
@@ -1092,7 +1358,7 @@ private struct SectionHeaderContent: View {
                 totalCount: totalCount,
                 topicNames: topicNames,
                 sectionId: sectionId,
-                progress: 0,
+                progress: scrollProgress,
                 highlightTerms: highlightTerms
             )
             .onTapGesture(perform: onInspect)
@@ -1107,13 +1373,76 @@ private struct SectionHeaderContent: View {
 
 private final class ClickableCollectionView: NSCollectionView {
     var onDoubleClickItem: ((IndexPath) -> Void)?
+    var onContextMenuRequest: ((NSPoint) -> NSMenu?)?
+    var onMarqueeSelection: ((NSRect, NSEvent.ModifierFlags, Bool) -> Void)?
+
+    private let marqueeLayer = CAShapeLayer()
+    private var marqueeStartPoint: NSPoint?
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if event.type == .leftMouseDown, event.clickCount == 1, indexPathForItem(at: point) == nil {
+            marqueeStartPoint = point
+            updateMarqueeSelection(currentPoint: point, modifiers: event.modifierFlags, finalize: false)
+            return
+        }
+
         super.mouseDown(with: event)
 
         guard event.clickCount == 2 else { return }
-        let point = convert(event.locationInWindow, from: nil)
         guard let indexPath = indexPathForItem(at: point) else { return }
         onDoubleClickItem?(indexPath)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard marqueeStartPoint != nil else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let currentPoint = convert(event.locationInWindow, from: nil)
+        updateMarqueeSelection(currentPoint: currentPoint, modifiers: event.modifierFlags, finalize: false)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if marqueeStartPoint != nil {
+            let currentPoint = convert(event.locationInWindow, from: nil)
+            updateMarqueeSelection(currentPoint: currentPoint, modifiers: event.modifierFlags, finalize: true)
+            clearMarqueeSelection()
+            return
+        }
+        super.mouseUp(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        return onContextMenuRequest?(point)
+    }
+
+    private func updateMarqueeSelection(currentPoint: NSPoint, modifiers: NSEvent.ModifierFlags, finalize: Bool) {
+        guard let marqueeStartPoint else { return }
+        let rect = NSRect(
+            x: min(marqueeStartPoint.x, currentPoint.x),
+            y: min(marqueeStartPoint.y, currentPoint.y),
+            width: abs(currentPoint.x - marqueeStartPoint.x),
+            height: abs(currentPoint.y - marqueeStartPoint.y)
+        )
+
+        if marqueeLayer.superlayer == nil {
+            wantsLayer = true
+            marqueeLayer.fillColor = NSColor.selectedControlColor.withAlphaComponent(0.12).cgColor
+            marqueeLayer.strokeColor = NSColor.selectedControlColor.withAlphaComponent(0.75).cgColor
+            marqueeLayer.lineWidth = 1
+            marqueeLayer.lineDashPattern = [6, 4]
+            layer?.addSublayer(marqueeLayer)
+        }
+
+        marqueeLayer.path = CGPath(rect: rect, transform: nil)
+        onMarqueeSelection?(rect, modifiers, finalize)
+    }
+
+    private func clearMarqueeSelection() {
+        marqueeStartPoint = nil
+        marqueeLayer.removeFromSuperlayer()
+        marqueeLayer.path = nil
     }
 }

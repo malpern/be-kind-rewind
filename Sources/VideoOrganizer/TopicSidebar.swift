@@ -3,7 +3,7 @@ import SwiftUI
 struct TopicSidebar: View {
     @Bindable var store: OrganizerStore
     @Bindable var displaySettings: DisplaySettings
-    @Bindable var youTubeAuth: YouTubeAuthController
+    @Environment(\.openSettings) private var openSettings
     @State private var showingSettings = false
     @State private var expandedTopicId: Int64? = nil
     @State private var selectedCreatorSectionId: String?
@@ -241,15 +241,18 @@ struct TopicSidebar: View {
                 ToolbarItem(placement: .automatic) {
                     Button {
                         showingSettings.toggle()
-                        displaySettings.toast.show("Display Settings", icon: "gearshape")
+                        displaySettings.toast.show("View Options", icon: "gearshape")
                     } label: {
                         Image(systemName: "gearshape")
                     }
-                    .help("Display settings")
-                    .accessibilityIdentifier("displaySettings")
-                    .accessibilityLabel("Display settings")
+                    .help("View options")
+                    .accessibilityIdentifier("viewOptions")
+                    .accessibilityLabel("View options")
                     .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
-                        SettingsPopover(displaySettings: displaySettings, youTubeAuth: youTubeAuth)
+                        DisplayPopover(displaySettings: displaySettings, openSettings: {
+                            showingSettings = false
+                            openSettings()
+                        })
                     }
                 }
             }
@@ -323,9 +326,9 @@ struct TopicSidebar: View {
 
 // MARK: - Settings Popover
 
-private struct SettingsPopover: View {
+private struct DisplayPopover: View {
     @Bindable var displaySettings: DisplaySettings
-    @Bindable var youTubeAuth: YouTubeAuthController
+    let openSettings: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -357,114 +360,8 @@ private struct SettingsPopover: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("YouTube")
-                    .font(.headline)
-
-                if youTubeAuth.isConnected {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.title3)
-                            .padding(.top, 2)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(youTubeAuth.statusTitle)
-                                .font(.subheadline.weight(.semibold))
-
-                            Text(youTubeAuth.errorMessage ?? youTubeAuth.statusDetail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        Spacer()
-                    }
-
-                    HStack(spacing: 12) {
-                        if youTubeAuth.isBusy {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text("Waiting for browser authorization…")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else {
-                            Button("Reconnect") {
-                                youTubeAuth.connect()
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.secondary)
-
-                            Button("Refresh status") {
-                                youTubeAuth.refreshStatus()
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.secondary)
-                        }
-
-                        Button("Disconnect") {
-                            youTubeAuth.disconnect()
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text(youTubeAuth.statusTitle)
-                        .font(.subheadline.weight(.semibold))
-
-                    Text(youTubeAuth.errorMessage ?? youTubeAuth.statusDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Button {
-                        youTubeAuth.connect()
-                    } label: {
-                        HStack(spacing: 12) {
-                            YouTubeLogoMarkView()
-                                .frame(width: 34, height: 24)
-
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(youTubeAuth.buttonTitle)
-                                    .font(.headline)
-                                    .foregroundStyle(Color.black.opacity(0.92))
-
-                                Text(youTubeAuth.buttonSubtitle)
-                                    .font(.caption)
-                                    .foregroundStyle(Color.black.opacity(0.62))
-                                    .multilineTextAlignment(.leading)
-                            }
-
-                            Spacer()
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.white)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(youTubeAuth.isBusy || !youTubeAuth.hasClientConfig)
-
-                    if youTubeAuth.isBusy {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Waiting for browser authorization…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        Button("Refresh status") {
-                            youTubeAuth.refreshStatus()
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
-                    }
-                }
+            Button("Open Settings…") {
+                openSettings()
             }
         }
         .padding(16)

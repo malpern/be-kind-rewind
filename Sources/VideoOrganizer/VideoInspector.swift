@@ -1,4 +1,5 @@
 import SwiftUI
+import TaggingKit
 
 struct VideoInspector: View {
     @Bindable var store: OrganizerStore
@@ -6,7 +7,10 @@ struct VideoInspector: View {
 
     private var inspectedItem: InspectedVideoViewModel? { store.inspectedItem }
     private var video: VideoViewModel? { inspectedItem?.video }
-    private var isSelected: Bool { store.selectedVideoId == store.inspectedVideoId }
+    private var isSelected: Bool {
+        guard let inspectedId = store.inspectedVideoId else { return false }
+        return store.selectedVideoIds.contains(inspectedId)
+    }
 
     var body: some View {
         Group {
@@ -71,7 +75,7 @@ struct VideoInspector: View {
 
                     tagsSection(inspectedItem)
 
-                    if !inspectedItem.playlists.isEmpty || inspectedItem.isWatchCandidate {
+                    if !inspectedItem.playlists.isEmpty || inspectedItem.isWatchCandidate || inspectedItem.seenSummary != nil {
                         Divider()
                     }
 
@@ -79,7 +83,7 @@ struct VideoInspector: View {
 
                     if isSelected {
                         Divider()
-                        actionButtons(video)
+                        actionButtons(inspectedItem)
                     }
 
                     let moreVideos = store.moreFromChannel(videoId: video.videoId)
@@ -105,9 +109,12 @@ struct VideoInspector: View {
                     .foregroundStyle(.secondary)
 
                 FlexibleTagList(tags: tags) { tag in
-                    tag == "Watch Candidate" ? .orange : .accentColor
+                    if tag == "Watch Candidate" { return .orange }
+                    if tag == "Seen" { return .green }
+                    return .accentColor
                 } onSelect: { tag in
                     guard tag != "Watch Candidate",
+                          tag != "Seen",
                           let playlist = inspectedItem.playlists.first(where: { $0.title == tag }) else { return }
                     store.applyPlaylistFilter(playlist)
                 }
@@ -133,15 +140,28 @@ struct VideoInspector: View {
             if !playlists.isEmpty {
                 metadataRow(icon: "music.note.list", label: "Playlists", value: "\(playlists.count)")
             }
+            if let seenSummary = store.seenSummary(for: video.videoId) {
+                metadataRow(icon: "checkmark.circle", label: "Seen", value: seenLabel(for: seenSummary))
+            }
         }
     }
 
     private func inspectorTags(for inspectedItem: InspectedVideoViewModel) -> [String] {
         var tags = inspectedItem.playlists.map(\.title)
+        if inspectedItem.seenSummary != nil {
+            tags.insert("Seen", at: 0)
+        }
         if inspectedItem.isWatchCandidate {
             tags.insert("Watch Candidate", at: 0)
         }
         return tags
+    }
+
+    private func seenLabel(for summary: SeenVideoSummary) -> String {
+        if let latestSeenAt = summary.latestSeenAt {
+            return "Imported history (\(latestSeenAt))"
+        }
+        return "Imported history"
     }
 
     @ViewBuilder
@@ -158,8 +178,9 @@ struct VideoInspector: View {
 
     // MARK: - Actions
 
-    private func actionButtons(_ video: VideoViewModel) -> some View {
-        VStack(spacing: 8) {
+    private func actionButtons(_ inspectedItem: InspectedVideoViewModel) -> some View {
+        let video = inspectedItem.video
+        return VStack(spacing: 8) {
             Button {
                 if let url = video.youtubeUrl {
                     NSWorkspace.shared.open(url)
@@ -184,6 +205,55 @@ struct VideoInspector: View {
             .controlSize(.large)
             .buttonStyle(.bordered)
             .help("Copy YouTube link to clipboard")
+
+            if inspectedItem.isWatchCandidate, let topicId = store.selectedTopicId {
+                Divider()
+
+                Button(role: .destructive) {
+                    store.dismissCandidate(topicId: topicId, videoId: video.videoId)
+                } label: {
+                    Label("Dismiss", systemImage: "xmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.bordered)
+                .help("Hide this candidate from the topic")
+
+                Button {
+                    store.saveCandidateToWatchLater(topicId: topicId, videoId: video.videoId)
+                } label: {
+                    Label("Save to Watch Later", systemImage: "text.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                .help("Queue this video for Watch Later")
+
+                Menu {
+                    ForEach(store.knownPlaylists()) { playlist in
+                        Button(playlist.title) {
+                            store.saveCandidateToPlaylist(topicId: topicId, videoId: video.videoId, playlist: playlist)
+                        }
+                    }
+                } label: {
+                    Label("Save to Playlist", systemImage: "music.note.list")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.bordered)
+                .disabled(store.knownPlaylists().isEmpty)
+                .help(store.knownPlaylists().isEmpty ? "No playlists available" : "Choose a playlist")
+
+                Button(role: .destructive) {
+                    store.markCandidateNotInterested(topicId: topicId, videoId: video.videoId)
+                } label: {
+                    Label("Not Interested", systemImage: "hand.thumbsdown")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.bordered)
+                .help("Hide locally and queue a future YouTube Not Interested action")
+            }
         }
     }
 
