@@ -282,16 +282,95 @@ public struct YouTubeClient: Sendable {
         }
     }
 
+    public func fetchRecentChannelUploads(
+        channelId: String,
+        maxResults: Int = 8
+    ) async throws -> [DiscoveredVideo] {
+        guard let uploadsPlaylistId = try await fetchUploadsPlaylistId(channelId: channelId) else {
+            return []
+        }
+
+        let items = try await fetchPlaylistItems(
+            playlistId: uploadsPlaylistId,
+            maxResults: maxResults,
+            authorization: .apiKeyOnly
+        )
+
+        let metadataById = try await Dictionary(
+            uniqueKeysWithValues: fetchVideoMetadata(ids: items.map(\.videoId)).map { ($0.videoId, $0) }
+        )
+
+        return items.compactMap { item in
+            let metadata = metadataById[item.videoId]
+            return DiscoveredVideo(
+                videoId: item.videoId,
+                title: item.title ?? "Untitled",
+                channelId: item.channelId ?? metadata?.channelId,
+                channelTitle: item.channelTitle ?? metadata?.channelTitle,
+                publishedAt: metadata?.formattedDate,
+                duration: metadata?.formattedDuration,
+                viewCount: metadata?.formattedViewCount,
+                sourceOrder: .date
+            )
+        }
+    }
+
     public func fetchPlaylistItems(playlistId: String) async throws -> [PlaylistVideoItem] {
+        try await fetchPlaylistItems(
+            playlistId: playlistId,
+            maxResults: nil,
+            authorization: .bearerIfAvailable
+        )
+    }
+
+    public func addVideoToPlaylist(videoId: String, playlistId: String) async throws {
+        let accessToken = try await validWriteAccessToken()
+
+        var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/playlistItems")!
+        components.queryItems = [
+            URLQueryItem(name: "part", value: "snippet")
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload = PlaylistInsertRequest(
+            snippet: .init(
+                playlistId: playlistId,
+                resourceId: .init(kind: "youtube#video", videoId: videoId)
+            )
+        )
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw YouTubeError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw YouTubeError.apiError(statusCode: http.statusCode, message: body)
+        }
+    }
+
+    private func fetchPlaylistItems(
+        playlistId: String,
+        maxResults: Int?,
+        authorization: AuthorizationMode
+    ) async throws -> [PlaylistVideoItem] {
         var results: [PlaylistVideoItem] = []
         var nextPageToken: String?
+        let cappedMaxResults = maxResults.map { max(1, min($0, 50)) }
+        let remainingLimit = { maxResults.map { max($0 - results.count, 0) } }
 
         repeat {
             var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/playlistItems")!
+            let pageSize = min(50, cappedMaxResults ?? 50, remainingLimit() ?? 50)
             var queryItems = [
                 URLQueryItem(name: "part", value: "snippet"),
                 URLQueryItem(name: "playlistId", value: playlistId),
-                URLQueryItem(name: "maxResults", value: "50"),
+                URLQueryItem(name: "maxResults", value: String(pageSize)),
                 URLQueryItem(name: "key", value: apiKey)
             ]
             if let nextPageToken {
@@ -299,7 +378,7 @@ public struct YouTubeClient: Sendable {
             }
             components.queryItems = queryItems
 
-            let (data, response) = try await requestData(from: components.url!, authorization: .bearerIfAvailable)
+            let (data, response) = try await requestData(from: components.url!, authorization: authorization)
             guard let http = response as? HTTPURLResponse else {
                 throw YouTubeError.invalidResponse
             }
@@ -320,9 +399,31 @@ public struct YouTubeClient: Sendable {
                 ))
             }
             nextPageToken = decoded.nextPageToken
-        } while nextPageToken != nil
+        } while nextPageToken != nil && (remainingLimit() ?? 1) > 0
 
         return results
+    }
+
+    private func fetchUploadsPlaylistId(channelId: String) async throws -> String? {
+        var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/channels")!
+        components.queryItems = [
+            URLQueryItem(name: "part", value: "contentDetails"),
+            URLQueryItem(name: "id", value: channelId),
+            URLQueryItem(name: "maxResults", value: "1"),
+            URLQueryItem(name: "key", value: apiKey)
+        ]
+
+        let (data, response) = try await requestData(from: components.url!, authorization: .apiKeyOnly)
+        guard let http = response as? HTTPURLResponse else {
+            throw YouTubeError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw YouTubeError.apiError(statusCode: http.statusCode, message: body)
+        }
+
+        let decoded = try JSONDecoder().decode(ChannelUploadsResponse.self, from: data)
+        return decoded.items.first?.contentDetails?.relatedPlaylists?.uploads
     }
 
     private func requestData(from url: URL, authorization: AuthorizationMode) async throws -> (Data, URLResponse) {
@@ -331,6 +432,29 @@ public struct YouTubeClient: Sendable {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         }
         return try await session.data(for: request)
+    }
+
+    private func validWriteAccessToken() async throws -> String {
+        if let envAccessToken = ProcessInfo.processInfo.environment["YOUTUBE_ACCESS_TOKEN"]
+            ?? ProcessInfo.processInfo.environment["GOOGLE_OAUTH_ACCESS_TOKEN"],
+           !envAccessToken.isEmpty {
+            return envAccessToken
+        }
+
+        guard let config = try? YouTubeOAuthClientConfig.load() else {
+            throw YouTubeError.noOAuthToken
+        }
+
+        let oauth = YouTubeOAuthService(config: config)
+        if let stored = oauth.storedTokens(),
+           !stored.includesScope(YouTubeOAuthService.writeScope) {
+            throw YouTubeError.noOAuthToken
+        }
+
+        guard let refreshed = try await oauth.refreshIfNeeded() else {
+            throw YouTubeError.noOAuthToken
+        }
+        return refreshed.accessToken
     }
 }
 
@@ -435,6 +559,20 @@ public struct PlaylistVideoItem: Sendable {
     public let position: Int
 }
 
+private struct PlaylistInsertRequest: Encodable {
+    let snippet: Snippet
+
+    struct Snippet: Encodable {
+        let playlistId: String
+        let resourceId: ResourceID
+    }
+
+    struct ResourceID: Encodable {
+        let kind: String
+        let videoId: String
+    }
+}
+
 // MARK: - API Response Types
 
 private struct YouTubeResponse: Decodable {
@@ -489,6 +627,22 @@ private struct ChannelItem: Decodable {
 
 private struct ChannelDetailResponse: Decodable {
     let items: [ChannelDetailItem]
+}
+
+private struct ChannelUploadsResponse: Decodable {
+    let items: [ChannelUploadsItem]
+}
+
+private struct ChannelUploadsItem: Decodable {
+    let contentDetails: ChannelUploadsContentDetails?
+}
+
+private struct ChannelUploadsContentDetails: Decodable {
+    let relatedPlaylists: ChannelRelatedPlaylists?
+}
+
+private struct ChannelRelatedPlaylists: Decodable {
+    let uploads: String?
 }
 
 private struct SearchResponse: Decodable {
@@ -568,6 +722,7 @@ private struct ChannelDetailItem: Decodable {
 
 public enum YouTubeError: Error, LocalizedError {
     case noApiKey
+    case noOAuthToken
     case invalidResponse
     case apiError(statusCode: Int, message: String)
 
@@ -575,11 +730,20 @@ public enum YouTubeError: Error, LocalizedError {
         switch self {
         case .noApiKey:
             return "No YouTube API key found. Set YOUTUBE_API_KEY or GOOGLE_API_KEY env var, or write key to ~/.config/youtube/api-key"
+        case .noOAuthToken:
+            return "YouTube write access is not available. Reconnect YouTube so the app has playlist write permission."
         case .invalidResponse:
             return "Invalid response from YouTube API"
         case .apiError(let code, let message):
             return "YouTube API error (\(code)): \(Self.compactMessage(from: message))"
         }
+    }
+
+    public var isQuotaExceeded: Bool {
+        guard case .apiError(let code, let message) = self else { return false }
+        guard code == 403 else { return false }
+        let compact = Self.compactMessage(from: message).lowercased()
+        return compact.contains("quota") || compact.contains("daily limit") || compact.contains("exceeded")
     }
 
     private static func compactMessage(from raw: String) -> String {

@@ -224,8 +224,8 @@ struct TopicStoreCommitTests {
         try store.queueCommit(action: "add_to_playlist", videoId: "v1", playlist: "C")
 
         let plan = try store.pendingSyncPlan()
-        #expect(plan.count == 1)
-        #expect(plan[0].playlist == "C")
+        #expect(plan.count == 3)
+        #expect(Set(plan.map(\.playlist)) == Set(["A", "B", "C"]))
     }
 
     @Test("handles multiple videos independently")
@@ -236,10 +236,10 @@ struct TopicStoreCommitTests {
         try store.queueCommit(action: "add_to_playlist", videoId: "v1", playlist: "C")
 
         let plan = try store.pendingSyncPlan()
-        #expect(plan.count == 2)
-        let v1Action = plan.first { $0.videoId == "v1" }
+        #expect(plan.count == 3)
+        let v1Actions = plan.filter { $0.videoId == "v1" }
         let v2Action = plan.first { $0.videoId == "v2" }
-        #expect(v1Action?.playlist == "C")
+        #expect(Set(v1Actions.map(\.playlist)) == Set(["A", "C"]))
         #expect(v2Action?.playlist == "B")
     }
 

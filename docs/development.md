@@ -78,6 +78,9 @@ Playlist provenance refresh:
 
 ```bash
 swift run video-tagger verify-all-playlists --db /tmp/full-tagger-v2.db
+swift run video-tagger sync-pending --db /tmp/full-tagger-v2.db
+swift run video-tagger browser-sync-login
+swift run video-tagger import-seen-history --db /tmp/full-tagger-v2.db --file /path/to/watch-history.html
 ```
 
 Use that command after importing or updating known playlists when you want the local database to know which playlists each saved video belongs to.
@@ -211,6 +214,23 @@ If working on OAuth flows, also place your Google desktop client JSON at:
 ```
 
 If you need playlist provenance refreshes for private playlists, make sure OAuth is connected first so `video-tagger verify-all-playlists` can read them.
+`sync-pending` uses the same OAuth connection for playlist-save actions. `Not Interested` stays in the queue as a browser-only deferred action until a Playwright executor is added.
+Browser-backed sync uses a persistent Playwright Chromium profile. Run `browser-sync-login` once, sign in to YouTube in that window, then later `sync-pending` or the app’s background sync loop can consume deferred browser actions. Failure screenshots/HTML are written to `output/playwright/browser-sync/`.
+
+## Seen History Imports
+
+The first-pass seen-history path is CLI-driven:
+
+```bash
+swift run video-tagger import-seen-history --db /tmp/full-tagger-v2.db --file /path/to/watch-history.html
+```
+
+Notes:
+
+- supported input formats are best-effort `.json`, `.html`, `.htm`, and `.txt`
+- the importer is designed for Google Takeout / My Activity exports
+- exact `video_id` matches are stored in `seen_videos` and currently excluded from watch-candidate queries
+- repeated imports are deduplicated conservatively by source plus `video_id`/URL and timestamp when available
 
 ## How We Work in This Repo
 

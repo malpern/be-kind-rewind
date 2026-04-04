@@ -68,6 +68,43 @@ public struct CandidateSourceRecord: Sendable {
 public enum CandidateState: String, Sendable, CaseIterable {
     case candidate
     case researched
+    case saved
     case dismissed
     case watched
+}
+
+public struct ArchivedChannelVideo: Sendable, Identifiable {
+    public let channelId: String
+    public let videoId: String
+    public let title: String
+    public let channelName: String?
+    public let publishedAt: String?
+    public let duration: String?
+    public let viewCount: String?
+    public let channelIconUrl: String?
+    public let fetchedAt: String?
+
+    public var id: String { videoId }
+
+    public init(
+        channelId: String,
+        videoId: String,
+        title: String,
+        channelName: String? = nil,
+        publishedAt: String? = nil,
+        duration: String? = nil,
+        viewCount: String? = nil,
+        channelIconUrl: String? = nil,
+        fetchedAt: String? = nil
+    ) {
+        self.channelId = channelId
+        self.videoId = videoId
+        self.title = title
+        self.channelName = channelName
+        self.publishedAt = publishedAt
+        self.duration = duration
+        self.viewCount = viewCount
+        self.channelIconUrl = channelIconUrl
+        self.fetchedAt = fetchedAt
+    }
 }

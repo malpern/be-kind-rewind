@@ -54,12 +54,24 @@ video-tagger reclassify
 
 # Resync playlist provenance for all known playlists
 video-tagger verify-all-playlists --db /tmp/full-tagger-v2.db
+
+# Push queued playlist-save actions to YouTube
+video-tagger sync-pending --db /tmp/full-tagger-v2.db
+
+# Open the persistent browser profile and sign in to YouTube for browser-backed sync
+video-tagger browser-sync-login
+
+# Import seen-history from a Google Takeout/My Activity export
+video-tagger import-seen-history --db /tmp/full-tagger-v2.db --file /path/to/watch-history.html
 ```
 
 Playlist provenance notes:
 - playlist identities can be imported from a `youtube-cli` `playlists.json` artifact
 - playlist memberships are verified via the YouTube API using stored OAuth tokens
 - rerun `video-tagger verify-all-playlists --db /tmp/full-tagger-v2.db` whenever you want to refresh playlist membership data for the current library
+- rerun `video-tagger sync-pending --db /tmp/full-tagger-v2.db` to manually flush queued playlist-save actions; browser-only actions like `Not Interested` remain deferred until a browser executor is attached
+- use `video-tagger browser-sync-login` once to sign the persistent Playwright profile into YouTube; browser sync failure artifacts are written under `output/playwright/browser-sync/`
+- import historical watch history with `video-tagger import-seen-history --db /tmp/full-tagger-v2.db --file /path/to/export.html`; the importer supports best-effort `.json`, `.html`, `.htm`, and `.txt` Takeout/My Activity exports and exact `video_id` matches are excluded from watch-candidate results
 
 ## Requirements
 

@@ -46,7 +46,7 @@ struct VideoTaggerCommand: AsyncParsableCommand {
         commandName: "video-tagger",
         abstract: "Organize YouTube videos into topics using Claude AI.",
         version: "0.2.0",
-        subcommands: [Suggest.self, Reclassify.self, ReclassifyAll.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self, EnrichChannels.self, GenerateSubtopics.self, ImportPlaylists.self, VerifyPlaylistMembership.self, VerifyAllPlaylistMemberships.self, OAuthStatus.self, OAuthAuthURL.self, OAuthExchange.self, OAuthRefresh.self]
+        subcommands: [Suggest.self, Reclassify.self, ReclassifyAll.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self, EnrichChannels.self, GenerateSubtopics.self, ImportPlaylists.self, ImportSeenHistory.self, VerifyPlaylistMembership.self, VerifyAllPlaylistMemberships.self, SyncPendingActions.self, BrowserSyncLogin.self, OAuthStatus.self, OAuthAuthURL.self, OAuthExchange.self, OAuthRefresh.self]
     )
 }
 
@@ -325,10 +325,60 @@ struct Status: ParsableCommand {
         let total = try store.totalVideoCount()
         let unassigned = try store.unassignedCount()
         let pending = try store.pendingSyncPlan()
+        let queue = try store.syncQueueSummary()
+        let seenCount = try store.seenVideoCount()
 
         print("Videos: \(total) total, \(total - unassigned) assigned, \(unassigned) unassigned")
         print("Topics: \(topics.count)")
+        print("Seen history: \(seenCount) imported events")
         print("Pending sync: \(pending.count) actions")
+        print("Sync queue: \(queue.queued) queued, \(queue.retrying) retrying, \(queue.deferred) deferred, \(queue.inProgress) in progress")
+        if queue.browserDeferred > 0 {
+            print("Browser-only actions waiting for executor: \(queue.browserDeferred)")
+        }
+    }
+}
+
+struct ImportSeenHistory: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "import-seen-history",
+        abstract: "Import YouTube watch history from a Google Takeout/My Activity export."
+    )
+
+    @Option(name: .shortAndLong, help: "Path to the SQLite database.")
+    var db: String = "video-tagger.db"
+
+    @Option(name: .shortAndLong, help: "Path to a Takeout/My Activity export file (.json, .html, .htm, .txt).")
+    var file: String
+
+    @Option(name: .long, help: "History source label: takeout, myActivity, manual, browser.")
+    var source: String?
+
+    func run() throws {
+        let store = try TopicStore(path: db)
+        let fileURL = URL(fileURLWithPath: file)
+        let parsedSource = try parseSource(source)
+        let records = try SeenHistoryImporter.loadRecords(from: fileURL, source: parsedSource)
+        let imported = try store.importSeenVideoRecords(records)
+        let withVideoID = records.filter { $0.videoId != nil }.count
+
+        print("Parsed \(records.count) seen-history records from \(fileURL.lastPathComponent)")
+        print("Imported \(imported) new records")
+        print("Records with exact video IDs: \(withVideoID)")
+    }
+
+    private func parseSource(_ value: String?) throws -> SeenVideoSource? {
+        guard let value, !value.isEmpty else { return nil }
+        guard let source = SeenVideoSource(rawValue: value) else {
+            struct InvalidSourceError: LocalizedError {
+                let value: String
+                var errorDescription: String? {
+                    "Unsupported seen-history source '\(value)'. Use takeout, myActivity, manual, or browser."
+                }
+            }
+            throw InvalidSourceError(value: value)
+        }
+        return source
     }
 }
 
@@ -449,6 +499,75 @@ struct VerifyAllPlaylistMemberships: AsyncParsableCommand {
     }
 }
 
+struct SyncPendingActions: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "sync-pending",
+        abstract: "Push queued YouTube playlist actions to the authenticated account."
+    )
+
+    @Option(name: .shortAndLong, help: "Path to the SQLite database.")
+    var db: String = "video-tagger.db"
+
+    func run() async throws {
+        let store = try TopicStore(path: db)
+        let recovered = try store.recoverStaleInProgressCommits()
+        if recovered > 0 {
+            print("Recovered \(recovered) interrupted sync actions")
+        }
+        let pending = try store.pendingSyncPlan()
+        guard !pending.isEmpty else {
+            print("No pending sync actions")
+            return
+        }
+
+        let client = try YouTubeClient()
+        let apiActions = try store.pendingSyncPlan(executor: .api)
+        if !apiActions.isEmpty {
+            try store.markInProgress(ids: apiActions.map(\.id))
+            let apiResult = await YouTubeSyncService(client: client).execute(actions: apiActions)
+            try store.markSynced(ids: apiResult.syncedActionIDs)
+            try store.markDeferred(ids: apiResult.deferredActionIDs, error: "Waiting for browser executor")
+            try store.moveToExecutor(
+                ids: apiResult.browserFallbackActionIDs,
+                executor: .browser,
+                state: .deferred,
+                error: "API quota exhausted. Waiting for browser executor fallback."
+            )
+            try store.markFailed(apiResult.failures, retryAfter: 300)
+            print("Synced \(apiResult.syncedActionIDs.count) API actions")
+        }
+
+        let browserActions = try store.pendingSyncPlan(executor: .browser)
+        if !browserActions.isEmpty {
+            try store.markInProgress(ids: browserActions.map(\.id))
+            let repoRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            let browserResult = try await BrowserSyncService(repoRoot: repoRoot).execute(actions: browserActions)
+            try store.markSynced(ids: browserResult.syncedActionIDs)
+            try store.markFailed(browserResult.failures, retryAfter: 300)
+            print("Synced \(browserResult.syncedActionIDs.count) browser actions")
+            if !browserResult.failures.isEmpty {
+                for failure in browserResult.failures {
+                    print("Failed browser action \(failure.id): \(failure.message)")
+                }
+                throw ExitCode.failure
+            }
+        }
+    }
+}
+
+struct BrowserSyncLogin: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "browser-sync-login",
+        abstract: "Open the persistent Playwright browser profile so you can sign in to YouTube for browser-backed sync."
+    )
+
+    func run() async throws {
+        let repoRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        try await BrowserSyncService(repoRoot: repoRoot).openLoginSetup()
+        print("Opened Playwright browser profile. Sign in to YouTube in that window, then stop the process when finished.")
+    }
+}
+
 private func verifyPlaylistMemberships(
     store: TopicStore,
     oauth: YouTubeOAuthService?,
@@ -534,6 +653,7 @@ struct OAuthStatus: ParsableCommand {
         if let tokens {
             print("Stored access token: present")
             print("Stored refresh token: \(tokens.refreshToken == nil ? "missing" : "present")")
+            print("Granted scope: \(tokens.scope ?? "unknown")")
             if let expiresAt = tokens.expiresAt {
                 print("Access token expires at: \(ISO8601DateFormatter().string(from: expiresAt))")
                 print("Expired: \(tokens.isExpired ? "yes" : "no")")

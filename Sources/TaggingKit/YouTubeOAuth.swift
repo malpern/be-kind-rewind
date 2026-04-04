@@ -56,6 +56,12 @@ public struct YouTubeOAuthTokens: Codable, Sendable {
         guard let expiresAt else { return false }
         return expiresAt.addingTimeInterval(-60) <= Date()
     }
+
+    public func includesScope(_ requiredScope: String) -> Bool {
+        guard let scope else { return false }
+        let grantedScopes = Set(scope.split(separator: " ").map(String.init))
+        return grantedScopes.contains(requiredScope)
+    }
 }
 
 public struct YouTubeOAuthAuthorizationRequest: Sendable {
@@ -139,7 +145,9 @@ public struct YouTubeOAuthService: Sendable {
     private let config: YouTubeOAuthClientConfig
     private let tokenStore: YouTubeOAuthTokenStore
     private let session: URLSession
-    public static let defaultScope = "https://www.googleapis.com/auth/youtube.readonly"
+    public static let readOnlyScope = "https://www.googleapis.com/auth/youtube.readonly"
+    public static let writeScope = "https://www.googleapis.com/auth/youtube"
+    public static let defaultScope = writeScope
 
     public init(
         config: YouTubeOAuthClientConfig,
@@ -218,7 +226,11 @@ public struct YouTubeOAuthService: Sendable {
             URLQueryItem(name: "refresh_token", value: refreshToken),
             URLQueryItem(name: "grant_type", value: "refresh_token")
         ]
-        let refreshed = try await performTokenRequest(bodyItems: bodyItems, fallbackRefreshToken: refreshToken)
+        let refreshed = try await performTokenRequest(
+            bodyItems: bodyItems,
+            fallbackRefreshToken: refreshToken,
+            fallbackScope: existing.scope
+        )
         try tokenStore.save(refreshed)
         return refreshed
     }
@@ -243,7 +255,8 @@ public struct YouTubeOAuthService: Sendable {
 
     private func performTokenRequest(
         bodyItems: [URLQueryItem],
-        fallbackRefreshToken: String? = nil
+        fallbackRefreshToken: String? = nil,
+        fallbackScope: String? = nil
     ) async throws -> YouTubeOAuthTokens {
         var request = URLRequest(url: URL(string: "https://oauth2.googleapis.com/token")!)
         request.httpMethod = "POST"
@@ -269,7 +282,7 @@ public struct YouTubeOAuthService: Sendable {
             accessToken: payload.accessToken,
             refreshToken: payload.refreshToken ?? fallbackRefreshToken,
             tokenType: payload.tokenType,
-            scope: payload.scope,
+            scope: payload.scope ?? fallbackScope,
             expiresAt: expiresAt
         )
     }
