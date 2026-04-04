@@ -9,12 +9,14 @@ For quality expectations, also see:
 
 ## Project Shape
 
-The package has three code targets and one current test target:
+The package has three code targets and three test targets:
 
 - `TaggingKit`: core library for storage, parsing, API clients, and classification plumbing
 - `VideoTagger`: CLI for import, topic operations, metadata backfill, and OAuth flows
 - `VideoOrganizer`: macOS app
-- `TaggingKitTests`: current unit tests
+- `TaggingKitTests`: storage, API, OAuth, and model tests
+- `VideoTaggerTests`: CLI argument and workflow tests
+- `VideoOrganizerTests`: organizer-state and grid logic tests
 
 In practice:
 
@@ -116,8 +118,9 @@ xcrun llvm-cov report \
 
 Current reality:
 
-- tests exist only for `TaggingKit`
-- `VideoTagger` and `VideoOrganizer` still need dedicated test targets
+- the package currently has 113 tests across all three test targets
+- the strongest coverage is still around storage and workflow logic
+- view rendering details and browser automation selectors still rely more on manual smoke testing than unit tests
 
 ## Data and File Locations
 
@@ -222,6 +225,22 @@ Browser-backed sync uses the dedicated Chrome profile at `~/.config/be-kind-rewi
 - `./build-app.sh` is the supported packaging path; it signs the app bundle and bootstraps the managed discovery runtime
 - discovery fallback installs `scrapetube` into `.runtime/discovery-venv` from `scripts/requirements-discovery.txt`
 - the browser-sync Chrome profile is separate from your normal browser profile and is used for browser-only actions and API fallback
+
+## Current Coverage Shape
+
+The suite covers these areas well:
+
+- `TopicStore` schema, CRUD, candidate state, playlist membership, and sync queue behavior
+- CLI parsing and workflow helpers such as metadata backfill, channel enrichment, playlist verification, and OAuth helpers
+- `OrganizerStore` state transitions, filtering, creator analytics, and fixture-backed file DB behavior
+- grid grouping / section-building pure logic
+
+The largest remaining gaps are:
+
+- browser automation end-to-end validation against YouTube’s live DOM
+- menu/keyboard shortcut dispatch at the UI event layer
+- SwiftUI/AppKit presentation details such as inspector rendering and settings layout
+- migration/compatibility tests against older real database files
 
 ## Seen History Imports
 

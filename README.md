@@ -6,15 +6,18 @@
 
 A macOS app for organizing your YouTube video library by topic. Like sorting your VHS collection, but with AI.
 
+![Be Kind Rewind app screenshot](docs/images/app-screenshot.png)
+
 ## What it does
 
-Takes a collection of YouTube videos (from any playlist) and organizes them into topic categories using Claude AI:
+Takes a collection of YouTube videos (from one or more playlists) and organizes them into topic categories using Claude AI:
 
 1. **Scan** — Capture video titles and channels from a playlist
 2. **Classify** — Claude analyzes channels and titles to suggest ~15-25 topic categories
 3. **Browse** — Visual grid of video thumbnails grouped by topic with sticky section headers
-4. **Refine** — Split broad topics, merge similar ones, rename, or move individual videos
-5. **Sync** — (Coming soon) Push changes back to YouTube as playlists
+4. **Discover** — Generate per-topic watch candidates from creator archives, playlist overlap, and fallback discovery
+5. **Refine** — Split broad topics, merge similar ones, rename, or move individual videos
+6. **Sync** — Save to playlists, queue browser-backed actions, and keep local state optimistic and fast
 
 ## Features
 
@@ -28,12 +31,15 @@ Takes a collection of YouTube videos (from any playlist) and organizes them into
 - iPhoto-style adaptive thumbnail grid
 - Sidebar with topic icons and colors
 - Keyboard navigation: h/j/k/l, arrows, Page Up/Down, Home/End
-- Section progress bars in sticky headers
-- Hover effects with hand cursor
+- Hover-driven inspector updates
+- Native context menus and menu bar actions
+- Keyboard triage shortcuts for Watch / playlist management
+- Per-topic `Watch` mode with floating discovery progress HUD
+- Real Settings window for API access, history import, and sync status
 - Double-click to open on YouTube
 - Adjustable thumbnail size
 - Persistent thumbnail cache (~75MB for 5K videos, instant after first load)
-- Settings: thumbnail size, channel name/icon visibility
+- Persistent SQLite-backed state for playlists, candidates, seen-history, and sync queue
 
 ### CLI
 ```bash
@@ -102,27 +108,23 @@ Commits also run local Swift checks automatically through the repo's pre-commit 
 
 ## Architecture
 
-```
+```text
 Sources/
-├── TaggingKit/          # Library (shared between CLI and app)
-│   ├── ClaudeClient     # Lightweight Anthropic API client
-│   ├── TopicSuggester   # Two-step classify: discover → assign
-│   ├── TopicStore        # SQLite: topics, videos, commit table
-│   ├── InventoryLoader  # Reads yt-cli inventory.json snapshots
-│   └── VideoItem        # Data model
-├── VideoTagger/         # CLI executable
-│   └── VideoTaggerCommand  # suggest, split, merge, rename, etc.
-└── VideoOrganizer/      # SwiftUI macOS app
-    ├── OrganizerStore   # @Observable view model bridging SQLite
-    ├── AllVideosGridView # Sectioned grid with keyboard nav
-    ├── TopicSidebar     # Topic list with icons
-    ├── ThumbnailCache   # Persistent disk cache
-    └── DisplaySettings  # User preferences
+├── TaggingKit/            # Shared storage, YouTube clients, sync, discovery fallback
+├── VideoTagger/           # CLI executable and workflow commands
+└── VideoOrganizer/        # SwiftUI/AppKit macOS app
+    ├── OrganizerStore     # Main observable app state
+    ├── OrganizerStore+*   # Discovery, sync, creator analytics, seen-history
+    ├── GridSection*       # Grid shaping and grouping logic
+    ├── CollectionGridView # AppKit-backed grid and context menu handling
+    ├── TopicSidebar       # Topic/filter navigation
+    └── AppSettingsView    # API/history/sync settings
 ```
 
 - **Local-first**: All changes happen instantly in SQLite. No YouTube mutations until explicit sync.
 - **Commit table**: Queued mutations are collapsed to net effects before sync (A→B→C becomes A→C).
-- **29 tests** across 7 suites covering TopicStore CRUD, merge, sync collapse, and data models.
+- **Tested across 3 test targets**: `TaggingKitTests`, `VideoTaggerTests`, and `VideoOrganizerTests`.
+- **Current suite size**: 113 tests covering storage, CLI workflows, organizer state, grid sectioning, OAuth, sync routing, and discovery/archive behavior.
 
 ## Related
 
