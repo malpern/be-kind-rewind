@@ -544,6 +544,9 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
             let video = renderedSections[indexPath.section].videos[indexPath.item]
             cell.representedIndexPath = indexPath
+            cell.onHoverChange = { [weak self] hovering in
+                self?.handleHoverChange(for: video, hovering: hovering)
+            }
             cell.configure(
                 video: video,
                 cacheDir: cacheDir,
@@ -592,6 +595,17 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 guard let cell = item as? VideoItemCell,
                       let indexPath = cell.representedIndexPath else { continue }
                 configure(cell: cell, at: indexPath)
+            }
+        }
+
+        private func handleHoverChange(for video: VideoGridItemModel, hovering: Bool) {
+            guard !video.isPlaceholder else { return }
+            guard let store else { return }
+
+            if hovering {
+                store.hoveredVideoId = video.id
+            } else if store.hoveredVideoId == video.id {
+                store.hoveredVideoId = nil
             }
         }
 
@@ -1137,6 +1151,11 @@ final class VideoItemCell: NSCollectionViewItem {
 
     private var hostingView: NSHostingView<VideoCellContent>?
     var representedIndexPath: IndexPath?
+    var onHoverChange: ((Bool) -> Void)? {
+        didSet {
+            (view as? HoverTrackingView)?.onHoverChange = onHoverChange
+        }
+    }
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
@@ -1151,7 +1170,9 @@ final class VideoItemCell: NSCollectionViewItem {
     }
 
     override func loadView() {
-        self.view = NSView(frame: .zero)
+        let trackingView = HoverTrackingView(frame: .zero)
+        trackingView.onHoverChange = onHoverChange
+        self.view = trackingView
     }
 
     func configure(video: VideoGridItemModel, cacheDir: URL, thumbnailSize: Double, showMetadata: Bool, isSelected: Bool) {
@@ -1179,6 +1200,38 @@ final class VideoItemCell: NSCollectionViewItem {
     override func prepareForReuse() {
         super.prepareForReuse()
         representedIndexPath = nil
+        onHoverChange = nil
+    }
+}
+
+private final class HoverTrackingView: NSView {
+    var onHoverChange: ((Bool) -> Void)?
+    private var trackingAreaRef: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef {
+            removeTrackingArea(trackingAreaRef)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        trackingAreaRef = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        onHoverChange?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onHoverChange?(false)
     }
 }
 
