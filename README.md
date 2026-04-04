@@ -8,6 +8,86 @@ A macOS app for organizing your YouTube video library by topic. Like sorting you
 
 ![Be Kind Rewind app screenshot](docs/images/app-screenshot.png)
 
+## Download
+
+Download the latest packaged app from [GitHub Releases](https://github.com/malpern/be-kind-rewind/releases/latest).
+
+## End-user setup
+
+### What you need
+
+- macOS 14+
+- An Anthropic API key for topic generation and classification
+- Optional: a YouTube API key for richer discovery refreshes
+- Optional: Google OAuth setup if you want playlist saves, private playlist reads, or Watch Later sync
+
+### 1. Install the app
+
+1. Download the latest `Be.Kind.Rewind.zip` from [Releases](https://github.com/malpern/be-kind-rewind/releases/latest).
+2. Unzip it.
+3. Move `Video Organizer.app` into `Applications`.
+4. Open the app.
+
+### 2. Add your Anthropic API key
+
+The app expects your Anthropic key in either:
+
+- `~/.config/anthropic/api-key`
+- or macOS Keychain, if you already use the same key elsewhere
+
+Quickest setup:
+
+```bash
+mkdir -p ~/.config/anthropic
+printf '%s\n' 'YOUR_ANTHROPIC_API_KEY' > ~/.config/anthropic/api-key
+chmod 600 ~/.config/anthropic/api-key
+```
+
+### 3. Optional: add a YouTube API key
+
+This improves discovery refreshes and playlist verification.
+
+Supported locations:
+
+- `YOUTUBE_API_KEY`
+- `GOOGLE_API_KEY`
+- `~/.config/youtube/api-key`
+
+Quickest setup:
+
+```bash
+mkdir -p ~/.config/youtube
+printf '%s\n' 'YOUR_YOUTUBE_API_KEY' > ~/.config/youtube/api-key
+chmod 600 ~/.config/youtube/api-key
+```
+
+### 4. Optional: connect YouTube for saves and private playlists
+
+If you want:
+
+- `Save to Watch Later`
+- `Save to Playlist`
+- private playlist provenance
+- browser fallback actions like `Not Interested`
+
+then do this:
+
+1. Create a Google OAuth desktop client.
+2. Download the client JSON.
+3. Save it to:
+   - `~/.config/youtube/oauth-client.json`
+4. In the app, open `Settings`.
+5. In the `YouTube` section, click `Reconnect` or `Upgrade Access`.
+6. In the `Sync` section, use `Open Browser Sign-In` once so the browser fallback profile is signed into YouTube too.
+
+### 5. Optional: import watch history
+
+If you export Google Takeout / My Activity watch history, you can import it in:
+
+- `Settings > History > Import Seen History…`
+
+That suppresses already-watched videos from the `Watch` candidate list.
+
 ## What it does
 
 Takes a collection of YouTube videos (from one or more playlists) and organizes them into topic categories using Claude AI:
@@ -84,13 +164,18 @@ Runtime notes:
 - discovery fallback uses a repo-managed venv under `.runtime/discovery-venv` with `scrapetube` installed from `scripts/requirements-discovery.txt`
 - browser-backed sync uses the dedicated Chrome profile at `~/.config/be-kind-rewind/playwright-profile`
 
-## Requirements
+## Developer setup
+
+### Requirements
 
 - macOS 14+
+- Swift toolchain with SwiftPM
 - Anthropic API key (stored in `~/.config/anthropic/api-key` or macOS Keychain)
+- Optional: YouTube API key in `~/.config/youtube/api-key`
+- Optional: Google OAuth desktop client config at `~/.config/youtube/oauth-client.json`
 - An inventory.json from [yt-cli](https://github.com/malpern/yt-cli)
 
-## Build
+### Build
 
 ```bash
 # Build everything
