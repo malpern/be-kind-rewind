@@ -315,12 +315,123 @@ public struct YouTubeClient: Sendable {
         }
     }
 
+    public func fetchIncrementalChannelUploads(
+        channelId: String,
+        knownVideoIDs: Set<String>,
+        maxNewResults: Int = 24,
+        maxPages: Int = 4
+    ) async throws -> IncrementalChannelUploadsResult {
+        guard let uploadsPlaylistId = try await fetchUploadsPlaylistId(channelId: channelId) else {
+            return IncrementalChannelUploadsResult(videos: [], pagesFetched: 0, hitKnownVideo: false, uploadsPlaylistIdFound: false)
+        }
+
+        var collectedItems: [PlaylistVideoItem] = []
+        var nextPageToken: String?
+        var hitKnownVideo = false
+        var pagesFetched = 0
+
+        repeat {
+            let page = try await fetchPlaylistItemsPage(
+                playlistId: uploadsPlaylistId,
+                maxResults: min(50, maxNewResults),
+                pageToken: nextPageToken,
+                authorization: .apiKeyOnly
+            )
+            pagesFetched += 1
+
+            for item in page.items {
+                if knownVideoIDs.contains(item.videoId) {
+                    hitKnownVideo = true
+                    break
+                }
+                collectedItems.append(item)
+                if collectedItems.count >= maxNewResults {
+                    break
+                }
+            }
+
+            nextPageToken = page.nextPageToken
+        } while nextPageToken != nil
+            && !hitKnownVideo
+            && collectedItems.count < maxNewResults
+            && pagesFetched < maxPages
+
+        guard !collectedItems.isEmpty else {
+            return IncrementalChannelUploadsResult(
+                videos: [],
+                pagesFetched: pagesFetched,
+                hitKnownVideo: hitKnownVideo,
+                uploadsPlaylistIdFound: true
+            )
+        }
+
+        let metadataById = try await Dictionary(
+            uniqueKeysWithValues: fetchVideoMetadata(ids: collectedItems.map(\.videoId)).map { ($0.videoId, $0) }
+        )
+
+        let videos = collectedItems.compactMap { item in
+            let metadata = metadataById[item.videoId]
+            return DiscoveredVideo(
+                videoId: item.videoId,
+                title: item.title ?? "Untitled",
+                channelId: item.channelId ?? metadata?.channelId,
+                channelTitle: item.channelTitle ?? metadata?.channelTitle,
+                publishedAt: metadata?.formattedDate,
+                duration: metadata?.formattedDuration,
+                viewCount: metadata?.formattedViewCount,
+                sourceOrder: .date
+            )
+        }
+
+        return IncrementalChannelUploadsResult(
+            videos: videos,
+            pagesFetched: pagesFetched,
+            hitKnownVideo: hitKnownVideo,
+            uploadsPlaylistIdFound: true
+        )
+    }
+
     public func fetchPlaylistItems(playlistId: String) async throws -> [PlaylistVideoItem] {
         try await fetchPlaylistItems(
             playlistId: playlistId,
             maxResults: nil,
             authorization: .bearerIfAvailable
         )
+    }
+
+    public func removeVideoFromPlaylist(videoId: String, playlistId: String) async throws {
+        let accessToken = try await validWriteAccessToken()
+        let items = try await fetchPlaylistItems(
+            playlistId: playlistId,
+            maxResults: nil,
+            authorization: .bearerIfAvailable
+        )
+
+        let matchingIds = items
+            .filter { $0.videoId == videoId }
+            .compactMap(\.playlistItemId)
+
+        guard !matchingIds.isEmpty else { return }
+
+        for playlistItemId in matchingIds {
+            var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/playlistItems")!
+            components.queryItems = [
+                URLQueryItem(name: "id", value: playlistItemId)
+            ]
+
+            var request = URLRequest(url: components.url!)
+            request.httpMethod = "DELETE"
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw YouTubeError.invalidResponse
+            }
+            guard http.statusCode == 204 else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                throw YouTubeError.apiError(statusCode: http.statusCode, message: body)
+            }
+        }
     }
 
     public func addVideoToPlaylist(videoId: String, playlistId: String) async throws {
@@ -391,6 +502,7 @@ public struct YouTubeClient: Sendable {
             for item in decoded.items {
                 guard let videoId = item.snippet.resourceId.videoId else { continue }
                 results.append(PlaylistVideoItem(
+                    playlistItemId: item.id,
                     videoId: videoId,
                     title: item.snippet.title,
                     channelId: item.snippet.videoOwnerChannelId ?? item.snippet.channelId,
@@ -402,6 +514,48 @@ public struct YouTubeClient: Sendable {
         } while nextPageToken != nil && (remainingLimit() ?? 1) > 0
 
         return results
+    }
+
+    private func fetchPlaylistItemsPage(
+        playlistId: String,
+        maxResults: Int,
+        pageToken: String?,
+        authorization: AuthorizationMode
+    ) async throws -> PlaylistItemsPage {
+        var components = URLComponents(string: "https://www.googleapis.com/youtube/v3/playlistItems")!
+        var queryItems = [
+            URLQueryItem(name: "part", value: "snippet"),
+            URLQueryItem(name: "playlistId", value: playlistId),
+            URLQueryItem(name: "maxResults", value: String(max(1, min(maxResults, 50)))),
+            URLQueryItem(name: "key", value: apiKey)
+        ]
+        if let pageToken {
+            queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
+        }
+        components.queryItems = queryItems
+
+        let (data, response) = try await requestData(from: components.url!, authorization: authorization)
+        guard let http = response as? HTTPURLResponse else {
+            throw YouTubeError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw YouTubeError.apiError(statusCode: http.statusCode, message: body)
+        }
+
+        let decoded = try JSONDecoder().decode(PlaylistItemsResponse.self, from: data)
+        let items = decoded.items.compactMap { item -> PlaylistVideoItem? in
+            guard let videoId = item.snippet.resourceId.videoId else { return nil }
+            return PlaylistVideoItem(
+                playlistItemId: item.id,
+                videoId: videoId,
+                title: item.snippet.title,
+                channelId: item.snippet.videoOwnerChannelId ?? item.snippet.channelId,
+                channelTitle: item.snippet.videoOwnerChannelTitle ?? item.snippet.channelTitle,
+                position: item.snippet.position ?? 0
+            )
+        }
+        return PlaylistItemsPage(nextPageToken: decoded.nextPageToken, items: items)
     }
 
     private func fetchUploadsPlaylistId(channelId: String) async throws -> String? {
@@ -546,17 +700,30 @@ public struct DiscoveredVideo: Sendable {
     public let sourceOrder: ChannelSearchOrder
 }
 
+public struct IncrementalChannelUploadsResult: Sendable {
+    public let videos: [DiscoveredVideo]
+    public let pagesFetched: Int
+    public let hitKnownVideo: Bool
+    public let uploadsPlaylistIdFound: Bool
+}
+
 public enum ChannelSearchOrder: String, Sendable {
     case date
     case viewCount
 }
 
 public struct PlaylistVideoItem: Sendable {
+    public let playlistItemId: String?
     public let videoId: String
     public let title: String?
     public let channelId: String?
     public let channelTitle: String?
     public let position: Int
+}
+
+private struct PlaylistItemsPage: Sendable {
+    let nextPageToken: String?
+    let items: [PlaylistVideoItem]
 }
 
 private struct PlaylistInsertRequest: Encodable {
@@ -671,6 +838,7 @@ private struct PlaylistItemsResponse: Decodable {
 }
 
 private struct PlaylistItemsResponseItem: Decodable {
+    let id: String?
     let snippet: PlaylistItemsSnippet
 }
 

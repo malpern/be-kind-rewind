@@ -2,6 +2,17 @@ import SwiftUI
 import AppKit
 import TaggingKit
 
+extension Notification.Name {
+    static let videoOrganizerSaveToWatchLater = Notification.Name("videoOrganizer.saveToWatchLater")
+    static let videoOrganizerSaveToPlaylist = Notification.Name("videoOrganizer.saveToPlaylist")
+    static let videoOrganizerMoveToPlaylist = Notification.Name("videoOrganizer.moveToPlaylist")
+    static let videoOrganizerDismissCandidates = Notification.Name("videoOrganizer.dismissCandidates")
+    static let videoOrganizerNotInterested = Notification.Name("videoOrganizer.notInterested")
+    static let videoOrganizerOpenOnYouTube = Notification.Name("videoOrganizer.openOnYouTube")
+    static let videoOrganizerClearSelection = Notification.Name("videoOrganizer.clearSelection")
+    static let videoOrganizerSaveToFavoritePlaylist = Notification.Name("videoOrganizer.saveToFavoritePlaylist")
+}
+
 // MARK: - SwiftUI Wrapper (matches AllVideosGridView interface)
 
 struct CollectionGridView: View {
@@ -172,6 +183,7 @@ struct CollectionGridView: View {
                 publishedAt: v.publishedAt, duration: v.duration,
                 channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
                 channelId: v.channelId,
+                stateTag: store.badgeTagForVideo(v.videoId),
                 isPlaceholder: false,
                 placeholderMessage: nil
             )
@@ -194,6 +206,7 @@ struct CollectionGridView: View {
                     duration: $0.duration,
                     channelIconUrl: $0.channelIconUrl.flatMap(URL.init(string:)),
                     channelId: $0.channelId,
+                    stateTag: store.badgeTagForVideo($0.videoId, candidateState: $0.state),
                     isPlaceholder: $0.isPlaceholder,
                     placeholderMessage: $0.secondaryText
                 )
@@ -307,6 +320,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private var needsLayoutInvalidation = false
         private var renderedContentWidth: CGFloat = 0
         private var isApplyingSelectionToCollectionView = false
+        private var actionObservers: [NSObjectProtocol] = []
 
         var cacheDir: URL = URL(fileURLWithPath: "/tmp")
         var thumbnailSize: Double = 220
@@ -334,12 +348,37 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             container.collectionView.onMarqueeSelection = { [weak self] rect, modifiers, finalize in
                 self?.handleMarqueeSelection(in: rect, modifiers: modifiers, finalize: finalize)
             }
+            container.collectionView.onSaveToWatchLaterShortcut = { [weak self] in
+                self?.handleSaveToWatchLaterShortcut()
+            }
+            container.collectionView.onSaveToPlaylistShortcut = { [weak self] in
+                self?.handleSaveToPlaylistShortcut()
+            }
+            container.collectionView.onMoveToPlaylistShortcut = { [weak self] in
+                self?.handleMoveToPlaylistShortcut()
+            }
+            container.collectionView.onDismissShortcut = { [weak self] in
+                self?.handleDismissShortcut()
+            }
+            container.collectionView.onNotInterestedShortcut = { [weak self] in
+                self?.handleNotInterestedShortcut()
+            }
+            container.collectionView.onOpenSelectedShortcut = { [weak self] in
+                self?.handleOpenSelectedShortcut()
+            }
+            container.collectionView.onClearSelectionShortcut = { [weak self] in
+                self?.handleClearSelectionShortcut()
+            }
+            container.collectionView.onFavoritePlaylistShortcut = { [weak self] index in
+                self?.handleFavoritePlaylistShortcut(index: index)
+            }
             container.onReadyForFlush = { [weak self] in
                 self?.flushIfReady()
             }
             container.onBoundsChanged = { [weak self] in
                 self?.refreshVisibleHeaders()
             }
+            installActionObserversIfNeeded()
         }
 
         func applySnapshot(
@@ -547,6 +586,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             cell.onHoverChange = { [weak self] hovering in
                 self?.handleHoverChange(for: video, hovering: hovering)
             }
+            cell.onContextMenuRequest = { [weak self, weak cell] point in
+                guard let self, let cell, let collectionView = self.collectionView else { return nil }
+                let pointInCollection = collectionView.convert(point, from: cell.view)
+                return self.menuForInteraction(at: pointInCollection)
+            }
             cell.configure(
                 video: video,
                 cacheDir: cacheDir,
@@ -676,7 +720,8 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 return 56
             }
 
-            let isCandidateLoading = store?.candidateLoadingTopics.contains(section.topicId) ?? false
+            let isCandidateLoading = section.displayMode == .watchCandidates &&
+                (store?.candidateLoadingTopics.contains(section.topicId) ?? false)
             let channels = section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : []
             if isCandidateLoading {
                 return channels.isEmpty ? 104 : 168
@@ -690,6 +735,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 return .creator(
                     channelName: creatorName,
                     channelIconUrl: section.channelIconUrl,
+                    channelUrl: section.creatorChannelUrl,
                     count: section.videos.count,
                     totalCount: section.totalCount,
                     topicNames: section.topicNames,
@@ -697,10 +743,19 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     scrollProgress: scrollProgress,
                     highlightTerms: store?.parsedQuery.includeTerms ?? [],
                     onInspect: { [weak store] in
-                        store?.inspectedCreatorName = creatorName
+                        _ = store?.navigateToCreator(channelId: section.creatorChannelId, channelName: creatorName, preferredTopicId: section.topicId)
                     }
                 )
             }
+
+            let highlightTerms = store?.parsedQuery.includeTerms ?? []
+            let isWatchCandidates = section.displayMode == .watchCandidates
+            let candidateProgress = store?.candidateProgress(for: section.topicId) ?? 0
+            let isCandidateLoading = store?.candidateLoadingTopics.contains(section.topicId) ?? false
+            let candidateProgressTitle = isWatchCandidates ? store?.candidateProgressTitle(for: section.topicId) : nil
+            let candidateProgressDetail = isWatchCandidates ? store?.candidateProgressDetail(for: section.topicId) : nil
+            let channels = section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : []
+            let selectedChannelId = section.displayMode == .saved ? store?.selectedChannelId : nil
 
             return .topic(
                 name: section.topicName,
@@ -708,19 +763,19 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 totalCount: section.totalCount,
                 topicId: section.topicId,
                 scrollProgress: scrollProgress,
-                highlightTerms: store?.parsedQuery.includeTerms ?? [],
+                highlightTerms: highlightTerms,
                 displayMode: section.displayMode,
-                candidateProgress: store?.candidateProgress(for: section.topicId) ?? 0,
-                isCandidateLoading: store?.candidateLoadingTopics.contains(section.topicId) ?? false,
-                candidateProgressTitle: store?.candidateProgressTitle(for: section.topicId),
-                candidateProgressDetail: store?.candidateProgressDetail(for: section.topicId),
+                candidateProgress: candidateProgress,
+                isCandidateLoading: isCandidateLoading,
+                candidateProgressTitle: candidateProgressTitle,
+                candidateProgressDetail: candidateProgressDetail,
                 onSelectDisplayMode: { [weak store] mode in
                     Task { @MainActor in
                         await store?.activateDisplayMode(mode, for: section.topicId)
                     }
                 },
-                channels: section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : [],
-                selectedChannelId: section.displayMode == .saved ? store?.selectedChannelId : nil,
+                channels: channels,
+                selectedChannelId: selectedChannelId,
                 videoCountForChannel: { [weak store] channelId in
                     store?.videoCountForChannel(channelId, inTopic: section.topicId) ?? 0
                 },
@@ -730,12 +785,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 onSelectChannel: { [weak store] channelId in
                     guard let store else { return }
                     let channel = store.channelsForTopic(section.topicId).first(where: { $0.channelId == channelId })
-                    if store.selectedChannelId == channelId {
-                        store.inspectedCreatorName = nil
-                    } else {
-                        store.inspectedCreatorName = channel?.name
-                    }
-                    store.toggleChannelFilter(channelId)
+                    _ = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: section.topicId)
                 }
             )
         }
@@ -834,31 +884,112 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             let menu = NSMenu()
             let selectionCount = selectedItems.count
             let allCandidates = selectedItems.allSatisfy { isCandidateVideo($0.id) }
+            let allSaved = selectedItems.allSatisfy { !isCandidateVideo($0.id) }
+            let selectedVideoIds = selectedItems.map(\.id)
 
             let openTitle = selectionCount == 1 ? "Open on YouTube" : "Open \(selectionCount) on YouTube"
-            menu.addItem(withTitle: openTitle, action: #selector(contextOpenOnYouTube(_:)), keyEquivalent: "")
+            let openItem = NSMenuItem(title: openTitle, action: #selector(contextOpenOnYouTube(_:)), keyEquivalent: "\r")
+            openItem.target = self
+            menu.addItem(openItem)
             let copyTitle = selectionCount == 1 ? "Copy Link" : "Copy \(selectionCount) Links"
-            menu.addItem(withTitle: copyTitle, action: #selector(contextCopyLinks(_:)), keyEquivalent: "")
+            let copyItem = NSMenuItem(title: copyTitle, action: #selector(contextCopyLinks(_:)), keyEquivalent: "c")
+            copyItem.keyEquivalentModifierMask = [.command]
+            copyItem.target = self
+            menu.addItem(copyItem)
 
-            if allCandidates, let store, let topicId = store.selectedTopicId {
+            if let store {
                 menu.addItem(.separator())
-                menu.addItem(withTitle: "Dismiss", action: #selector(contextDismissCandidates(_:)), keyEquivalent: "")
-                menu.addItem(withTitle: "Save to Watch Later", action: #selector(contextSaveToWatchLater(_:)), keyEquivalent: "")
-
-                let playlistsMenu = NSMenu(title: "Save to Playlist")
-                for playlist in store.knownPlaylists() {
-                    let item = NSMenuItem(title: playlist.title, action: #selector(contextSaveToPlaylist(_:)), keyEquivalent: "")
-                    item.representedObject = playlist
-                    item.target = self
-                    playlistsMenu.addItem(item)
+                let saveToWatchLater = NSMenuItem(title: "Save to Watch Later", action: #selector(contextSaveToWatchLater(_:)), keyEquivalent: "")
+                saveToWatchLater.target = self
+                saveToWatchLater.keyEquivalent = "w"
+                let watchLaterMembershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
+                    if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == "WL" }) {
+                        count += 1
+                    }
                 }
+                if watchLaterMembershipCount == selectionCount {
+                    saveToWatchLater.state = .on
+                    saveToWatchLater.isEnabled = false
+                } else if watchLaterMembershipCount > 0 {
+                    saveToWatchLater.state = .mixed
+                    saveToWatchLater.isEnabled = true
+                } else {
+                    saveToWatchLater.state = .off
+                    saveToWatchLater.isEnabled = true
+                }
+                menu.addItem(saveToWatchLater)
+
+                let playlistsMenu = buildSaveToPlaylistMenu(selectedVideoIds: selectedVideoIds, selectionCount: selectionCount)
                 let saveToPlaylist = NSMenuItem(title: "Save to Playlist", action: nil, keyEquivalent: "")
                 saveToPlaylist.submenu = playlistsMenu
+                saveToPlaylist.keyEquivalent = "p"
                 menu.addItem(saveToPlaylist)
 
-                let notInterested = NSMenuItem(title: "Not Interested", action: #selector(contextNotInterested(_:)), keyEquivalent: "")
-                notInterested.target = self
-                menu.addItem(notInterested)
+                if allSaved {
+                    if let moveMenu = buildMoveToPlaylistMenu(selectedVideoIds: selectedVideoIds),
+                       !moveMenu.items.isEmpty {
+                        let moveItem = NSMenuItem(title: "Move to Playlist", action: nil, keyEquivalent: "")
+                        moveItem.submenu = moveMenu
+                        moveItem.keyEquivalent = "p"
+                        moveItem.keyEquivalentModifierMask = [.shift]
+                        menu.addItem(moveItem)
+                    }
+
+                    let currentPlaylists = selectedVideoIds
+                        .flatMap { store.playlistsForVideo($0).map(\.playlistId) }
+                    let removablePlaylistIds = Set(currentPlaylists)
+
+                    let removeMenu = NSMenu(title: "Remove from Playlist")
+                    for playlist in store.knownPlaylists().filter({ removablePlaylistIds.contains($0.playlistId) }) {
+                        let item = NSMenuItem(title: playlist.title, action: #selector(contextRemoveFromPlaylist(_:)), keyEquivalent: "")
+                        item.representedObject = playlist
+                        item.target = self
+                        let membershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
+                            if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == playlist.playlistId }) {
+                                count += 1
+                            }
+                        }
+                        if membershipCount == selectionCount {
+                            item.state = .on
+                        } else if membershipCount > 0 {
+                            item.state = .mixed
+                        } else {
+                            item.state = .off
+                        }
+                        removeMenu.addItem(item)
+                    }
+                    let removeItem = NSMenuItem(title: "Remove from Playlist", action: nil, keyEquivalent: "")
+                    removeItem.submenu = removeMenu
+                    removeItem.isEnabled = !removeMenu.items.isEmpty
+                    menu.addItem(removeItem)
+
+                    if selectionCount == 1 {
+                        let showMenu = NSMenu(title: "Show in Playlists")
+                        for playlist in store.playlistsForVideo(selectedItems[0].id) {
+                            let item = NSMenuItem(title: playlist.title, action: #selector(contextShowInPlaylist(_:)), keyEquivalent: "")
+                            item.representedObject = playlist
+                            item.target = self
+                            showMenu.addItem(item)
+                        }
+                        let showItem = NSMenuItem(title: "Show in Playlists", action: nil, keyEquivalent: "")
+                        showItem.submenu = showMenu
+                        showItem.isEnabled = !showMenu.items.isEmpty
+                        menu.addItem(showItem)
+                    }
+                }
+
+                if allCandidates, store.selectedTopicId != nil {
+                    menu.addItem(.separator())
+                    let dismiss = NSMenuItem(title: "Dismiss", action: #selector(contextDismissCandidates(_:)), keyEquivalent: "")
+                    dismiss.target = self
+                    dismiss.keyEquivalent = "d"
+                    menu.addItem(dismiss)
+
+                    let notInterested = NSMenuItem(title: "Not Interested", action: #selector(contextNotInterested(_:)), keyEquivalent: "")
+                    notInterested.target = self
+                    notInterested.keyEquivalent = "n"
+                    menu.addItem(notInterested)
+                }
 
                 for item in menu.items {
                     item.target = self
@@ -866,7 +997,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
                 menu.autoenablesItems = false
                 saveToPlaylist.isEnabled = !store.knownPlaylists().isEmpty
-                _ = topicId
             } else {
                 for item in menu.items {
                     item.target = self
@@ -918,19 +1048,226 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         @objc private func contextSaveToWatchLater(_ sender: Any?) {
-            guard let store, let topicId = store.selectedTopicId else { return }
-            store.saveCandidatesToWatchLater(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
+            guard let store else { return }
+            if let topicId = store.selectedTopicId,
+               renderedSelectedVideoIds.allSatisfy(isCandidateVideo) {
+                store.saveCandidatesToWatchLater(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
+            } else {
+                store.saveVideosToWatchLater(videoIds: Array(renderedSelectedVideoIds))
+            }
+        }
+
+        private func handleSaveToWatchLaterShortcut() {
+            guard !renderedSelectedVideoIds.isEmpty else { return }
+            contextSaveToWatchLater(nil)
+        }
+
+        private func handleSaveToPlaylistShortcut() {
+            guard !renderedSelectedVideoIds.isEmpty else { return }
+            showPlaylistPopup(mode: .save)
+        }
+
+        private func handleMoveToPlaylistShortcut() {
+            guard !renderedSelectedVideoIds.isEmpty else { return }
+            showPlaylistPopup(mode: .move)
+        }
+
+        private func handleDismissShortcut() {
+            guard let store, store.selectedTopicId != nil,
+                  !renderedSelectedVideoIds.isEmpty,
+                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else { return }
+            contextDismissCandidates(nil)
+        }
+
+        private func handleNotInterestedShortcut() {
+            guard let store, store.selectedTopicId != nil,
+                  !renderedSelectedVideoIds.isEmpty,
+                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else { return }
+            contextNotInterested(nil)
+        }
+
+        private func handleOpenSelectedShortcut() {
+            guard !renderedSelectedVideoIds.isEmpty else { return }
+            contextOpenOnYouTube(nil)
+        }
+
+        private func handleClearSelectionShortcut() {
+            guard let collectionView else { return }
+            pendingSelectedVideoId = nil
+            pendingSelectedVideoIds = []
+            renderedSelectedVideoId = nil
+            renderedSelectedVideoIds = []
+            isApplyingSelectionToCollectionView = true
+            collectionView.deselectAll(nil)
+            isApplyingSelectionToCollectionView = false
+            onSelectionChange(nil, [])
+            refreshVisibleItems()
+        }
+
+        private func handleFavoritePlaylistShortcut(index: Int) {
+            guard let store, !renderedSelectedVideoIds.isEmpty else { return }
+            let favorites = Array(store.knownPlaylists().prefix(9))
+            guard favorites.indices.contains(index) else {
+                NSSound.beep()
+                return
+            }
+            let playlist = favorites[index]
+            if let topicId = store.selectedTopicId,
+               renderedSelectedVideoIds.allSatisfy(isCandidateVideo) {
+                store.saveCandidatesToPlaylist(topicId: topicId, videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+            } else {
+                store.saveVideosToPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+            }
         }
 
         @objc private func contextSaveToPlaylist(_ sender: NSMenuItem) {
-            guard let store, let topicId = store.selectedTopicId,
+            guard let store,
                   let playlist = sender.representedObject as? PlaylistRecord else { return }
-            store.saveCandidatesToPlaylist(topicId: topicId, videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+            if let topicId = store.selectedTopicId,
+               renderedSelectedVideoIds.allSatisfy(isCandidateVideo) {
+                store.saveCandidatesToPlaylist(topicId: topicId, videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+            } else {
+                store.saveVideosToPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+            }
+        }
+
+        @objc private func contextMoveToPlaylist(_ sender: NSMenuItem) {
+            guard let store,
+                  let destination = sender.representedObject as? PlaylistRecord,
+                  let sourcePlaylistId = store.selectedPlaylistId,
+                  sourcePlaylistId != destination.playlistId,
+                  let sourcePlaylist = store.knownPlaylists().first(where: { $0.playlistId == sourcePlaylistId }) else { return }
+
+            store.saveVideosToPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: destination)
+            store.removeVideosFromPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: sourcePlaylist)
+        }
+
+        @objc private func contextRemoveFromPlaylist(_ sender: NSMenuItem) {
+            guard let store,
+                  let playlist = sender.representedObject as? PlaylistRecord else { return }
+            store.removeVideosFromPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+        }
+
+        @objc private func contextShowInPlaylist(_ sender: NSMenuItem) {
+            guard let store,
+                  let playlist = sender.representedObject as? PlaylistRecord else { return }
+            store.applyPlaylistFilter(playlist)
         }
 
         @objc private func contextNotInterested(_ sender: Any?) {
             guard let store, let topicId = store.selectedTopicId else { return }
             store.markCandidatesNotInterested(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
+        }
+
+        private enum PlaylistShortcutMode {
+            case save
+            case move
+        }
+
+        private func showPlaylistPopup(mode: PlaylistShortcutMode) {
+            guard let collectionView else { return }
+            let selectedVideoIds = renderedSelectedVideoIds.map { $0 }
+            let selectionCount = selectedVideoIds.count
+            let menu: NSMenu?
+            switch mode {
+            case .save:
+                menu = buildSaveToPlaylistMenu(selectedVideoIds: selectedVideoIds, selectionCount: selectionCount)
+            case .move:
+                menu = buildMoveToPlaylistMenu(selectedVideoIds: selectedVideoIds)
+            }
+
+            guard let menu, !menu.items.isEmpty else {
+                NSSound.beep()
+                return
+            }
+
+            let popupPoint: NSPoint
+            if let indexPath = indexPaths(for: renderedSelectedVideoIds).sorted().first,
+               let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
+                popupPoint = NSPoint(x: attributes.frame.midX, y: attributes.frame.midY)
+            } else {
+                popupPoint = NSPoint(x: collectionView.visibleRect.midX, y: collectionView.visibleRect.midY)
+            }
+
+            menu.popUp(positioning: nil, at: popupPoint, in: collectionView)
+        }
+
+        private func buildSaveToPlaylistMenu(selectedVideoIds: [String], selectionCount: Int) -> NSMenu {
+            let playlistsMenu = NSMenu(title: "Save to Playlist")
+            guard let store else { return playlistsMenu }
+
+            for (index, playlist) in store.knownPlaylists().enumerated() {
+                let item = NSMenuItem(title: playlist.title, action: #selector(contextSaveToPlaylist(_:)), keyEquivalent: "")
+                if index < 9 {
+                    item.title = "\(index + 1). \(playlist.title)"
+                }
+                item.representedObject = playlist
+                item.target = self
+                let membershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
+                    if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == playlist.playlistId }) {
+                        count += 1
+                    }
+                }
+                if membershipCount == selectionCount {
+                    item.state = .on
+                    item.isEnabled = false
+                } else if membershipCount > 0 {
+                    item.state = .mixed
+                    item.isEnabled = true
+                } else {
+                    item.state = .off
+                    item.isEnabled = true
+                }
+                playlistsMenu.addItem(item)
+            }
+            return playlistsMenu
+        }
+
+        private func buildMoveToPlaylistMenu(selectedVideoIds: [String]) -> NSMenu? {
+            guard let store,
+                  !selectedVideoIds.isEmpty,
+                  let sourcePlaylistId = store.selectedPlaylistId else { return nil }
+
+            let menu = NSMenu(title: "Move to Playlist")
+            for playlist in store.knownPlaylists().filter({ $0.playlistId != sourcePlaylistId }) {
+                let item = NSMenuItem(title: playlist.title, action: #selector(contextMoveToPlaylist(_:)), keyEquivalent: "")
+                item.representedObject = playlist
+                item.target = self
+                menu.addItem(item)
+            }
+            return menu
+        }
+
+        private func installActionObserversIfNeeded() {
+            guard actionObservers.isEmpty else { return }
+            let center = NotificationCenter.default
+            actionObservers = [
+                center.addObserver(forName: .videoOrganizerSaveToWatchLater, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.handleSaveToWatchLaterShortcut() }
+                },
+                center.addObserver(forName: .videoOrganizerSaveToPlaylist, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.handleSaveToPlaylistShortcut() }
+                },
+                center.addObserver(forName: .videoOrganizerMoveToPlaylist, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.handleMoveToPlaylistShortcut() }
+                },
+                center.addObserver(forName: .videoOrganizerDismissCandidates, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.handleDismissShortcut() }
+                },
+                center.addObserver(forName: .videoOrganizerNotInterested, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.handleNotInterestedShortcut() }
+                },
+                center.addObserver(forName: .videoOrganizerOpenOnYouTube, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.handleOpenSelectedShortcut() }
+                },
+                center.addObserver(forName: .videoOrganizerClearSelection, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in self?.handleClearSelectionShortcut() }
+                },
+                center.addObserver(forName: .videoOrganizerSaveToFavoritePlaylist, object: nil, queue: .main) { [weak self] note in
+                    let index = note.userInfo?["index"] as? Int ?? -1
+                    Task { @MainActor in self?.handleFavoritePlaylistShortcut(index: index) }
+                }
+            ]
         }
     }
 }
@@ -1122,6 +1459,7 @@ enum CollectionSectionHeaderModel {
     case creator(
         channelName: String,
         channelIconUrl: URL?,
+        channelUrl: URL?,
         count: Int,
         totalCount: Int?,
         topicNames: [String],
@@ -1156,6 +1494,11 @@ final class VideoItemCell: NSCollectionViewItem {
             (view as? HoverTrackingView)?.onHoverChange = onHoverChange
         }
     }
+    var onContextMenuRequest: ((NSPoint) -> NSMenu?)? {
+        didSet {
+            (view as? HoverTrackingView)?.onContextMenuRequest = onContextMenuRequest
+        }
+    }
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
@@ -1172,6 +1515,7 @@ final class VideoItemCell: NSCollectionViewItem {
     override func loadView() {
         let trackingView = HoverTrackingView(frame: .zero)
         trackingView.onHoverChange = onHoverChange
+        trackingView.onContextMenuRequest = onContextMenuRequest
         self.view = trackingView
     }
 
@@ -1201,11 +1545,13 @@ final class VideoItemCell: NSCollectionViewItem {
         super.prepareForReuse()
         representedIndexPath = nil
         onHoverChange = nil
+        onContextMenuRequest = nil
     }
 }
 
 private final class HoverTrackingView: NSView {
     var onHoverChange: ((Bool) -> Void)?
+    var onContextMenuRequest: ((NSPoint) -> NSMenu?)?
     private var trackingAreaRef: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -1233,6 +1579,32 @@ private final class HoverTrackingView: NSView {
         super.mouseExited(with: event)
         onHoverChange?(false)
     }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control),
+           let menu = contextMenu(for: event) {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if let menu = contextMenu(for: event) {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            return
+        }
+        super.rightMouseDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenu(for: event) ?? super.menu(for: event)
+    }
+
+    private func contextMenu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        return onContextMenuRequest?(point)
+    }
 }
 
 // MARK: - Video Cell SwiftUI Content
@@ -1245,6 +1617,10 @@ private struct VideoCellContent: View {
     let isSelected: Bool
 
     private var cornerRadius: CGFloat { GridConstants.cornerRadius(for: thumbnailSize) }
+    private var metadataLine: String? {
+        let parts = [video.viewCount, video.publishedAt].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: showMetadata ? GridConstants.metadataSpacing(for: thumbnailSize) : 2) {
@@ -1272,6 +1648,22 @@ private struct VideoCellContent: View {
                     .aspectRatio(16/9, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
 
+                if let stateTag = video.stateTag {
+                    VStack {
+                        HStack {
+                            Text(stateTag)
+                                .font(GridConstants.metadataFont(for: thumbnailSize).weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(Color.accentColor.opacity(0.92), in: Capsule())
+                            Spacer(minLength: 0)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(GridConstants.durationPadding(for: thumbnailSize))
+                }
+
                 if let duration = video.duration {
                     Text(duration)
                         .font(.system(size: GridConstants.durationFontSize(for: thumbnailSize), weight: .semibold).monospacedDigit())
@@ -1294,6 +1686,13 @@ private struct VideoCellContent: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+
+            if showMetadata, let metadataLine {
+                Text(metadataLine)
+                    .font(GridConstants.metadataFont(for: thumbnailSize))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
     }
 
@@ -1309,7 +1708,7 @@ private struct VideoCellContent: View {
                         Image(systemName: "sparkles.rectangle.stack")
                             .font(.system(size: 28, weight: .medium))
                             .foregroundStyle(Color.accentColor)
-                        Text("Watch candidates")
+                        Text("Watch")
                             .font(.headline)
                             .foregroundStyle(.primary)
                     }
@@ -1375,7 +1774,7 @@ private struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, _, _, candidateProgressTitle, candidateProgressDetail, onSelectDisplayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
+        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, _, _, _, _, onSelectDisplayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
             VStack(spacing: 0) {
                 SectionHeaderView(
                     name: name,
@@ -1383,11 +1782,11 @@ private struct SectionHeaderContent: View {
                     totalCount: totalCount,
                     topicId: topicId,
                     progress: scrollProgress,
-                    showProgress: true,
+                    showProgress: displayMode != .watchCandidates,
                     highlightTerms: highlightTerms,
                     displayMode: displayMode,
-                    progressTitle: candidateProgressTitle,
-                    progressDetail: candidateProgressDetail,
+                    progressTitle: nil,
+                    progressDetail: nil,
                     onDisplayModeChange: onSelectDisplayMode
                 )
                 .accessibilityIdentifier("topic-\(topicId)")
@@ -1403,10 +1802,11 @@ private struct SectionHeaderContent: View {
                     )
                 }
             }
-        case let .creator(channelName, channelIconUrl, count, totalCount, topicNames, sectionId, scrollProgress, highlightTerms, onInspect):
+        case let .creator(channelName, channelIconUrl, channelUrl, count, totalCount, topicNames, sectionId, scrollProgress, highlightTerms, onInspect):
             CreatorSectionHeaderView(
                 channelName: channelName,
                 channelIconUrl: channelIconUrl,
+                channelUrl: channelUrl,
                 count: count,
                 totalCount: totalCount,
                 topicNames: topicNames,
@@ -1415,6 +1815,11 @@ private struct SectionHeaderContent: View {
                 highlightTerms: highlightTerms
             )
             .onTapGesture(perform: onInspect)
+            .onDoubleClick {
+                if let channelUrl {
+                    NSWorkspace.shared.open(channelUrl)
+                }
+            }
             .onHover { hovering in
                 if hovering {
                     onInspect()
@@ -1428,11 +1833,22 @@ private final class ClickableCollectionView: NSCollectionView {
     var onDoubleClickItem: ((IndexPath) -> Void)?
     var onContextMenuRequest: ((NSPoint) -> NSMenu?)?
     var onMarqueeSelection: ((NSRect, NSEvent.ModifierFlags, Bool) -> Void)?
+    var onSaveToWatchLaterShortcut: (() -> Void)?
+    var onSaveToPlaylistShortcut: (() -> Void)?
+    var onMoveToPlaylistShortcut: (() -> Void)?
+    var onDismissShortcut: (() -> Void)?
+    var onNotInterestedShortcut: (() -> Void)?
+    var onOpenSelectedShortcut: (() -> Void)?
+    var onClearSelectionShortcut: (() -> Void)?
+    var onFavoritePlaylistShortcut: ((Int) -> Void)?
 
     private let marqueeLayer = CAShapeLayer()
     private var marqueeStartPoint: NSPoint?
 
+    override var acceptsFirstResponder: Bool { true }
+
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
         if event.type == .leftMouseDown, event.clickCount == 1, indexPathForItem(at: point) == nil {
             marqueeStartPoint = point
@@ -1469,6 +1885,54 @@ private final class ClickableCollectionView: NSCollectionView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         return onContextMenuRequest?(point)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if modifiers.isEmpty,
+           key == "w" {
+            onSaveToWatchLaterShortcut?()
+            return
+        }
+        if modifiers.isEmpty,
+           key == "p" {
+            onSaveToPlaylistShortcut?()
+            return
+        }
+        if modifiers == [.shift],
+           key == "p" {
+            onMoveToPlaylistShortcut?()
+            return
+        }
+        if modifiers.isEmpty,
+           key == "d" {
+            onDismissShortcut?()
+            return
+        }
+        if modifiers.isEmpty,
+           key == "n" {
+            onNotInterestedShortcut?()
+            return
+        }
+        if modifiers.isEmpty,
+           event.keyCode == 36 || event.keyCode == 76 {
+            onOpenSelectedShortcut?()
+            return
+        }
+        if modifiers.isEmpty,
+           event.keyCode == 53 {
+            onClearSelectionShortcut?()
+            return
+        }
+        if modifiers.isEmpty,
+           let key,
+           let digit = Int(key),
+           (1...9).contains(digit) {
+            onFavoritePlaylistShortcut?(digit - 1)
+            return
+        }
+        super.keyDown(with: event)
     }
 
     private func updateMarqueeSelection(currentPoint: NSPoint, modifiers: NSEvent.ModifierFlags, finalize: Bool) {

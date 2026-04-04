@@ -140,6 +140,14 @@ struct TopicSidebar: View {
                                         }
                                         .buttonStyle(.plain)
                                         .contentShape(Rectangle())
+                                        .onDoubleClick {
+                                            if let url = creator.channelUrl {
+                                                NSWorkspace.shared.open(url)
+                                            } else {
+                                                let url = URL(string: "https://www.youtube.com/channel/\(creator.channelId)")!
+                                                NSWorkspace.shared.open(url)
+                                            }
+                                        }
                                         .accessibilityIdentifier("creator-\(creator.sectionId)")
                                         .accessibilityLabel("\(creator.creatorName), \(creator.count) videos")
                                         .padding(.leading, 20)
@@ -282,8 +290,9 @@ struct TopicSidebar: View {
 
     private func applyCreatorSelection(_ creator: CreatorSidebarEntry) {
         selectedCreatorSectionId = creator.sectionId
-        store.inspectedCreatorName = creator.creatorName
-        displaySettings.scrollToSectionRequested = creator.sectionId
+        if let topicId = store.navigateToCreator(channelId: creator.channelId, channelName: creator.creatorName, preferredTopicId: creator.topicId) {
+            displaySettings.scrollToTopicRequested = topicId
+        }
     }
 
     @ViewBuilder
@@ -316,8 +325,11 @@ struct TopicSidebar: View {
             guard count > 0 else { return nil }
             return CreatorSidebarEntry(
                 sectionId: "creator-\(topic.id)-\(channel.name)",
+                topicId: topic.id,
+                channelId: channel.channelId,
                 creatorName: channel.name,
                 count: count,
+                channelUrl: channel.channelUrl.flatMap(URL.init(string:)),
                 channelIconUrl: channel.iconUrl.flatMap(URL.init(string:))
             )
         }
@@ -404,8 +416,11 @@ private struct TopicRow: View {
 
 private struct CreatorSidebarEntry: Identifiable {
     let sectionId: String
+    let topicId: Int64
+    let channelId: String
     let creatorName: String
     let count: Int
+    let channelUrl: URL?
     let channelIconUrl: URL?
 
     var id: String { sectionId }

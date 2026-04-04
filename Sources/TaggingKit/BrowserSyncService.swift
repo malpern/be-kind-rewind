@@ -5,11 +5,24 @@ public struct BrowserSyncResult: Sendable {
     public let failures: [SyncFailureRecord]
 }
 
+public struct BrowserExecutorStatus: Sendable {
+    public let ready: Bool
+    public let message: String
+
+    public init(ready: Bool, message: String) {
+        self.ready = ready
+        self.message = message
+    }
+}
+
 public struct BrowserSyncService: Sendable {
     private let repoRoot: URL
+    private let profileDir: URL
 
     public init(repoRoot: URL) {
         self.repoRoot = repoRoot
+        self.profileDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/be-kind-rewind/playwright-profile")
     }
 
     public func execute(actions: [SyncAction]) async throws -> BrowserSyncResult {
@@ -71,6 +84,37 @@ public struct BrowserSyncService: Sendable {
         try process.run()
     }
 
+    public func status() async throws -> BrowserExecutorStatus {
+        let profileRunning = (try? isBrowserProfileProcessRunning()) ?? false
+        let hasSession = (try? profileHasSignedInYouTubeSession()) ?? false
+
+        if hasSession && profileRunning {
+            return BrowserExecutorStatus(
+                ready: false,
+                message: "Signed in to YouTube. Close the dedicated browser-sync Chrome window when you're ready for the app to use browser fallback actions."
+            )
+        }
+
+        if hasSession {
+            return BrowserExecutorStatus(
+                ready: true,
+                message: "Signed in to YouTube"
+            )
+        }
+
+        if profileRunning {
+            return BrowserExecutorStatus(
+                ready: false,
+                message: "Browser sign-in window is open. Finish signing in there, then close it and refresh sync status."
+            )
+        }
+
+        return BrowserExecutorStatus(
+            ready: false,
+            message: "Browser executor is not signed in. Open Browser Sign-In to connect the dedicated Chrome profile."
+        )
+    }
+
     private func playlistTitle(for action: SyncAction) -> String? {
         if action.playlist == "WL" {
             return "Watch Later"
@@ -107,6 +151,64 @@ public struct BrowserSyncService: Sendable {
                 ))
             }
         }
+    }
+
+    private func isBrowserProfileProcessRunning() throws -> Bool {
+        let execution = try runProcessSync(arguments: ["pgrep", "-fal", profileDir.path])
+        guard execution.terminationStatus == 0,
+              let output = String(data: execution.stdout, encoding: .utf8)?
+                .lowercased(),
+              !output.isEmpty else {
+            return false
+        }
+        return output.contains(profileDir.path.lowercased())
+    }
+
+    private func runProcessSync(arguments: [String]) throws -> ProcessExecutionResult {
+        let process = Process()
+        process.currentDirectoryURL = repoRoot
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = arguments
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+
+        return ProcessExecutionResult(
+            terminationStatus: process.terminationStatus,
+            stdout: stdout.fileHandleForReading.readDataToEndOfFile(),
+            stderr: stderr.fileHandleForReading.readDataToEndOfFile()
+        )
+    }
+
+    private func profileHasSignedInYouTubeSession() throws -> Bool {
+        let cookiesPath = profileDir
+            .appendingPathComponent("Default")
+            .appendingPathComponent("Cookies")
+            .path
+
+        guard FileManager.default.fileExists(atPath: cookiesPath) else {
+            return false
+        }
+
+        let query = """
+        SELECT 1
+        FROM cookies
+        WHERE (host_key = '.youtube.com' AND name = 'LOGIN_INFO')
+           OR (host_key = '.youtube.com' AND name = 'SID')
+           OR (host_key = '.google.com' AND name = 'SID')
+        LIMIT 1;
+        """
+        let execution = try runProcessSync(arguments: ["sqlite3", cookiesPath, query])
+        guard execution.terminationStatus == 0,
+              let output = String(data: execution.stdout, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return output == "1"
     }
 }
 

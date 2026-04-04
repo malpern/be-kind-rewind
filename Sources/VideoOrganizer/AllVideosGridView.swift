@@ -184,6 +184,7 @@ struct AllVideosGridView: View {
                     CreatorSectionHeaderView(
                         channelName: creatorName,
                         channelIconUrl: section.channelIconUrl,
+                        channelUrl: section.creatorChannelUrl,
                         count: section.videos.count,
                         totalCount: section.totalCount,
                         topicNames: section.topicNames,
@@ -192,7 +193,15 @@ struct AllVideosGridView: View {
                         highlightTerms: store.parsedQuery.includeTerms
                     )
                     .onTapGesture {
-                        store.inspectedCreatorName = creatorName
+                        let topicId = store.navigateToCreator(channelId: section.creatorChannelId, channelName: creatorName, preferredTopicId: section.topicId)
+                        if let topicId {
+                            displaySettings.scrollToTopicRequested = topicId
+                        }
+                    }
+                    .onDoubleClick {
+                        if let channelUrl = section.creatorChannelUrl {
+                            NSWorkspace.shared.open(channelUrl)
+                        }
                     }
                     .onHover { hovering in
                         if hovering {
@@ -217,18 +226,13 @@ struct AllVideosGridView: View {
                         videoCountForChannel: { store.videoCountForChannel($0, inTopic: section.topicId) },
                         hasRecentContent: { store.channelHasRecentContent($0, inTopic: section.topicId) },
                         onSelect: { channelId in
-                            // Set the inspector to show creator detail
                             let channel = store.channelsForTopic(section.topicId).first(where: { $0.channelId == channelId })
-                            if store.selectedChannelId == channelId {
-                                // Deselecting — clear creator inspection
-                                store.inspectedCreatorName = nil
-                            } else {
-                                store.inspectedCreatorName = channel?.name
-                            }
-                            // Keep sidebar on this topic and focus the channel bar
+                            let topicId = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: section.topicId)
                             suppressSidebarSync = true
-                            channelBarFocused = (store.selectedChannelId != channelId) // will be selected
-                            store.toggleChannelFilter(channelId)
+                            channelBarFocused = true
+                            if let topicId {
+                                displaySettings.scrollToTopicRequested = topicId
+                            }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 suppressSidebarSync = false
                             }
@@ -358,6 +362,7 @@ struct AllVideosGridView: View {
                 duration: v.duration,
                 channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
                 channelId: v.channelId,
+                stateTag: store.badgeTagForVideo(v.videoId),
                 isPlaceholder: false,
                 placeholderMessage: nil
             )
@@ -499,6 +504,8 @@ struct TopicSection: Identifiable {
     var displayMode: TopicDisplayMode = .saved
     // Creator-mode fields
     var creatorName: String? = nil
+    var creatorChannelId: String? = nil
+    var creatorChannelUrl: URL? = nil
     var channelIconUrl: URL? = nil
     var topicNames: [String] = []
 
@@ -520,6 +527,7 @@ struct VideoGridItemModel: Identifiable, Equatable {
     let duration: String?
     let channelIconUrl: URL?
     let channelId: String?
+    let stateTag: String?
     let isPlaceholder: Bool
     let placeholderMessage: String?
 }

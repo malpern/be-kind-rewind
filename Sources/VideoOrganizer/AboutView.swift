@@ -3,78 +3,55 @@ import AppKit
 
 struct AboutView: View {
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(nsColor: .windowBackgroundColor),
-                    Color(red: 0.95, green: 0.92, blue: 0.86)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .strokeBorder(.white.opacity(0.35), lineWidth: 1)
-                }
-                .shadow(color: .black.opacity(0.12), radius: 28, y: 18)
-                .padding(36)
-                .overlay {
-                    HStack(spacing: 40) {
-                        artwork
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                        details
-                            .frame(width: 290, alignment: .leading)
-                    }
-                    .padding(40)
-                }
+        VStack(spacing: 24) {
+            Spacer(minLength: 0)
+            artwork
+            details
+            footer
         }
-        .frame(width: 860, height: 620)
+        .padding(.horizontal, 44)
+        .padding(.vertical, 36)
+        .frame(width: 620, height: 730)
         .background(Color(nsColor: .windowBackgroundColor))
-        .background(AboutWindowConfigurator(size: NSSize(width: 860, height: 620)))
+        .background(AboutWindowConfigurator(size: NSSize(width: 620, height: 730)))
     }
 
     @ViewBuilder
     private var artwork: some View {
-        if let url = Bundle.module.url(forResource: "app-icon", withExtension: "png"),
+        if let url = Bundle.module.url(forResource: "app-icon-about-clean", withExtension: "png"),
            let nsImage = NSImage(contentsOf: url) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 34, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.black.opacity(0.08),
-                                Color.clear
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .padding(22)
-
+            VStack(spacing: 0) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 420, maxHeight: 420)
+                    .frame(width: 360, height: 360)
+                    .scaleEffect(1.12)
                     .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-                    .shadow(color: .black.opacity(0.22), radius: 26, y: 16)
             }
+            .padding(18)
+            .background(
+                RoundedRectangle(cornerRadius: 34, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 34, style: .continuous)
+                    .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.10), radius: 18, y: 8)
         }
     }
 
     private var details: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(spacing: 16) {
+            VStack(spacing: 8) {
                 Text("Be Kind, Rewind")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .multilineTextAlignment(.center)
 
                 Text("Video Organizer")
-                    .font(.title3.weight(.semibold))
+                    .font(.title3.weight(.medium))
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
             Label("Version 0.1.0", systemImage: "play.rectangle.fill")
@@ -86,41 +63,53 @@ struct AboutView: View {
 
             Text("Organize your YouTube video library by topic. Like sorting your VHS collection, but with AI.")
                 .font(.body)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 420)
 
-            VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
                 aboutPoint("Topic-first browsing", systemImage: "square.grid.2x2")
                 aboutPoint("Creator-aware sections", systemImage: "person.2")
-                aboutPoint("Fast triage for long video lists", systemImage: "sparkles")
+                aboutPoint("Fast triage", systemImage: "sparkles")
             }
+        }
+        .frame(maxWidth: .infinity)
+    }
 
-            Spacer()
+    private var footer: some View {
+        VStack(spacing: 12) {
+            Divider()
 
-            Link(destination: URL(string: "https://github.com/malpern/be-kind-rewind")!) {
-                HStack(spacing: 8) {
-                    Text("View Source")
-                    Image(systemName: "arrow.up.right")
+            HStack {
+                Text("A topic-first desktop organizer for large YouTube libraries.")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+
+                Spacer()
+
+                Link(destination: URL(string: "https://github.com/malpern/be-kind-rewind")!) {
+                    Label("View Source", systemImage: "arrow.up.right")
+                        .font(.subheadline.weight(.semibold))
                 }
-                .font(.headline)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .buttonStyle(.link)
             }
-            .buttonStyle(.plain)
         }
     }
 
     private func aboutPoint(_ text: String, systemImage: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: systemImage)
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
             Text(text)
-                .font(.subheadline)
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.quinary, in: Capsule())
     }
 }
 

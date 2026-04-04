@@ -20,7 +20,7 @@ struct OrganizerView: View {
                     }
                 }
                 .inspector(isPresented: $displaySettings.showInspector) {
-                    VideoInspector(store: store, thumbnailCache: thumbnailCache)
+                    VideoInspector(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                         .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
                         .accessibilityIdentifier("videoInspector")
                 }
@@ -128,7 +128,7 @@ private struct CandidateProgressOverlayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Label("Finding Watch Candidates", systemImage: "sparkles")
+                Label("Finding Watch Videos", systemImage: "sparkles")
                     .font(.headline.weight(.semibold))
 
                 Spacer(minLength: 0)

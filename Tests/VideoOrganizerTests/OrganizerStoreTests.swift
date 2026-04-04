@@ -186,7 +186,7 @@ struct OrganizerStoreTests {
 
             #expect(store.candidateProgress(for: alphaTopic.id) == 0)
             #expect(store.candidateProgressTitle(for: alphaTopic.id) == "Finding candidates for this topic")
-            #expect(store.candidateProgressDetail(for: alphaTopic.id) == "Preparing cached creator archives and candidate ranking.")
+            #expect(store.candidateProgressDetail(for: alphaTopic.id) == "Preparing cached archives, adjacent creators, and candidate ranking.")
             #expect(store.candidateProgressOverlay == nil)
         }
     }

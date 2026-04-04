@@ -27,6 +27,22 @@ struct VideoGridItem: View {
                     .clipShape(.rect(cornerRadius: cornerRadius))
                     .scaleEffect(isHovering ? GridConstants.hoverScaleEffect : 1.0)
 
+                if let stateTag = video.stateTag {
+                    VStack {
+                        HStack {
+                            Text(stateTag)
+                                .font(GridConstants.metadataFont(for: size).weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(Color.accentColor.opacity(0.92), in: Capsule())
+                            Spacer(minLength: 0)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(GridConstants.durationPadding(for: size))
+                }
+
                 if let duration = video.duration {
                     Text(duration)
                         .font(.system(size: GridConstants.durationFontSize(for: size), weight: .semibold).monospacedDigit())

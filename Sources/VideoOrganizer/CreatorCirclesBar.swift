@@ -181,6 +181,14 @@ struct CreatorCirclesBar: View {
             }
         }
         .buttonStyle(.plain)
+        .onDoubleClick {
+            if let urlString = channel.channelUrl, let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+            } else {
+                let url = URL(string: "https://www.youtube.com/channel/\(channel.channelId)")!
+                NSWorkspace.shared.open(url)
+            }
+        }
         .help(channelTooltip(channel, count: count, recent: recent))
         .contextMenu {
             if let urlString = channel.channelUrl, let url = URL(string: urlString) {

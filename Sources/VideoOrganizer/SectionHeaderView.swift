@@ -42,12 +42,12 @@ struct SectionHeaderView: View {
                         onDisplayModeChange?(isOn ? .watchCandidates : .saved)
                     }
                 )) {
-                    Label("Watch?", systemImage: "sparkles")
+                    Label("Watch", systemImage: "sparkles")
                 }
                 .toggleStyle(.button)
                 .controlSize(.small)
                 .help(displayMode == .watchCandidates ? "Showing watch candidates" : "Show watch candidates")
-                .accessibilityLabel("Watch?")
+                .accessibilityLabel("Watch")
                 .accessibilityValue(displayMode == .watchCandidates ? "On" : "Off")
 
                 Spacer()

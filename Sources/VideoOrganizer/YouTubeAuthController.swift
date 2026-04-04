@@ -11,6 +11,7 @@ final class YouTubeAuthController {
 
     private(set) var isBusy = false
     private(set) var isConnected = false
+    private(set) var hasWriteAccess = false
     private(set) var statusTitle = "YouTube not connected"
     private(set) var statusDetail = "Authorize YouTube access so the app can verify private playlists and save videos to your playlists."
     private(set) var buttonTitle = "Connect YouTube"
@@ -33,6 +34,7 @@ final class YouTubeAuthController {
         } catch {
             hasClientConfig = false
             isConnected = false
+            hasWriteAccess = false
             statusTitle = "OAuth client config missing"
             statusDetail = "Download a Google OAuth desktop client JSON file and save it as ~/.config/youtube/oauth-client.json before connecting."
             buttonTitle = "Connect YouTube"
@@ -43,19 +45,23 @@ final class YouTubeAuthController {
 
         if let tokens = tokenStore.load() {
             isConnected = true
+            hasWriteAccess = tokens.includesScope(YouTubeOAuthService.writeScope)
             let expiryText = tokens.expiresAt.map { Self.statusDateFormatter.string(from: $0) } ?? "unknown expiry"
-            if tokens.includesScope(YouTubeOAuthService.writeScope) {
-                statusTitle = "YouTube connected"
+            if hasWriteAccess {
+                statusTitle = "YouTube API ready"
                 statusDetail = "Stored OAuth token can read private playlists and save videos. Current access token expires \(expiryText)."
             } else {
-                statusTitle = "Reconnect YouTube"
-                statusDetail = "The stored OAuth token is read-only. Reconnect YouTube to enable playlist saves and Watch Later actions."
+                statusTitle = "Read-only YouTube access"
+                statusDetail = "Private playlist reads work, but playlist saves and Watch Later need upgraded access. Reconnect YouTube to enable write actions."
             }
-            buttonTitle = "Reconnect YouTube"
-            buttonSubtitle = "Refresh browser authorization or switch to a different Google account"
+            buttonTitle = hasWriteAccess ? "Reconnect YouTube" : "Upgrade Access"
+            buttonSubtitle = hasWriteAccess
+                ? "Refresh browser authorization or switch to a different Google account"
+                : "Approve expanded YouTube access for playlist saves and Watch Later"
             AppLogger.auth.info("OAuth tokens loaded. Expired: \(tokens.isExpired, privacy: .public)")
         } else {
             isConnected = false
+            hasWriteAccess = false
             statusTitle = "YouTube not connected"
             statusDetail = "Authorize YouTube access so the app can verify private playlists and save videos to your playlists."
             buttonTitle = "Connect YouTube"

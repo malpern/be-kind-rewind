@@ -14,26 +14,15 @@ struct AppSettingsView: View {
                     Text("YouTube")
                         .font(.title3.weight(.semibold))
 
+                    authStatusCard(
+                        title: "API access",
+                        message: youTubeAuth.statusTitle,
+                        detail: youTubeAuth.errorMessage ?? youTubeAuth.statusDetail,
+                        icon: youTubeAuth.isConnected ? (youTubeAuth.hasWriteAccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill") : "xmark.circle.fill",
+                        tint: youTubeAuth.isConnected ? (youTubeAuth.hasWriteAccess ? .green : .orange) : .secondary
+                    )
+
                     if youTubeAuth.isConnected {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .font(.title3)
-                                .padding(.top, 2)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(youTubeAuth.statusTitle)
-                                    .font(.subheadline.weight(.semibold))
-
-                                Text(youTubeAuth.errorMessage ?? youTubeAuth.statusDetail)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-
-                            Spacer()
-                        }
-
                         HStack(spacing: 12) {
                             if youTubeAuth.isBusy {
                                 HStack(spacing: 8) {
@@ -149,6 +138,14 @@ struct AppSettingsView: View {
                     Text("Sync")
                         .font(.title3.weight(.semibold))
 
+                    authStatusCard(
+                        title: "Browser fallback",
+                        message: store.browserExecutorReady ? "Browser fallback ready" : "Browser fallback needs attention",
+                        detail: store.browserExecutorStatusMessage,
+                        icon: store.browserExecutorReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                        tint: store.browserExecutorReady ? .green : .orange
+                    )
+
                     VStack(alignment: .leading, spacing: 6) {
                         syncRow("Queued", value: summary.queued)
                         syncRow("Retrying", value: summary.retrying)
@@ -166,6 +163,7 @@ struct AppSettingsView: View {
                     HStack(spacing: 12) {
                         Button("Refresh sync status") {
                             store.refreshSyncQueueSummary()
+                            store.refreshBrowserExecutorStatus()
                         }
 
                         Button("Flush now") {
@@ -233,6 +231,7 @@ struct AppSettingsView: View {
         .onAppear {
             store.refreshSyncQueueSummary()
             store.refreshSeenHistoryCount()
+            store.refreshBrowserExecutorStatus()
         }
     }
 
@@ -246,5 +245,44 @@ struct AppSettingsView: View {
                 .foregroundStyle(.secondary)
         }
     }
-}
 
+    private func authStatusCard(
+        title: String,
+        message: String,
+        detail: String,
+        icon: String,
+        tint: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+                .font(.title3)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title.uppercased())
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Text(message)
+                    .font(.subheadline.weight(.semibold))
+
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.quaternary, lineWidth: 0.5)
+        )
+    }
+}

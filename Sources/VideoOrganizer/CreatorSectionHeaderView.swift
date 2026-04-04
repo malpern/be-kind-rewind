@@ -3,6 +3,7 @@ import SwiftUI
 struct CreatorSectionHeaderView: View {
     let channelName: String
     let channelIconUrl: URL?
+    let channelUrl: URL?
     let count: Int
     var totalCount: Int?
     let topicNames: [String]
@@ -42,6 +43,13 @@ struct CreatorSectionHeaderView: View {
             .frame(height: GridConstants.progressBarHeight)
         }
         .background(.bar)
+        .contextMenu {
+            if let channelUrl {
+                Button("Open Channel on YouTube") {
+                    NSWorkspace.shared.open(channelUrl)
+                }
+            }
+        }
     }
 
     private var channelIcon: some View {

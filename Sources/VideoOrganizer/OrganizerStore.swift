@@ -19,6 +19,8 @@ final class OrganizerStore {
     private(set) var lastSyncErrorMessage: String?
     private(set) var lastSyncErrorIsBrowser = false
     private(set) var seenHistoryCount = 0
+    private(set) var browserExecutorReady = false
+    private(set) var browserExecutorStatusMessage = "Checking browser executor status…"
 
     // Selected state
     var selectedTopicId: Int64? {
@@ -75,6 +77,7 @@ final class OrganizerStore {
     private var syncTask: Task<Void, Never>?
     private var browserSyncTask: Task<Void, Never>?
     private var syncLoopTask: Task<Void, Never>?
+    private var browserStatusTask: Task<Void, Never>?
     private var isUpdatingSelectionFromGrid = false
 
     private let store: TopicStore
@@ -89,6 +92,7 @@ final class OrganizerStore {
         recoverInterruptedSyncActions(context: "startup")
         refreshSyncQueueSummary()
         refreshSeenHistoryCount()
+        refreshBrowserExecutorStatus()
         processPendingSync(reason: "startup")
         processPendingBrowserSync(reason: "startup")
         startSyncLoop()
@@ -213,8 +217,41 @@ final class OrganizerStore {
         playlistsByVideoId[videoId] ?? []
     }
 
+    func badgeTagForVideo(_ videoId: String, candidateState: String? = nil) -> String? {
+        let playlists = playlistsByVideoId[videoId] ?? []
+        if playlists.contains(where: { $0.playlistId == "WL" }) {
+            return "Watch Later"
+        }
+        if candidateState == CandidateState.saved.rawValue {
+            return "Saved"
+        }
+        return nil
+    }
+
     func seenSummary(for videoId: String) -> SeenVideoSummary? {
         try? store.seenSummary(videoId: videoId)
+    }
+
+    func channelPresentation(for video: VideoViewModel) -> ChannelPresentation {
+        let channelRecord: ChannelRecord? =
+            if let channelId = video.channelId {
+                topicChannels.values
+                    .flatMap { $0 }
+                    .first(where: { $0.channelId == channelId })
+            } else if let channelName = video.channelName {
+                topicChannels.values
+                    .flatMap { $0 }
+                    .first(where: { $0.name == channelName })
+            } else {
+                nil
+            }
+
+        return ChannelPresentation(
+            name: video.channelName ?? channelRecord?.name,
+            channelUrl: channelRecord?.channelUrl ?? video.channelId.flatMap { "https://www.youtube.com/channel/\($0)" },
+            iconUrl: channelRecord?.iconUrl ?? video.channelIconUrl,
+            iconData: channelRecord?.iconData
+        )
     }
 
     func videoIsInSelectedPlaylist(_ videoId: String) -> Bool {
@@ -238,13 +275,36 @@ final class OrganizerStore {
     }
 
     func moreFromChannel(videoId: String, limit: Int = 6) -> [VideoViewModel] {
-        guard let video = videoMap[videoId],
-              let channel = video.channelName else { return [] }
-        return Array(
-            videoMap.values
-                .filter { $0.channelName == channel && $0.videoId != videoId }
-                .prefix(limit)
-        )
+        guard let video = videoMap[videoId] else { return [] }
+
+        let matches = videoMap.values.filter { candidate in
+            guard candidate.videoId != videoId else { return false }
+            if let channelId = video.channelId, !channelId.isEmpty {
+                return candidate.channelId == channelId
+            }
+            guard let channelName = video.channelName, !channelName.isEmpty else { return false }
+            return candidate.channelName == channelName
+        }
+
+        let sorted = matches.sorted { lhs, rhs in
+            let lhsDate = parseISO8601Date(lhs.publishedAt ?? "")
+            let rhsDate = parseISO8601Date(rhs.publishedAt ?? "")
+            switch (lhsDate, rhsDate) {
+            case let (l?, r?) where l != r:
+                return l > r
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                if lhs.sourceIndex != rhs.sourceIndex {
+                    return lhs.sourceIndex < rhs.sourceIndex
+                }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        }
+
+        return Array(sorted.prefix(limit))
     }
 
     // Cached channel counts — rebuilt with video maps
@@ -287,6 +347,84 @@ final class OrganizerStore {
     /// Clear channel filter.
     func clearChannelFilter() {
         selectedChannelId = nil
+    }
+
+    @discardableResult
+    func navigateToCreator(channelId: String?, channelName: String?, preferredTopicId: Int64? = nil) -> Int64? {
+        let matchingTopics = topics.compactMap { topic -> Int64? in
+            let channels = channelsForTopic(topic.id)
+            if let channelId, channels.contains(where: { $0.channelId == channelId }) {
+                return topic.id
+            }
+            if let channelName, channels.contains(where: { $0.name == channelName }) {
+                return topic.id
+            }
+            return nil
+        }
+
+        guard !matchingTopics.isEmpty else { return nil }
+
+        let targetTopicId: Int64
+        if let preferredTopicId, matchingTopics.contains(preferredTopicId) {
+            targetTopicId = preferredTopicId
+        } else if let selectedTopicId, matchingTopics.contains(selectedTopicId) {
+            targetTopicId = selectedTopicId
+        } else {
+            targetTopicId = matchingTopics[0]
+        }
+
+        let channels = channelsForTopic(targetTopicId)
+        let resolvedChannel = channels.first(where: { channel in
+            if let channelId, channel.channelId == channelId { return true }
+            if let channelName, channel.name == channelName { return true }
+            return false
+        })
+
+        let targetVideos = videosForTopicIncludingSubtopics(targetTopicId)
+            .filter { video in
+                if let resolvedChannelId = resolvedChannel?.channelId {
+                    return video.channelId == resolvedChannelId
+                }
+                if let channelId, !channelId.isEmpty {
+                    return video.channelId == channelId
+                }
+                if let resolvedChannelName = resolvedChannel?.name {
+                    return video.channelName == resolvedChannelName
+                }
+                if let channelName, !channelName.isEmpty {
+                    return video.channelName == channelName
+                }
+                return false
+            }
+            .sorted { lhs, rhs in
+                let lhsDate = parseISO8601Date(lhs.publishedAt ?? "")
+                let rhsDate = parseISO8601Date(rhs.publishedAt ?? "")
+                switch (lhsDate, rhsDate) {
+                case let (l?, r?) where l != r:
+                    return l > r
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    if lhs.sourceIndex != rhs.sourceIndex {
+                        return lhs.sourceIndex < rhs.sourceIndex
+                    }
+                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                }
+            }
+
+        clearPlaylistFilter()
+        selectedSubtopicId = nil
+        topicDisplayModes[targetTopicId] = .saved
+        hoveredVideoId = nil
+        selectedTopicId = targetTopicId
+        selectedChannelId = resolvedChannel?.channelId ?? channelId
+        inspectedCreatorName = resolvedChannel?.name ?? channelName
+        selectedVideoId = targetVideos.first?.videoId
+
+        AppLogger.discovery.info("Navigated to creator \(self.inspectedCreatorName ?? "", privacy: .public) in topic \(targetTopicId, privacy: .public)")
+        return targetTopicId
     }
 
     func displayMode(for topicId: Int64) -> TopicDisplayMode {
@@ -332,7 +470,7 @@ final class OrganizerStore {
         do {
             let storedCandidates = try store.candidatesForTopic(id: topicId, limit: 36)
             if storedCandidates.isEmpty {
-                return [.placeholder(topicId: topicId, title: "No candidates yet", message: "No unseen candidates were found from the current topic creators.")]
+                return [.placeholder(topicId: topicId, title: "No candidates yet", message: "No unseen candidates were found from this topic’s creators or adjacent saved-library channels.")]
             }
             return storedCandidates.map(CandidateVideoViewModel.init(from:))
         } catch {
@@ -348,7 +486,7 @@ final class OrganizerStore {
         let completed = candidateCompletedChannelsByTopic[topicId] ?? 0
         let total = candidateTotalChannelsByTopic[topicId] ?? 0
         guard total > 0 else { return "Finding candidates for this topic" }
-        return "Scanning top creators: \(completed) of \(total)"
+        return "Scanning discovery channels: \(completed) of \(total)"
     }
 
     func candidateProgressDetail(for topicId: Int64) -> String {
@@ -357,29 +495,24 @@ final class OrganizerStore {
         let channelName = candidateCurrentChannelNameByTopic[topicId]
 
         guard total > 0 else {
-            return "Preparing cached creator archives and candidate ranking."
+            return "Preparing cached archives, adjacent creators, and candidate ranking."
         }
 
         if completed >= total {
-            return "Finished checking \(total) creator\(total == 1 ? "" : "s"). Ranking the freshest archived matches now."
+            return "Finished checking \(total) discovery channel\(total == 1 ? "" : "s"). Ranking the freshest matches now."
         }
 
         if let channelName, !channelName.isEmpty {
-            return "Checking \(channelName)'s archive, fetching fresh uploads if needed, and ranking unseen videos."
+            return "Checking \(channelName)'s archive, fetching only fresh uploads if needed, and ranking unseen videos."
         }
 
         return "Checking creator archives, fetching fresh uploads if needed, and ranking unseen videos."
     }
 
     var candidateProgressOverlay: CandidateProgressOverlayState? {
-        let topicId: Int64?
-        if let selectedTopicId, candidateLoadingTopics.contains(selectedTopicId) {
-            topicId = selectedTopicId
-        } else {
-            topicId = candidateLoadingTopics.sorted().first
-        }
-
-        guard let topicId,
+        guard let topicId = selectedTopicId,
+              displayMode(for: topicId) == .watchCandidates,
+              candidateLoadingTopics.contains(topicId),
               let topic = topics.first(where: { $0.id == topicId })
         else {
             return nil
@@ -455,7 +588,11 @@ final class OrganizerStore {
             rebuildPlaylistMaps()
             candidateRefreshToken += 1
             AppLogger.discovery.info("Queued add_to_playlist for candidate \(videoId, privacy: .public) -> \(playlist.playlistId, privacy: .public)")
-            processPendingSync(reason: "save-candidate")
+            if playlist.playlistId == "WL" {
+                processPendingBrowserSync(reason: "save-candidate-watch-later")
+            } else {
+                processPendingSync(reason: "save-candidate")
+            }
         } catch {
             AppLogger.discovery.error("Failed to queue add_to_playlist for candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
@@ -468,6 +605,66 @@ final class OrganizerStore {
         }
     }
 
+    func saveVideosToWatchLater(videoIds: [String]) {
+        let watchLater = PlaylistRecord(
+            playlistId: "WL",
+            title: "Watch Later",
+            visibility: "Private",
+            source: "queued",
+            fetchedAt: ISO8601DateFormatter().string(from: Date())
+        )
+        saveVideosToPlaylist(videoIds: videoIds, playlist: watchLater)
+    }
+
+    func saveVideosToPlaylist(videoIds: [String], playlist: PlaylistRecord) {
+        do {
+            try store.upsertPlaylist(playlist)
+            let now = ISO8601DateFormatter().string(from: Date())
+            for videoId in videoIds {
+                if playlistsByVideoId[videoId]?.contains(where: { $0.playlistId == playlist.playlistId }) == true {
+                    continue
+                }
+                try store.addPlaylistMembership(PlaylistMembershipRecord(
+                    playlistId: playlist.playlistId,
+                    videoId: videoId,
+                    position: nil,
+                    verifiedAt: now
+                ))
+                try store.queueCommit(action: "add_to_playlist", videoId: videoId, playlist: playlist.playlistId)
+            }
+
+            rebuildPlaylistMaps()
+            AppLogger.discovery.info("Queued add_to_playlist for \(videoIds.count, privacy: .public) saved videos -> \(playlist.playlistId, privacy: .public)")
+            if playlist.playlistId == "WL" {
+                processPendingBrowserSync(reason: "save-library-videos-watch-later")
+            } else {
+                processPendingSync(reason: "save-library-videos")
+            }
+        } catch {
+            AppLogger.discovery.error("Failed to queue add_to_playlist for saved videos: \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func removeVideosFromPlaylist(videoIds: [String], playlist: PlaylistRecord) {
+        do {
+            for videoId in videoIds {
+                guard playlistsByVideoId[videoId]?.contains(where: { $0.playlistId == playlist.playlistId }) == true else {
+                    continue
+                }
+                try store.removePlaylistMembership(playlistId: playlist.playlistId, videoId: videoId)
+                try store.queueCommit(action: "remove_from_playlist", videoId: videoId, playlist: playlist.playlistId)
+            }
+
+            rebuildPlaylistMaps()
+            AppLogger.discovery.info("Queued remove_from_playlist for \(videoIds.count, privacy: .public) saved videos <- \(playlist.playlistId, privacy: .public)")
+            processPendingSync(reason: "remove-library-videos")
+        } catch {
+            AppLogger.discovery.error("Failed to queue remove_from_playlist for saved videos: \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func markCandidateNotInterested(topicId: Int64, videoId: String) {
         do {
             try store.queueCommit(action: "not_interested", videoId: videoId, playlist: "__youtube__")
@@ -476,8 +673,13 @@ final class OrganizerStore {
             AppLogger.discovery.info("Queued not_interested for candidate \(videoId, privacy: .public)")
             alert = AppAlertState(
                 title: "Queued Not Interested",
-                message: "This candidate was hidden locally. The direct YouTube action still needs browser automation, so it remains queued for a future sync path."
+                message: browserExecutorReady
+                    ? "This candidate was hidden locally and queued for browser sync to YouTube."
+                    : "This candidate was hidden locally. The direct YouTube action is queued, but the browser executor is not signed into YouTube yet."
             )
+            if browserExecutorReady {
+                processPendingBrowserSync(reason: "not-interested")
+            }
         } catch {
             AppLogger.discovery.error("Failed to queue not_interested for candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
@@ -624,9 +826,12 @@ final class OrganizerStore {
         Task {
             do {
                 try await BrowserSyncService(repoRoot: resolveRepoRoot()).openLoginSetup()
+                bringBrowserSyncWindowToFront()
+                browserExecutorReady = false
+                browserExecutorStatusMessage = "Browser sign-in window opened. Sign in to YouTube there if needed, then return here and click Refresh sync status."
                 alert = AppAlertState(
                     title: "Browser Sign-In Opened",
-                    message: "A persistent Playwright browser window was opened. Sign in to YouTube there once, then future browser fallback actions can run through that profile."
+                    message: "A dedicated Chrome profile window was opened for browser fallback actions. Sign in to YouTube there if needed, then refresh sync status here."
                 )
             } catch {
                 alert = AppAlertState(
@@ -637,8 +842,62 @@ final class OrganizerStore {
         }
     }
 
+    private func bringBrowserSyncWindowToFront() {
+        if let runningChrome = NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").first {
+            runningChrome.activate(options: [.activateAllWindows])
+            return
+        }
+
+        if let chromeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.openApplication(at: chromeURL, configuration: configuration)
+        }
+    }
+
     func refreshSyncQueueSummary() {
         syncQueueSummary = (try? store.syncQueueSummary()) ?? SyncQueueSummary(queued: 0, retrying: 0, deferred: 0, inProgress: 0, browserDeferred: 0)
+    }
+
+    func refreshBrowserExecutorStatus() {
+        browserStatusTask?.cancel()
+        browserExecutorStatusMessage = "Checking browser executor status…"
+        let repoRoot = resolveRepoRoot()
+        browserStatusTask = Task.detached(priority: .userInitiated) {
+            let resolvedStatus: BrowserExecutorStatus
+            do {
+                resolvedStatus = try await withThrowingTaskGroup(of: BrowserExecutorStatus.self) { group in
+                    group.addTask {
+                        try await BrowserSyncService(repoRoot: repoRoot).status()
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(5))
+                        return BrowserExecutorStatus(
+                            ready: false,
+                            message: "Browser status check timed out. If the sign-in window is open, finish there and then refresh sync status."
+                        )
+                    }
+
+                    guard let first = try await group.next() else {
+                        throw CancellationError()
+                    }
+                    group.cancelAll()
+                    return first
+                }
+            } catch {
+                resolvedStatus = BrowserExecutorStatus(
+                    ready: false,
+                    message: error.localizedDescription
+                )
+            }
+
+            if Task.isCancelled { return }
+            await MainActor.run {
+                self.browserExecutorReady = resolvedStatus.ready
+                self.browserExecutorStatusMessage = resolvedStatus.message
+                self.browserStatusTask = nil
+            }
+        }
     }
 
     func openBrowserSyncArtifactsFolder() {
@@ -1013,33 +1272,26 @@ final class OrganizerStore {
             AppLogger.discovery.info("Finished candidate refresh for topic \(topicId, privacy: .public)")
         }
 
-        guard let youtubeClient else {
-            candidateErrors[topicId] = "No YouTube API key found. Configure `YOUTUBE_API_KEY` or `~/.config/youtube/api-key`."
-            AppLogger.discovery.error("Cannot refresh candidates for topic \(topicId, privacy: .public): missing YouTube client")
-            return
-        }
-
         do {
-            let scanLimit = candidateCreatorScanLimit(for: topicId)
-            let channels = Array(channelsForTopic(topicId).prefix(scanLimit))
-            let channelIds = channels.map(\.channelId)
-            AppLogger.discovery.debug("Candidate refresh topic \(topicId, privacy: .public) using \(channels.count, privacy: .public) channels")
-            guard !channelIds.isEmpty else {
+            let channelPlans = candidateChannelPlans(for: topicId)
+            AppLogger.discovery.debug("Candidate refresh topic \(topicId, privacy: .public) using \(channelPlans.count, privacy: .public) discovery channels")
+            guard !channelPlans.isEmpty else {
                 try store.replaceCandidates(forTopic: topicId, candidates: [], sources: [])
-                AppLogger.discovery.info("Topic \(topicId, privacy: .public) has no associated channels; cleared candidates")
+                AppLogger.discovery.info("Topic \(topicId, privacy: .public) has no associated discovery channels; cleared candidates")
                 return
             }
 
             let existingVideoIds = Set(videosForTopicIncludingSubtopics(topicId).map(\.videoId))
             var aggregate: [String: AggregatedCandidate] = [:]
-            let totalChannels = max(channels.count, 1)
+            let totalChannels = max(channelPlans.count, 1)
             var completedChannels = 0
-            candidateTotalChannelsByTopic[topicId] = channels.count
+            candidateTotalChannelsByTopic[topicId] = channelPlans.count
             candidateCompletedChannelsByTopic[topicId] = 0
-            candidateCurrentChannelNameByTopic[topicId] = channels.first?.name
+            candidateCurrentChannelNameByTopic[topicId] = channelPlans.first?.channel.name
             candidateRefreshToken += 1
 
-            for channel in channels {
+            for plan in channelPlans {
+                let channel = plan.channel
                 candidateCurrentChannelNameByTopic[topicId] = channel.name
                 candidateRefreshToken += 1
                 let archived = try await refreshChannelArchiveIfNeeded(channel: channel, youtubeClient: youtubeClient)
@@ -1050,9 +1302,10 @@ final class OrganizerStore {
                         video: video,
                         topicId: topicId,
                         channel: channel,
-                        sourceKind: "channel_archive_recent",
-                        sourceRef: channel.channelId,
-                        creatorAffinity: videoCountForChannel(channel.channelId, inTopic: topicId),
+                        sourceKind: plan.sourceKind,
+                        sourceRef: plan.sourceRef,
+                        creatorAffinity: plan.creatorAffinity,
+                        reasonHint: plan.reasonHint,
                         existingVideoIds: existingVideoIds,
                         aggregate: &aggregate
                     )
@@ -1117,6 +1370,7 @@ final class OrganizerStore {
         sourceKind: String,
         sourceRef: String,
         creatorAffinity: Int,
+        reasonHint: String?,
         existingVideoIds: Set<String>,
         aggregate: inout [String: AggregatedCandidate]
     ) {
@@ -1143,26 +1397,43 @@ final class OrganizerStore {
         let archivalBonus = 0
         let creatorBonus = min(creatorAffinity, 16)
         let qualityBonus = min(parseViewCount(video.viewCount ?? "") / 75_000, 6)
-        let freshnessSourceBonus = sourceKind == "channel_archive_recent" ? 10 : 0
-        let score = Double(
-            freshnessSourceBonus +
-            recencyBonus * 4 +
-            creatorBonus * 3 +
-            archivalBonus * 2 +
-            qualityBonus
-        )
-
-        let reason: String = if sourceKind == "channel_archive_recent" {
-            "Fresh upload from a creator already in this topic"
-        } else {
-            "Older popular video from a creator you already watch here"
+        let sourceScore: (freshness: Int, creatorWeight: Int, bonus: Int)
+        let reason: String
+        switch sourceKind {
+        case "channel_archive_recent":
+            sourceScore = (freshness: 10, creatorWeight: 3, bonus: 0)
+            reason = "Fresh upload from a creator already in this topic"
+        case "playlist_adjacent_recent":
+            sourceScore = (freshness: 6, creatorWeight: 2, bonus: 8)
+            if let reasonHint, !reasonHint.isEmpty {
+                reason = "Fresh upload from a creator adjacent to this topic via \(reasonHint)"
+            } else {
+                reason = "Fresh upload from a creator adjacent to this topic in your saved library"
+            }
+        default:
+            sourceScore = (freshness: 4, creatorWeight: 2, bonus: 0)
+            reason = "Recent candidate from a related creator"
         }
+        let score = Double(
+            sourceScore.freshness +
+            recencyBonus * 4 +
+            creatorBonus * sourceScore.creatorWeight +
+            archivalBonus * 2 +
+            qualityBonus +
+            sourceScore.bonus
+        )
 
         if var existing = aggregate[video.videoId] {
             existing.score += score + 3
-            existing.reason = existing.reason.contains("Recent upload") || reason.contains("Recent upload")
-                ? "Recent and popular pick from a creator already in this topic"
-                : existing.reason
+            let nowHasCoreSource = existing.sources.contains(where: { $0.kind == "channel_archive_recent" }) || sourceKind == "channel_archive_recent"
+            let nowHasAdjacentSource = existing.sources.contains(where: { $0.kind == "playlist_adjacent_recent" }) || sourceKind == "playlist_adjacent_recent"
+            if nowHasCoreSource && nowHasAdjacentSource {
+                existing.reason = "Fresh upload connected to this topic and your saved playlists"
+            } else if sourceKind == "playlist_adjacent_recent" {
+                existing.reason = reason
+            } else if sourceKind == "channel_archive_recent" {
+                existing.reason = "Fresh upload from a creator already in this topic"
+            }
             existing.sources.insert(CandidateSource(kind: sourceKind, ref: sourceRef))
             aggregate[video.videoId] = existing
         } else {
@@ -1182,11 +1453,28 @@ final class OrganizerStore {
         }
     }
 
-    private func refreshChannelArchiveIfNeeded(channel: ChannelRecord, youtubeClient: YouTubeClient) async throws -> [ArchivedChannelVideo] {
+    private func refreshChannelArchiveIfNeeded(channel: ChannelRecord, youtubeClient: YouTubeClient?) async throws -> [ArchivedChannelVideo] {
+        let existingArchive = try store.archivedVideosForChannels([channel.channelId], perChannelLimit: 24)
+        let knownVideoIDs = try store.archivedVideoIDsForChannel(channel.channelId)
         let lastScannedAt = try store.channelDiscoveryLastScannedAt(channelId: channel.channelId)
-        if shouldRefreshArchive(lastScannedAt: lastScannedAt) {
-            AppLogger.discovery.debug("Refreshing archive for channel \(channel.channelId, privacy: .public)")
-            let recent = try await youtubeClient.fetchRecentChannelUploads(channelId: channel.channelId, maxResults: 16)
+        guard shouldRefreshArchive(lastScannedAt: lastScannedAt) else {
+            return existingArchive
+        }
+
+        AppLogger.discovery.debug("Refreshing archive for channel \(channel.channelId, privacy: .public)")
+
+        do {
+            guard let youtubeClient else {
+                throw DiscoveryFallbackError.executionFailed("YouTube API key unavailable; using public discovery fallback.")
+            }
+
+            let incremental = try await youtubeClient.fetchIncrementalChannelUploads(
+                channelId: channel.channelId,
+                knownVideoIDs: knownVideoIDs,
+                maxNewResults: 24,
+                maxPages: 4
+            )
+            let recent = incremental.videos
             let scannedAt = ISO8601DateFormatter().string(from: Date())
             let archived = recent.map { video in
                 ArchivedChannelVideo(
@@ -1202,9 +1490,49 @@ final class OrganizerStore {
                 )
             }
             try store.upsertChannelDiscoveryArchive(channelId: channel.channelId, videos: archived, scannedAt: scannedAt)
-        }
+            AppLogger.discovery.info(
+                "Channel \(channel.channelId, privacy: .public) archive refresh via API: \(recent.count, privacy: .public) new uploads, \(incremental.pagesFetched, privacy: .public) page(s) fetched, hit known video: \(incremental.hitKnownVideo, privacy: .public)"
+            )
+            return try store.archivedVideosForChannels([channel.channelId], perChannelLimit: 24)
+        } catch {
+            if let youtubeError = error as? YouTubeError, youtubeError.isQuotaExceeded {
+                AppLogger.discovery.info("YouTube API quota exhausted for channel \(channel.channelId, privacy: .public); using public discovery fallback")
+            } else {
+                AppLogger.discovery.info("Primary channel discovery failed for \(channel.channelId, privacy: .public); trying public fallback: \(error.localizedDescription, privacy: .public)")
+            }
 
-        return try store.archivedVideosForChannels([channel.channelId], perChannelLimit: 24)
+            do {
+                let repoRoot = resolveRepoRoot()
+                let recent = try await DiscoveryFallbackService(repoRoot: repoRoot)
+                    .fetchRecentChannelUploads(channelId: channel.channelId, maxResults: 16)
+                    .filter { !knownVideoIDs.contains($0.videoId) }
+                let scannedAt = ISO8601DateFormatter().string(from: Date())
+                let archived = recent.map { video in
+                    ArchivedChannelVideo(
+                        channelId: channel.channelId,
+                        videoId: video.videoId,
+                        title: video.title,
+                        channelName: video.channelTitle ?? channel.name,
+                        publishedAt: video.publishedAt,
+                        duration: video.duration,
+                        viewCount: video.viewCount,
+                        channelIconUrl: channel.iconUrl,
+                        fetchedAt: scannedAt
+                    )
+                }
+                try store.upsertChannelDiscoveryArchive(channelId: channel.channelId, videos: archived, scannedAt: scannedAt)
+                AppLogger.discovery.info(
+                    "Channel \(channel.channelId, privacy: .public) archive refresh via fallback: \(recent.count, privacy: .public) new uploads"
+                )
+                return try store.archivedVideosForChannels([channel.channelId], perChannelLimit: 24)
+            } catch {
+                if !existingArchive.isEmpty {
+                    AppLogger.discovery.error("Fallback discovery failed for \(channel.channelId, privacy: .public); using stale archive: \(error.localizedDescription, privacy: .public)")
+                    return existingArchive
+                }
+                throw error
+            }
+        }
     }
 }
 
@@ -1221,6 +1549,183 @@ private extension OrganizerStore {
         default:
             return 16
         }
+    }
+
+    func candidateExploratoryScanLimit(for topicId: Int64) -> Int {
+        let count = channelsForTopic(topicId).count
+        switch count {
+        case 0...6:
+            return 2
+        case 7...12:
+            return 3
+        case 13...24:
+            return 4
+        default:
+            return 6
+        }
+    }
+
+    func candidateChannelPlans(for topicId: Int64) -> [CandidateChannelPlan] {
+        let coreChannels = Array(channelsForTopic(topicId).prefix(candidateCreatorScanLimit(for: topicId)))
+        var plans = coreChannels.map {
+            CandidateChannelPlan(
+                channel: $0,
+                sourceKind: "channel_archive_recent",
+                sourceRef: $0.channelId,
+                creatorAffinity: videoCountForChannel($0.channelId, inTopic: topicId),
+                reasonHint: nil
+            )
+        }
+
+        let excluded = Set(coreChannels.map(\.channelId))
+        let exploratory = exploratoryChannelsForTopic(
+            topicId,
+            excluding: excluded,
+            limit: candidateExploratoryScanLimit(for: topicId)
+        )
+        plans.append(contentsOf: exploratory.map {
+            CandidateChannelPlan(
+                channel: $0.channel,
+                sourceKind: "playlist_adjacent_recent",
+                sourceRef: $0.sourceRef,
+                creatorAffinity: $0.affinity,
+                reasonHint: $0.reasonHint
+            )
+        })
+        return plans
+    }
+
+    func exploratoryChannelsForTopic(_ topicId: Int64, excluding excludedChannelIds: Set<String>, limit: Int) -> [ExploratoryChannelCandidate] {
+        guard limit > 0 else { return [] }
+
+        let topicVideos = videosForTopicIncludingSubtopics(topicId)
+        let topicVideoIds = Set(topicVideos.map(\.videoId))
+        guard !topicVideos.isEmpty else { return [] }
+
+        var playlistWeights: [String: Double] = [:]
+        var playlistTitles: [String: String] = [:]
+        for video in topicVideos {
+            for playlist in playlistsByVideoId[video.videoId] ?? [] {
+                guard isUsefulDiscoveryPlaylist(playlist) else { continue }
+                let videoCount = max(playlist.videoCount ?? 0, 1)
+                let weight = 1.0 / max(log10(Double(max(videoCount, 10))), 1.0)
+                playlistWeights[playlist.playlistId, default: 0] += weight
+                playlistTitles[playlist.playlistId] = playlist.title
+            }
+        }
+
+        guard !playlistWeights.isEmpty else { return [] }
+
+        var overlapByChannel: [String: (score: Double, bestPlaylistId: String, sampleVideo: VideoViewModel)] = [:]
+        for (videoId, playlists) in playlistsByVideoId {
+            guard !topicVideoIds.contains(videoId),
+                  let video = videoMap[videoId],
+                  let channelId = video.channelId,
+                  !channelId.isEmpty,
+                  !excludedChannelIds.contains(channelId)
+            else {
+                continue
+            }
+
+            var overlapScore = 0.0
+            var bestPlaylist: (id: String, score: Double)?
+            for playlist in playlists {
+                guard let weight = playlistWeights[playlist.playlistId] else { continue }
+                overlapScore += weight
+                if bestPlaylist == nil || weight > bestPlaylist!.score {
+                    bestPlaylist = (playlist.playlistId, weight)
+                }
+            }
+
+            guard overlapScore > 0, let bestPlaylist else { continue }
+
+            let current = overlapByChannel[channelId]
+            if let current {
+                overlapByChannel[channelId] = (
+                    current.score + overlapScore,
+                    current.bestPlaylistId,
+                    current.sampleVideo
+                )
+            } else {
+                overlapByChannel[channelId] = (overlapScore, bestPlaylist.id, video)
+            }
+        }
+
+        return overlapByChannel
+            .sorted { lhs, rhs in
+                if lhs.value.score == rhs.value.score {
+                    let lhsDate = parseISO8601Date(lhs.value.sampleVideo.publishedAt ?? "")
+                    let rhsDate = parseISO8601Date(rhs.value.sampleVideo.publishedAt ?? "")
+                    switch (lhsDate, rhsDate) {
+                    case let (l?, r?) where l != r:
+                        return l > r
+                    case (_?, nil):
+                        return true
+                    case (nil, _?):
+                        return false
+                    default:
+                        return lhs.key.localizedStandardCompare(rhs.key) == .orderedAscending
+                    }
+                }
+                return lhs.value.score > rhs.value.score
+            }
+            .prefix(limit)
+            .compactMap { channelId, entry in
+                guard let channel = resolveChannelRecord(
+                    channelId: channelId,
+                    fallbackName: entry.sampleVideo.channelName,
+                    fallbackIconURL: entry.sampleVideo.channelIconUrl
+                ) else {
+                    return nil
+                }
+
+                return ExploratoryChannelCandidate(
+                    channel: channel,
+                    affinity: max(Int(round(entry.score * 10)), 1),
+                    sourceRef: entry.bestPlaylistId,
+                    reasonHint: playlistTitles[entry.bestPlaylistId]
+                )
+            }
+    }
+
+    func isUsefulDiscoveryPlaylist(_ playlist: PlaylistRecord) -> Bool {
+        if playlist.playlistId == "WL" {
+            return false
+        }
+
+        let normalized = playlist.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == "old watch" || normalized == "watch later" {
+            return false
+        }
+
+        if let videoCount = playlist.videoCount, videoCount > 800 {
+            return false
+        }
+
+        return true
+    }
+
+    func resolveChannelRecord(channelId: String, fallbackName: String?, fallbackIconURL: String?) -> ChannelRecord? {
+        if let existing = topicChannels.values
+            .flatMap({ $0 })
+            .first(where: { $0.channelId == channelId }) {
+            return existing
+        }
+
+        if let fromStore = try? store.channelById(channelId) {
+            return fromStore
+        }
+
+        guard let fallbackName, !fallbackName.isEmpty else {
+            return nil
+        }
+
+        return ChannelRecord(
+            channelId: channelId,
+            name: fallbackName,
+            channelUrl: "https://www.youtube.com/channel/\(channelId)",
+            iconUrl: fallbackIconURL
+        )
     }
 
     func shouldUseCachedCandidates(for topicId: Int64) -> Bool {
@@ -1280,7 +1785,7 @@ enum TopicDisplayMode: String, CaseIterable, Sendable {
         case .saved:
             return "Saved"
         case .watchCandidates:
-            return "Watch Candidates"
+            return "Watch"
         }
     }
 }
@@ -1323,6 +1828,21 @@ struct TypeaheadSuggestion: Identifiable {
 private struct CandidateSource: Hashable {
     let kind: String
     let ref: String
+}
+
+private struct CandidateChannelPlan {
+    let channel: ChannelRecord
+    let sourceKind: String
+    let sourceRef: String
+    let creatorAffinity: Int
+    let reasonHint: String?
+}
+
+private struct ExploratoryChannelCandidate {
+    let channel: ChannelRecord
+    let affinity: Int
+    let sourceRef: String
+    let reasonHint: String?
 }
 
 private struct AggregatedCandidate {
@@ -1431,6 +1951,13 @@ struct InspectedVideoViewModel {
     let seenSummary: SeenVideoSummary?
 }
 
+struct ChannelPresentation {
+    let name: String?
+    let channelUrl: String?
+    let iconUrl: String?
+    let iconData: Data?
+}
+
 struct CandidateVideoViewModel: Identifiable, Hashable {
     let topicId: Int64
     let videoId: String
@@ -1443,6 +1970,7 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
     let channelIconUrl: String?
     let score: Double
     let secondaryText: String?
+    let state: String
     let isPlaceholder: Bool
 
     var id: String { "\(topicId)-\(videoId)" }
@@ -1464,6 +1992,7 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
         channelIconUrl: String?,
         score: Double,
         secondaryText: String?,
+        state: String,
         isPlaceholder: Bool
     ) {
         self.topicId = topicId
@@ -1477,6 +2006,7 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
         self.channelIconUrl = channelIconUrl
         self.score = score
         self.secondaryText = secondaryText
+        self.state = state
         self.isPlaceholder = isPlaceholder
     }
 
@@ -1493,6 +2023,7 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
             channelIconUrl: stored.channelIconUrl,
             score: stored.score,
             secondaryText: stored.reason,
+            state: stored.state,
             isPlaceholder: false
         )
     }
@@ -1510,6 +2041,7 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
             channelIconUrl: nil,
             score: 0,
             secondaryText: message,
+            state: CandidateState.candidate.rawValue,
             isPlaceholder: true
         )
     }

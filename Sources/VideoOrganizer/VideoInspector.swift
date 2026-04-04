@@ -4,6 +4,7 @@ import TaggingKit
 struct VideoInspector: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache
+    @Bindable var displaySettings: DisplaySettings
 
     private var inspectedItem: InspectedVideoViewModel? { store.inspectedItem }
     private var video: VideoViewModel? { inspectedItem?.video }
@@ -40,6 +41,7 @@ struct VideoInspector: View {
 
     private func inspectorContent(_ inspectedItem: InspectedVideoViewModel) -> some View {
         let video = inspectedItem.video
+        let channelPresentation = store.channelPresentation(for: video)
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 ThumbnailView(videoId: video.videoId, thumbnailUrl: video.thumbnailUrl, cacheDir: thumbnailCache.cacheDirURL)
@@ -50,24 +52,37 @@ struct VideoInspector: View {
                         .font(.title3.weight(.semibold))
                         .textSelection(.enabled)
 
-                    if let channel = video.channelName {
-                        HStack(spacing: 10) {
-                            if let iconUrl = video.channelIconUrl.flatMap({ URL(string: $0) }) {
-                                AsyncImage(url: iconUrl) { phase in
-                                    if case .success(let image) = phase {
-                                        image.resizable()
-                                    } else {
-                                        Image(systemName: "person.circle.fill")
-                                            .resizable()
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                }
-                                .frame(width: 28, height: 28)
-                                .clipShape(Circle())
+                    if let channel = channelPresentation.name {
+                        Button {
+                            if let topicId = store.navigateToCreator(
+                                channelId: video.channelId,
+                                channelName: channel,
+                                preferredTopicId: video.topicId
+                            ) {
+                                displaySettings.scrollToTopicRequested = topicId
                             }
-                            HighlightedText(channel, terms: store.parsedQuery.includeTerms)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.secondary)
+                        } label: {
+                            HStack(spacing: 10) {
+                                channelAvatar(channelPresentation)
+                                HighlightedText(channel, terms: store.parsedQuery.includeTerms)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show this creator in the library")
+                        .contentShape(Rectangle())
+                        .onDoubleClick {
+                            if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
+                                NSWorkspace.shared.open(channelUrl)
+                            }
+                        }
+                        .contextMenu {
+                            if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
+                                Button("Open Channel on YouTube") {
+                                    NSWorkspace.shared.open(channelUrl)
+                                }
+                            }
                         }
                     }
 
@@ -94,6 +109,33 @@ struct VideoInspector: View {
                 }
                 .padding(16)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func channelAvatar(_ presentation: ChannelPresentation) -> some View {
+        if let data = presentation.iconData, let nsImage = NSImage(data: data) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+        } else if let iconUrl = presentation.iconUrl.flatMap(URL.init(string:)) {
+            AsyncImage(url: iconUrl) { phase in
+                if case .success(let image) = phase {
+                    image.resizable()
+                } else {
+                    Image(systemName: "person.circle.fill")
+                        .resizable()
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .clipShape(Circle())
+        } else {
+            Image(systemName: "person.circle.fill")
+                .resizable()
+                .foregroundStyle(.tertiary)
+                .frame(width: 28, height: 28)
         }
     }
 

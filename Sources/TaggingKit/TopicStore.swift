@@ -872,7 +872,7 @@ public final class TopicStore: Sendable {
             LEFT JOIN candidate_state s
               ON s.topic_id = c.topic_id AND s.video_id = c.video_id
             WHERE c.topic_id = ?
-              AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched', 'saved')
+              AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched')
               AND NOT EXISTS (
                   SELECT 1
                   FROM seen_videos sv
@@ -917,7 +917,7 @@ public final class TopicStore: Sendable {
               ON s.topic_id = c.topic_id AND s.video_id = c.video_id
             WHERE c.topic_id = ?
               AND c.video_id = ?
-              AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched', 'saved')
+              AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched')
               AND NOT EXISTS (
                   SELECT 1
                   FROM seen_videos sv
@@ -1033,6 +1033,14 @@ public final class TopicStore: Sendable {
         return results
     }
 
+    public func archivedVideoIDsForChannel(_ channelId: String) throws -> Set<String> {
+        let query = channelDiscoveryArchive
+            .filter(archiveChannelId == channelId)
+            .select(archiveVideoId)
+
+        return Set(try db.prepare(query).map { $0[archiveVideoId] })
+    }
+
     public func channelDiscoveryLastScannedAt(channelId: String) throws -> String? {
         for row in try db.prepare(channelDiscoveryState.filter(archiveChannelId == channelId).select(discoveryStateLastScannedAt)) {
             return row[discoveryStateLastScannedAt]
@@ -1105,10 +1113,19 @@ public final class TopicStore: Sendable {
         ))
     }
 
+    public func removePlaylistMembership(playlistId pid: String, videoId vid: String) throws {
+        try db.run(playlistMemberships.filter(membershipPlaylistId == pid && membershipVideoId == vid).delete())
+    }
+
     // MARK: - Commit Table
 
     public func queueCommit(action: String, videoId vid: String, playlist: String) throws {
-        let executor: SyncExecutorKind = action == "not_interested" ? .browser : .api
+        let executor: SyncExecutorKind
+        if action == "not_interested" || (action == "add_to_playlist" && playlist == "WL") {
+            executor = .browser
+        } else {
+            executor = .api
+        }
         let now = ISO8601DateFormatter().string(from: Date())
         try db.run(commitLog.insert(
             commitAction <- action,

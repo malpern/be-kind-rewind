@@ -41,8 +41,23 @@ async function waitForText(page, text, timeout = 15000) {
 
 async function ensureSignedIn(page) {
   await page.goto("https://www.youtube.com/", { waitUntil: "domcontentloaded" });
-  if (await page.getByText("Sign in", { exact: false }).count()) {
+  const signInLink = page.getByRole("link", { name: /sign in/i }).first();
+  const signInButton = page.getByRole("button", { name: /sign in/i }).first();
+  if (await signInLink.count() || await signInButton.count()) {
     throw new Error("YouTube browser executor is not signed in. Use the persistent profile and sign in first.");
+  }
+}
+
+async function checkSignedInStatus(context) {
+  const page = context.pages()[0] ?? await context.newPage();
+  try {
+    await ensureSignedIn(page);
+    return { ready: true, message: "Signed in to YouTube" };
+  } catch (error) {
+    return {
+      ready: false,
+      message: error instanceof Error ? error.message : String(error)
+    };
   }
 }
 
@@ -99,33 +114,54 @@ async function saveToPlaylist(page, action) {
 
 async function markNotInterested(page, action) {
   await page.goto(`https://www.youtube.com/watch?v=${action.videoId}`, { waitUntil: "domcontentloaded" });
-  const moreButton = page.locator('button[aria-label*="Action menu"]').first();
+  const moreButton = page.locator('button[aria-label*="Action menu"], button[aria-label*="More actions"], ytd-menu-renderer button').first();
+  await moreButton.waitFor({ timeout: 15000 });
   await moreButton.click();
+
   const menuItem = page.getByRole("menuitem", { name: /not interested/i }).first();
-  await menuItem.click();
+  const buttonFallback = page.getByRole("button", { name: /not interested/i }).first();
+
+  if (await menuItem.count()) {
+    await menuItem.click();
+  } else if (await buttonFallback.count()) {
+    await buttonFallback.click();
+  } else {
+    throw new Error("Could not find the Not Interested action in YouTube's action menu.");
+  }
+
+  await page.waitForTimeout(750);
 }
 
 async function main() {
   const args = parseArgs(process.argv);
   const actionsPath = args["actions-json"];
   const setupLogin = args["setup-login"] === "true";
-  if (!actionsPath && !setupLogin) {
+  const checkLogin = args["check-login"] === "true";
+  if (!actionsPath && !setupLogin && !checkLogin) {
     fail("Missing --actions-json");
   }
 
   const profileDir = args["profile-dir"] || path.join(os.homedir(), ".config", "be-kind-rewind", "playwright-profile");
   const artifactDir = args["artifact-dir"] || path.join(process.cwd(), "output", "playwright", "browser-sync");
   const headed = args["headed"] !== "false";
-  const actions = setupLogin ? [] : await loadActions(actionsPath);
+  const actions = (setupLogin || checkLogin) ? [] : await loadActions(actionsPath);
 
   const context = await chromium.launchPersistentContext(profileDir, {
+    channel: "chrome",
     headless: !headed,
-    viewport: { width: 1440, height: 960 }
+    viewport: { width: 1440, height: 960 },
+    ignoreDefaultArgs: ["--enable-automation", "--no-sandbox"]
   });
 
   try {
     if (setupLogin) {
       await runLoginSetup(context);
+      return;
+    }
+
+    if (checkLogin) {
+      const status = await checkSignedInStatus(context);
+      process.stdout.write(JSON.stringify(status, null, 2));
       return;
     }
 

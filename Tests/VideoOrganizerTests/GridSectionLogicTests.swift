@@ -22,6 +22,7 @@ private func makeGridVideo(
         duration: duration,
         channelIconUrl: channelIconURL.flatMap(URL.init(string:)),
         channelId: channelId,
+        stateTag: nil,
         isPlaceholder: false,
         placeholderMessage: nil
     )

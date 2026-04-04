@@ -6,6 +6,15 @@ cd "$(dirname "$0")"
 echo "Building VideoOrganizer..."
 swift build
 
+DISCOVERY_VENV=".runtime/discovery-venv"
+DISCOVERY_PYTHON="$DISCOVERY_VENV/bin/python3"
+DISCOVERY_REQUIREMENTS="scripts/requirements-discovery.txt"
+
+echo "Preparing discovery Python environment..."
+/usr/bin/python3 -m venv "$DISCOVERY_VENV"
+"$DISCOVERY_PYTHON" -m pip install --upgrade pip >/dev/null
+"$DISCOVERY_PYTHON" -m pip install -r "$DISCOVERY_REQUIREMENTS" >/dev/null
+
 BUILT_APP=".build/debug/VideoOrganizerApp"
 if [[ ! -x "$BUILT_APP" ]]; then
   echo "error: expected built app at $BUILT_APP" >&2

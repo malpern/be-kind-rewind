@@ -46,7 +46,7 @@ struct VideoTaggerCommand: AsyncParsableCommand {
         commandName: "video-tagger",
         abstract: "Organize YouTube videos into topics using Claude AI.",
         version: "0.2.0",
-        subcommands: [Suggest.self, Reclassify.self, ReclassifyAll.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self, EnrichChannels.self, GenerateSubtopics.self, ImportPlaylists.self, ImportSeenHistory.self, VerifyPlaylistMembership.self, VerifyAllPlaylistMemberships.self, SyncPendingActions.self, BrowserSyncLogin.self, OAuthStatus.self, OAuthAuthURL.self, OAuthExchange.self, OAuthRefresh.self]
+        subcommands: [Suggest.self, Reclassify.self, ReclassifyAll.self, SubTopics.self, TopicsList.self, Preview.self, SplitTopic.self, MergeTopics.self, RenameTopic.self, DeleteTopic.self, Status.self, BackfillMetadata.self, EnrichChannels.self, GenerateSubtopics.self, ImportPlaylists.self, ImportSeenHistory.self, VerifyPlaylistMembership.self, VerifyAllPlaylistMemberships.self, SyncPendingActions.self, BrowserSyncLogin.self, BrowserStatus.self, OAuthStatus.self, OAuthAuthURL.self, OAuthExchange.self, OAuthRefresh.self]
     )
 }
 
@@ -565,6 +565,20 @@ struct BrowserSyncLogin: AsyncParsableCommand {
         let repoRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         try await BrowserSyncService(repoRoot: repoRoot).openLoginSetup()
         print("Opened Playwright browser profile. Sign in to YouTube in that window, then stop the process when finished.")
+    }
+}
+
+struct BrowserStatus: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "browser-status",
+        abstract: "Report browser executor readiness for browser-backed sync."
+    )
+
+    func run() async throws {
+        let repoRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let status = try await BrowserSyncService(repoRoot: repoRoot).status()
+        print("ready: \(status.ready ? "yes" : "no")")
+        print("message: \(status.message)")
     }
 }
 

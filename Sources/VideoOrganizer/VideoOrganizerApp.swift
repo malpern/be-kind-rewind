@@ -42,7 +42,7 @@ struct VideoOrganizerApp: App {
         }
         .defaultSize(width: 1200, height: 800)
         .commands {
-            AppMenuCommands(displaySettings: displaySettings)
+            AppMenuCommands(displaySettings: displaySettings, store: store)
         }
         Window("About Be Kind, Rewind", id: "about") {
             AboutView()
@@ -150,6 +150,7 @@ struct VideoOrganizerApp: App {
 
 private struct AppMenuCommands: Commands {
     @Bindable var displaySettings: DisplaySettings
+    let store: OrganizerStore?
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -164,6 +165,63 @@ private struct AppMenuCommands: Commands {
                 displaySettings.searchRequested = true
             }
             .keyboardShortcut("f", modifiers: .command)
+        }
+
+        CommandGroup(after: .appSettings) {
+            Button("Save to Watch Later") {
+                NotificationCenter.default.post(name: .videoOrganizerSaveToWatchLater, object: nil)
+            }
+            .keyboardShortcut("w", modifiers: [])
+
+            Button("Save to Playlist…") {
+                NotificationCenter.default.post(name: .videoOrganizerSaveToPlaylist, object: nil)
+            }
+            .keyboardShortcut("p", modifiers: [])
+
+            Button("Move to Playlist…") {
+                NotificationCenter.default.post(name: .videoOrganizerMoveToPlaylist, object: nil)
+            }
+            .keyboardShortcut("p", modifiers: [.shift])
+
+            Button("Dismiss") {
+                NotificationCenter.default.post(name: .videoOrganizerDismissCandidates, object: nil)
+            }
+            .keyboardShortcut("d", modifiers: [])
+
+            Button("Not Interested") {
+                NotificationCenter.default.post(name: .videoOrganizerNotInterested, object: nil)
+            }
+            .keyboardShortcut("n", modifiers: [])
+
+            Divider()
+
+            Button("Open on YouTube") {
+                NotificationCenter.default.post(name: .videoOrganizerOpenOnYouTube, object: nil)
+            }
+            .keyboardShortcut(.return, modifiers: [])
+
+            Button("Clear Selection") {
+                NotificationCenter.default.post(name: .videoOrganizerClearSelection, object: nil)
+            }
+            .keyboardShortcut(.escape, modifiers: [])
+        }
+
+        CommandMenu("Favorites") {
+            if let store {
+                ForEach(Array(store.knownPlaylists().prefix(9).enumerated()), id: \.element.id) { index, playlist in
+                    Button("\(index + 1). \(playlist.title)") {
+                        NotificationCenter.default.post(
+                            name: .videoOrganizerSaveToFavoritePlaylist,
+                            object: nil,
+                            userInfo: ["index": index]
+                        )
+                    }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [])
+                }
+            } else {
+                Button("No Favorite Playlists Available") {}
+                    .disabled(true)
+            }
         }
 
         CommandMenu("View") {
@@ -230,6 +288,47 @@ private struct AppMenuCommands: Commands {
                 displaySettings.showMetadata.toggle()
             }
             .keyboardShortcut("l", modifiers: [.command, .shift])
+        }
+
+        CommandMenu("Actions") {
+            Button("Save to Watch Later") {
+                NotificationCenter.default.post(name: .videoOrganizerSaveToWatchLater, object: nil)
+            }
+            .keyboardShortcut("w", modifiers: [])
+
+            Button("Save to Playlist…") {
+                NotificationCenter.default.post(name: .videoOrganizerSaveToPlaylist, object: nil)
+            }
+            .keyboardShortcut("p", modifiers: [])
+
+            Button("Move to Playlist…") {
+                NotificationCenter.default.post(name: .videoOrganizerMoveToPlaylist, object: nil)
+            }
+            .keyboardShortcut("p", modifiers: [.shift])
+
+            Divider()
+
+            Button("Dismiss") {
+                NotificationCenter.default.post(name: .videoOrganizerDismissCandidates, object: nil)
+            }
+            .keyboardShortcut("d", modifiers: [])
+
+            Button("Not Interested") {
+                NotificationCenter.default.post(name: .videoOrganizerNotInterested, object: nil)
+            }
+            .keyboardShortcut("n", modifiers: [])
+
+            Divider()
+
+            Button("Open on YouTube") {
+                NotificationCenter.default.post(name: .videoOrganizerOpenOnYouTube, object: nil)
+            }
+            .keyboardShortcut(.return, modifiers: [])
+
+            Button("Clear Selection") {
+                NotificationCenter.default.post(name: .videoOrganizerClearSelection, object: nil)
+            }
+            .keyboardShortcut(.escape, modifiers: [])
         }
     }
 

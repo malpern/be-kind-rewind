@@ -54,7 +54,14 @@ public struct YouTubeSyncService: Sendable {
             do {
                 switch action.action {
                 case "add_to_playlist":
+                    if action.playlist == "WL" {
+                        deferredActions.append(action)
+                        continue
+                    }
                     try await client.addVideoToPlaylist(videoId: action.videoId, playlistId: action.playlist)
+                    syncedActionIDs.append(action.id)
+                case "remove_from_playlist":
+                    try await client.removeVideoFromPlaylist(videoId: action.videoId, playlistId: action.playlist)
                     syncedActionIDs.append(action.id)
                 case "not_interested":
                     deferredActions.append(action)

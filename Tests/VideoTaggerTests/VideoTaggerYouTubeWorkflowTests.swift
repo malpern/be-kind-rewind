@@ -334,8 +334,8 @@ struct VideoTaggerYouTubeWorkflowTests {
             verifiedAt: "2026-04-03T12:00:00Z"
         ) { _ in
             [
-                PlaylistVideoItem(videoId: "vid-0", title: "First", channelId: "chan-alpha", channelTitle: "Alpha", position: 0),
-                PlaylistVideoItem(videoId: "external-vid", title: "Outside", channelId: "chan-ext", channelTitle: "Ext", position: 1)
+                PlaylistVideoItem(playlistItemId: "pli-0", videoId: "vid-0", title: "First", channelId: "chan-alpha", channelTitle: "Alpha", position: 0),
+                PlaylistVideoItem(playlistItemId: "pli-1", videoId: "external-vid", title: "Outside", channelId: "chan-ext", channelTitle: "Ext", position: 1)
             ]
         }
 
@@ -362,7 +362,7 @@ struct VideoTaggerYouTubeWorkflowTests {
             title: "Useful Playlist",
             verifiedAt: "2026-04-03T12:00:00Z"
         ) { _ in
-            [PlaylistVideoItem(videoId: "vid-0", title: "First", channelId: nil, channelTitle: nil, position: 0)]
+            [PlaylistVideoItem(playlistItemId: "pli-0", videoId: "vid-0", title: "First", channelId: nil, channelTitle: nil, position: 0)]
         }
 
         _ = try await verifyPlaylistMemberships(
@@ -371,7 +371,7 @@ struct VideoTaggerYouTubeWorkflowTests {
             title: "Useful Playlist",
             verifiedAt: "2026-04-03T12:05:00Z"
         ) { _ in
-            [PlaylistVideoItem(videoId: "vid-1", title: "Second", channelId: nil, channelTitle: nil, position: 3)]
+            [PlaylistVideoItem(playlistItemId: "pli-1", videoId: "vid-1", title: "Second", channelId: nil, channelTitle: nil, position: 3)]
         }
 
         #expect(try store.playlistsForVideo(videoId: "vid-0").isEmpty)
