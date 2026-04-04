@@ -40,7 +40,12 @@ struct CollectionGridView: View {
         }
         .onChange(of: store.topics) { _, _ in loadAndFilter() }
         .onChange(of: store.searchText) { _, _ in loadAndFilter() }
-        .onChange(of: displaySettings.sortOrder) { _, _ in loadAndFilter() }
+        .onChange(of: displaySettings.sortOrder) { _, newValue in
+            if newValue != .creator {
+                store.inspectedCreatorName = nil
+            }
+            loadAndFilter()
+        }
         .onChange(of: displaySettings.sortAscending) { _, _ in loadAndFilter() }
         .onChange(of: store.selectedSubtopicId) { _, _ in loadAndFilter() }
         .onChange(of: store.selectedChannelId) { _, _ in loadAndFilter() }

@@ -18,11 +18,18 @@ final class OrganizerStore {
         didSet {
             if oldValue != selectedTopicId {
                 selectedChannelId = nil
+                inspectedCreatorName = nil
             }
         }
     }
     var selectedSubtopicId: Int64?
-    var selectedVideoId: String?
+    var selectedVideoId: String? {
+        didSet {
+            if selectedVideoId != nil, oldValue != selectedVideoId {
+                inspectedCreatorName = nil
+            }
+        }
+    }
     var hoveredVideoId: String?
 
     // Channel / playlist filters

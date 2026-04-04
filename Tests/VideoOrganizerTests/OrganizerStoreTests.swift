@@ -36,9 +36,27 @@ struct OrganizerStoreTests {
 
             store.selectedTopicId = alphaTopic.id
             store.selectedChannelId = "chan-alpha"
+            store.inspectedCreatorName = "Alpha Channel"
             store.selectedTopicId = betaTopic.id
 
             #expect(store.selectedChannelId == nil)
+            #expect(store.inspectedCreatorName == nil)
+        }
+    }
+
+    @Test("selecting a video exits creator inspection")
+    @MainActor
+    func selectingVideoClearsCreatorInspection() throws {
+        try withTemporaryDirectory { directory in
+            let dbPath = directory.appendingPathComponent("organizer.db").path
+            try makeOrganizerStoreFixture(at: dbPath)
+
+            let store = try OrganizerStore(dbPath: dbPath)
+
+            store.inspectedCreatorName = "Alpha Channel"
+            store.selectedVideoId = "vid-0"
+
+            #expect(store.inspectedCreatorName == nil)
         }
     }
 
