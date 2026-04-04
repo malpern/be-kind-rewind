@@ -1,15 +1,89 @@
+import AppKit
 import SwiftUI
+import TaggingKit
+import UniformTypeIdentifiers
 
 struct AppSettingsView: View {
     @Bindable var store: OrganizerStore
     @Bindable var displaySettings: DisplaySettings
     @Bindable var youTubeAuth: YouTubeAuthController
+    @State private var anthropicKeyInput = ""
+    @State private var youTubeAPIKeyInput = ""
+    @State private var credentialMessage: String?
 
     var body: some View {
         let summary = store.syncQueueSummary
 
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("API Keys")
+                        .font(.title3.weight(.semibold))
+
+                    authStatusCard(
+                        title: "Anthropic",
+                        message: ClaudeClient.hasStoredAPIKey() ? "Anthropic key stored" : "Anthropic key missing",
+                        detail: ClaudeClient.hasStoredAPIKey()
+                            ? "Stored securely in Keychain or available from your existing config."
+                            : "Paste your Anthropic API key here. It will be stored securely in your macOS Keychain.",
+                        icon: ClaudeClient.hasStoredAPIKey() ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                        tint: ClaudeClient.hasStoredAPIKey() ? .green : .orange
+                    )
+
+                    SecureField("sk-ant-...", text: $anthropicKeyInput)
+                        .textFieldStyle(.roundedBorder)
+
+                    HStack(spacing: 12) {
+                        Button("Save Anthropic Key") {
+                            saveAnthropicKey()
+                        }
+                        .disabled(anthropicKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button("Clear") {
+                            ClaudeClient.clearStoredAPIKey()
+                            anthropicKeyInput = ""
+                            store.refreshCredentialBackedClients()
+                            credentialMessage = "Removed stored Anthropic key from Keychain."
+                        }
+                    }
+
+                    authStatusCard(
+                        title: "YouTube Data API",
+                        message: YouTubeClient.hasStoredAPIKey() ? "YouTube API key stored" : "YouTube API key missing",
+                        detail: YouTubeClient.hasStoredAPIKey()
+                            ? "Stored securely in Keychain or available from your existing config."
+                            : "Paste your YouTube Data API key here to improve discovery refreshes and playlist verification.",
+                        icon: YouTubeClient.hasStoredAPIKey() ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                        tint: YouTubeClient.hasStoredAPIKey() ? .green : .orange
+                    )
+
+                    SecureField("AIza...", text: $youTubeAPIKeyInput)
+                        .textFieldStyle(.roundedBorder)
+
+                    HStack(spacing: 12) {
+                        Button("Save YouTube API Key") {
+                            saveYouTubeAPIKey()
+                        }
+                        .disabled(youTubeAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button("Clear") {
+                            YouTubeClient.clearStoredAPIKey()
+                            youTubeAPIKeyInput = ""
+                            store.refreshCredentialBackedClients()
+                            credentialMessage = "Removed stored YouTube API key from Keychain."
+                        }
+                    }
+
+                    if let credentialMessage {
+                        Text(credentialMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Divider()
+
                 VStack(alignment: .leading, spacing: 12) {
                     Text("YouTube")
                         .font(.title3.weight(.semibold))
@@ -45,6 +119,9 @@ struct AppSettingsView: View {
                             Button("Disconnect") {
                                 youTubeAuth.disconnect()
                             }
+                        }
+                        Button("Import OAuth Client JSON…") {
+                            importOAuthClientJSON()
                         }
                     } else {
                         Text(youTubeAuth.statusTitle)
@@ -94,8 +171,14 @@ struct AppSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                         } else {
-                            Button("Refresh status") {
-                                youTubeAuth.refreshStatus()
+                            HStack(spacing: 12) {
+                                Button("Refresh status") {
+                                    youTubeAuth.refreshStatus()
+                                }
+
+                                Button("Import OAuth Client JSON…") {
+                                    importOAuthClientJSON()
+                                }
                             }
                         }
                     }
@@ -227,11 +310,53 @@ struct AppSettingsView: View {
             }
             .padding(20)
         }
-        .frame(width: 500, height: 560)
+        .frame(width: 560, height: 760)
         .onAppear {
             store.refreshSyncQueueSummary()
             store.refreshSeenHistoryCount()
             store.refreshBrowserExecutorStatus()
+            store.refreshCredentialBackedClients()
+        }
+    }
+
+    private func saveAnthropicKey() {
+        do {
+            try ClaudeClient.storeAPIKey(anthropicKeyInput)
+            anthropicKeyInput = ""
+            store.refreshCredentialBackedClients()
+            credentialMessage = "Saved Anthropic key to your macOS Keychain."
+        } catch {
+            credentialMessage = error.localizedDescription
+        }
+    }
+
+    private func saveYouTubeAPIKey() {
+        do {
+            try YouTubeClient.storeAPIKey(youTubeAPIKeyInput)
+            youTubeAPIKeyInput = ""
+            store.refreshCredentialBackedClients()
+            credentialMessage = "Saved YouTube API key to your macOS Keychain."
+        } catch {
+            credentialMessage = error.localizedDescription
+        }
+    }
+
+    private func importOAuthClientJSON() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Google OAuth Client JSON"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try YouTubeOAuthClientConfig.installDownloadedClientJSON(from: url)
+            youTubeAuth.refreshStatus(clearError: true)
+            credentialMessage = "Imported Google OAuth client JSON."
+        } catch {
+            credentialMessage = error.localizedDescription
         }
     }
 

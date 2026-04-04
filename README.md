@@ -28,38 +28,31 @@ Download the latest packaged app from [GitHub Releases](https://github.com/malpe
 3. Move `Video Organizer.app` into `Applications`.
 4. Open the app.
 
+On first launch, new installs with missing credentials will show a short setup screen that points you to the right Settings panels. If you already have keys configured, the app skips that screen.
+
 ### 2. Add your Anthropic API key
 
-The app expects your Anthropic key in either:
+In the app:
 
-- `~/.config/anthropic/api-key`
-- or macOS Keychain, if you already use the same key elsewhere
+1. Open `Settings`
+2. Go to `API Keys`
+3. Paste your Anthropic API key
+4. Click `Save Anthropic Key`
 
-Quickest setup:
-
-```bash
-mkdir -p ~/.config/anthropic
-printf '%s\n' 'YOUR_ANTHROPIC_API_KEY' > ~/.config/anthropic/api-key
-chmod 600 ~/.config/anthropic/api-key
-```
+The key is stored securely in your macOS Keychain.
 
 ### 3. Optional: add a YouTube API key
 
 This improves discovery refreshes and playlist verification.
 
-Supported locations:
+In the app:
 
-- `YOUTUBE_API_KEY`
-- `GOOGLE_API_KEY`
-- `~/.config/youtube/api-key`
+1. Open `Settings`
+2. Go to `API Keys`
+3. Paste your YouTube Data API key
+4. Click `Save YouTube API Key`
 
-Quickest setup:
-
-```bash
-mkdir -p ~/.config/youtube
-printf '%s\n' 'YOUR_YOUTUBE_API_KEY' > ~/.config/youtube/api-key
-chmod 600 ~/.config/youtube/api-key
-```
+The key is stored securely in your macOS Keychain.
 
 ### 4. Optional: connect YouTube for saves and private playlists
 
@@ -74,11 +67,11 @@ then do this:
 
 1. Create a Google OAuth desktop client.
 2. Download the client JSON.
-3. Save it to:
-   - `~/.config/youtube/oauth-client.json`
-4. In the app, open `Settings`.
-5. In the `YouTube` section, click `Reconnect` or `Upgrade Access`.
-6. In the `Sync` section, use `Open Browser Sign-In` once so the browser fallback profile is signed into YouTube too.
+3. In the app, open `Settings`.
+4. In the `YouTube` section, click `Import OAuth Client JSON…`.
+5. Select the downloaded JSON file.
+6. Click `Reconnect` or `Upgrade Access`.
+7. In the `Sync` section, use `Open Browser Sign-In` once so the browser fallback profile is signed into YouTube too.
 
 ### 5. Optional: import watch history
 
@@ -87,6 +80,20 @@ If you export Google Takeout / My Activity watch history, you can import it in:
 - `Settings > History > Import Seen History…`
 
 That suppresses already-watched videos from the `Watch` candidate list.
+
+### Manual fallback locations
+
+If you already have keys configured elsewhere, the app also reads:
+
+- Anthropic:
+  - `~/.config/anthropic/api-key`
+  - `ANTHROPIC_API_KEY`
+- YouTube Data API:
+  - `~/.config/youtube/api-key`
+  - `YOUTUBE_API_KEY`
+  - `GOOGLE_API_KEY`
+- Google OAuth client config:
+  - `~/.config/youtube/oauth-client.json`
 
 ## What it does
 

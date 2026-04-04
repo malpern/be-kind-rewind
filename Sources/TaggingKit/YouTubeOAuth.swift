@@ -11,6 +11,31 @@ public struct YouTubeOAuthClientConfig: Codable, Sendable {
         self.clientSecret = clientSecret
     }
 
+    public static func installDownloadedClientJSON(from sourceURL: URL) throws {
+        let data = try Data(contentsOf: sourceURL)
+        _ = try parseConfigData(data)
+
+        let destination = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/youtube/oauth-client.json")
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: destination, options: .atomic)
+    }
+
+    public static func isAvailable() -> Bool {
+        if let clientId = ProcessInfo.processInfo.environment["GOOGLE_OAUTH_CLIENT_ID"],
+           let clientSecret = ProcessInfo.processInfo.environment["GOOGLE_OAUTH_CLIENT_SECRET"],
+           !clientId.isEmpty, !clientSecret.isEmpty {
+            return true
+        }
+
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/youtube/oauth-client.json")
+        return FileManager.default.fileExists(atPath: path.path)
+    }
+
     public static func load() throws -> YouTubeOAuthClientConfig {
         if let clientId = ProcessInfo.processInfo.environment["GOOGLE_OAUTH_CLIENT_ID"],
            let clientSecret = ProcessInfo.processInfo.environment["GOOGLE_OAUTH_CLIENT_SECRET"],
@@ -21,6 +46,10 @@ public struct YouTubeOAuthClientConfig: Codable, Sendable {
         let path = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/youtube/oauth-client.json")
         let data = try Data(contentsOf: path)
+        return try parseConfigData(data)
+    }
+
+    private static func parseConfigData(_ data: Data) throws -> YouTubeOAuthClientConfig {
         if let direct = try? JSONDecoder().decode(YouTubeOAuthClientConfig.self, from: data) {
             return direct
         }

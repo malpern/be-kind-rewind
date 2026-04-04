@@ -54,7 +54,8 @@ struct CollectionGridView: View {
         .onChange(of: store.selectedSubtopicId) { _, _ in loadAndFilter() }
         .onChange(of: store.selectedChannelId) { _, _ in loadAndFilter() }
         .onChange(of: store.selectedPlaylistId) { _, _ in loadAndFilter() }
-        .onChange(of: store.topicDisplayModes) { _, _ in loadAndFilter() }
+        .onChange(of: store.pageDisplayMode) { _, _ in loadAndFilter() }
+        .onChange(of: store.watchPresentationMode) { _, _ in loadAndFilter() }
         .onChange(of: store.candidateRefreshToken) { _, _ in loadAndFilter() }
     }
 
@@ -69,12 +70,34 @@ struct CollectionGridView: View {
                 sortOrder: displaySettings.sortOrder,
                 sortAscending: displaySettings.sortAscending,
                 channelCounts: store.channelCounts,
+                pageDisplayMode: store.pageDisplayMode,
+                watchPresentationMode: store.watchPresentationMode,
                 displayModeForTopic: { store.displayMode(for: $0) },
                 videosForTopic: { topicId, displayMode in
                     videosForTopic(topicId, displayMode: displayMode)
                 },
                 videosForSubtopic: { subtopicId in
                     mapVideos(store.videosForTopic(subtopicId))
+                },
+                allWatchVideos: {
+                    store.candidateVideosForAllTopics().map { candidate in
+                        VideoGridItemModel(
+                            id: candidate.videoId,
+                            title: candidate.title,
+                            channelName: candidate.channelName,
+                            topicName: store.topics.first(where: { $0.id == candidate.topicId })?.name,
+                            thumbnailUrl: candidate.thumbnailUrl,
+                            viewCount: candidate.viewCount,
+                            publishedAt: candidate.publishedAt,
+                            duration: candidate.duration,
+                            channelIconUrl: candidate.channelIconUrl.flatMap(URL.init(string:)),
+                            channelId: candidate.channelId,
+                            candidateScore: candidate.score,
+                            stateTag: store.badgeTagForVideo(candidate.videoId, candidateState: candidate.state),
+                            isPlaceholder: false,
+                            placeholderMessage: candidate.secondaryText
+                        )
+                    }
                 },
                 videoIsInSelectedPlaylist: { store.videoIsInSelectedPlaylist($0) }
             )
@@ -89,10 +112,12 @@ struct CollectionGridView: View {
         viewModels.map { v in
             VideoGridItemModel(
                 id: v.videoId, title: v.title, channelName: v.channelName,
+                topicName: store.topicNameForVideo(v.videoId),
                 thumbnailUrl: v.thumbnailUrl, viewCount: v.viewCount,
                 publishedAt: v.publishedAt, duration: v.duration,
                 channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
                 channelId: v.channelId,
+                candidateScore: nil,
                 stateTag: store.badgeTagForVideo(v.videoId),
                 isPlaceholder: false,
                 placeholderMessage: nil
@@ -110,12 +135,14 @@ struct CollectionGridView: View {
                     id: $0.videoId,
                     title: $0.title,
                     channelName: $0.channelName,
+                    topicName: store.topics.first(where: { $0.id == topicId })?.name,
                     thumbnailUrl: $0.thumbnailUrl,
                     viewCount: $0.viewCount,
                     publishedAt: $0.publishedAt,
                     duration: $0.duration,
                     channelIconUrl: $0.channelIconUrl.flatMap(URL.init(string:)),
                     channelId: $0.channelId,
+                    candidateScore: $0.score,
                     stateTag: store.badgeTagForVideo($0.videoId, candidateState: $0.state),
                     isPlaceholder: $0.isPlaceholder,
                     placeholderMessage: $0.secondaryText
@@ -606,12 +633,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 return 56
             }
 
-            let isCandidateLoading = section.displayMode == .watchCandidates &&
-                (store?.candidateLoadingTopics.contains(section.topicId) ?? false)
             let channels = section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : []
-            if isCandidateLoading {
-                return channels.isEmpty ? 104 : 168
-            }
             return channels.isEmpty ? 48 : 112
         }
 
@@ -635,11 +657,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
 
             let highlightTerms = store?.parsedQuery.includeTerms ?? []
-            let isWatchCandidates = section.displayMode == .watchCandidates
-            let candidateProgress = store?.candidateProgress(for: section.topicId) ?? 0
-            let isCandidateLoading = store?.candidateLoadingTopics.contains(section.topicId) ?? false
-            let candidateProgressTitle = isWatchCandidates ? store?.candidateProgressTitle(for: section.topicId) : nil
-            let candidateProgressDetail = isWatchCandidates ? store?.candidateProgressDetail(for: section.topicId) : nil
             let channels = section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : []
             let selectedChannelId = section.displayMode == .saved ? store?.selectedChannelId : nil
 
@@ -651,15 +668,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 scrollProgress: scrollProgress,
                 highlightTerms: highlightTerms,
                 displayMode: section.displayMode,
-                candidateProgress: candidateProgress,
-                isCandidateLoading: isCandidateLoading,
-                candidateProgressTitle: candidateProgressTitle,
-                candidateProgressDetail: candidateProgressDetail,
-                onSelectDisplayMode: { [weak store] mode in
-                    Task { @MainActor in
-                        await store?.activateDisplayMode(mode, for: section.topicId)
-                    }
-                },
                 channels: channels,
                 selectedChannelId: selectedChannelId,
                 videoCountForChannel: { [weak store] channelId in
@@ -1331,11 +1339,6 @@ enum CollectionSectionHeaderModel {
         scrollProgress: Double,
         highlightTerms: [String],
         displayMode: TopicDisplayMode,
-        candidateProgress: Double,
-        isCandidateLoading: Bool,
-        candidateProgressTitle: String?,
-        candidateProgressDetail: String?,
-        onSelectDisplayMode: (TopicDisplayMode) -> Void,
         channels: [ChannelRecord],
         selectedChannelId: String?,
         videoCountForChannel: (String) -> Int,
@@ -1357,10 +1360,7 @@ enum CollectionSectionHeaderModel {
 
     var height: CGFloat {
         switch self {
-        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, candidateProgress: _, isCandidateLoading: isCandidateLoading, candidateProgressTitle: _, candidateProgressDetail: _, onSelectDisplayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, onSelectChannel: _):
-            if isCandidateLoading {
-                return channels.isEmpty ? 104 : 168
-            }
+        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, onSelectChannel: _):
             return channels.isEmpty ? 48 : 112
         case .creator:
             return 56
@@ -1660,7 +1660,7 @@ private struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, _, _, _, _, onSelectDisplayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
+        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
             VStack(spacing: 0) {
                 SectionHeaderView(
                     name: name,
@@ -1669,11 +1669,7 @@ private struct SectionHeaderContent: View {
                     topicId: topicId,
                     progress: scrollProgress,
                     showProgress: displayMode != .watchCandidates,
-                    highlightTerms: highlightTerms,
-                    displayMode: displayMode,
-                    progressTitle: nil,
-                    progressDetail: nil,
-                    onDisplayModeChange: onSelectDisplayMode
+                    highlightTerms: highlightTerms
                 )
                 .accessibilityIdentifier("topic-\(topicId)")
 

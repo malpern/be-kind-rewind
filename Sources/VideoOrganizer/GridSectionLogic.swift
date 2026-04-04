@@ -62,6 +62,7 @@ enum GridSectionLogic {
             let creatorChannelId = sorted.first(where: { $0.channelId != nil })?.channelId
             let iconURL = sorted.first(where: { $0.channelIconUrl != nil })?.channelIconUrl
             let creatorChannelUrl = creatorChannelId.flatMap { URL(string: "https://www.youtube.com/channel/\($0)") }
+            let topicNames = Array(Set(sorted.compactMap(\.topicName))).sorted()
             return TopicSection(
                 topicId: section.topicId,
                 topicName: section.topicName,
@@ -73,7 +74,7 @@ enum GridSectionLogic {
                 creatorChannelId: creatorChannelId,
                 creatorChannelUrl: creatorChannelUrl,
                 channelIconUrl: iconURL,
-                topicNames: [section.topicName]
+                topicNames: topicNames.isEmpty ? [section.topicName] : topicNames
             )
         }
 

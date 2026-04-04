@@ -36,9 +36,9 @@ final class YouTubeAuthController {
             isConnected = false
             hasWriteAccess = false
             statusTitle = "OAuth client config missing"
-            statusDetail = "Download a Google OAuth desktop client JSON file and save it as ~/.config/youtube/oauth-client.json before connecting."
+            statusDetail = "Import a Google OAuth desktop client JSON file from Settings before connecting."
             buttonTitle = "Connect YouTube"
-            buttonSubtitle = "Add the downloaded OAuth client file, then authorize browser access"
+            buttonSubtitle = "Import the downloaded OAuth client file, then authorize browser access"
             AppLogger.auth.error("OAuth client config missing")
             return
         }

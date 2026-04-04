@@ -61,14 +61,18 @@ final class OrganizerStore {
     var parsedQuery: SearchQuery { SearchQuery(searchText) }
     var searchResultCount: Int = 0
 
-    // Per-topic center-pane mode
-    var topicDisplayModes: [Int64: TopicDisplayMode] = [:]
+    // Page-level center-pane mode
+    var pageDisplayMode: TopicDisplayMode = .saved
+    var watchPresentationMode: WatchPresentationMode = .byTopic
     var candidateErrors: [Int64: String] = [:]
     var candidateLoadingTopics: Set<Int64> = []
     var candidateProgressByTopic: [Int64: Double] = [:]
     var candidateCompletedChannelsByTopic: [Int64: Int] = [:]
     var candidateTotalChannelsByTopic: [Int64: Int] = [:]
     var candidateCurrentChannelNameByTopic: [Int64: String] = [:]
+    var watchRefreshCompletedTopics = 0
+    var watchRefreshTotalTopics = 0
+    var watchRefreshCurrentTopicName: String?
 
     // Cached flat video map — rebuilt on loadTopics()
     var videoMap: [String: VideoViewModel] = [:]
@@ -77,11 +81,12 @@ final class OrganizerStore {
     var browserSyncTask: Task<Void, Never>?
     var syncLoopTask: Task<Void, Never>?
     var browserStatusTask: Task<Void, Never>?
+    var watchRefreshTask: Task<Void, Never>?
     private var isUpdatingSelectionFromGrid = false
 
     let store: TopicStore
-    let suggester: TopicSuggester?
-    let youtubeClient: YouTubeClient?
+    var suggester: TopicSuggester?
+    var youtubeClient: YouTubeClient?
     let runtimeEnvironment: RuntimeEnvironment
 
     init(dbPath: String, claudeClient: ClaudeClient? = nil, startBackgroundTasks: Bool = true) throws {
@@ -101,6 +106,13 @@ final class OrganizerStore {
         } else {
             browserExecutorStatusMessage = "Background sync disabled"
         }
+    }
+
+    func refreshCredentialBackedClients() {
+        let client = try? ClaudeClient()
+        suggester = client.map { TopicSuggester(client: $0) }
+        youtubeClient = try? YouTubeClient()
+        AppLogger.auth.info("Refreshed credential-backed service clients")
     }
 
     // MARK: - Loading
@@ -421,7 +433,7 @@ final class OrganizerStore {
 
         clearPlaylistFilter()
         selectedSubtopicId = nil
-        topicDisplayModes[targetTopicId] = .saved
+        pageDisplayMode = .saved
         hoveredVideoId = nil
         selectedTopicId = targetTopicId
         selectedChannelId = resolvedChannel?.channelId ?? channelId
@@ -433,20 +445,27 @@ final class OrganizerStore {
     }
 
     func displayMode(for topicId: Int64) -> TopicDisplayMode {
-        topicDisplayModes[topicId] ?? .saved
+        pageDisplayMode
     }
 
-    func setDisplayMode(_ mode: TopicDisplayMode, for topicId: Int64) {
-        topicDisplayModes[topicId] = mode
-        AppLogger.discovery.info("Set topic \(topicId, privacy: .public) display mode to \(mode.rawValue, privacy: .public)")
+    func setPageDisplayMode(_ mode: TopicDisplayMode) {
+        pageDisplayMode = mode
+        AppLogger.discovery.info("Set page display mode to \(mode.rawValue, privacy: .public)")
         if mode == .watchCandidates {
+            selectedPlaylistId = nil
+            selectedPlaylistTitle = nil
             selectedChannelId = nil
             selectedSubtopicId = nil
             selectedVideoId = nil
-            if selectedTopicId != topicId {
-                selectedTopicId = topicId
-            }
         }
+        candidateRefreshToken += 1
+    }
+
+    func setWatchPresentationMode(_ mode: WatchPresentationMode) {
+        guard watchPresentationMode != mode else { return }
+        watchPresentationMode = mode
+        AppLogger.discovery.info("Set watch presentation mode to \(mode.rawValue, privacy: .public)")
+        candidateRefreshToken += 1
     }
 
     func knownPlaylists() -> [PlaylistRecord] {
@@ -792,6 +811,20 @@ enum TopicDisplayMode: String, CaseIterable, Sendable {
             return "Saved"
         case .watchCandidates:
             return "Watch"
+        }
+    }
+}
+
+enum WatchPresentationMode: String, CaseIterable, Sendable {
+    case byTopic
+    case allTogether
+
+    var label: String {
+        switch self {
+        case .byTopic:
+            return "By Topic"
+        case .allTogether:
+            return "Show All"
         }
     }
 }

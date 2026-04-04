@@ -27,12 +27,14 @@ struct VideoGridItemModel: Identifiable, Equatable {
     let id: String
     let title: String
     let channelName: String?
+    let topicName: String?
     let thumbnailUrl: URL?
     let viewCount: String?
     let publishedAt: String?
     let duration: String?
     let channelIconUrl: URL?
     let channelId: String?
+    let candidateScore: Double?
     let stateTag: String?
     let isPlaceholder: Bool
     let placeholderMessage: String?

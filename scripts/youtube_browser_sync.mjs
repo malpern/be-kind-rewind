@@ -73,34 +73,77 @@ async function saveToPlaylist(page, action) {
   const saveButton = page.getByRole("button", { name: /save/i }).first();
   await saveButton.click();
 
-  const dialog = page.locator("ytd-add-to-playlist-renderer").first();
-  await dialog.waitFor({ timeout: 15000 });
-
   const playlistName = action.playlistTitle || action.playlistId;
-  const option = dialog.locator("ytd-playlist-add-to-option-renderer").filter({
-    has: dialog.getByText(playlistName, { exact: false }).first()
-  }).first();
-  await option.waitFor({ timeout: 15000 });
+  const legacyDialog = page.locator("ytd-add-to-playlist-renderer").first();
+  const modernSheet = page.locator("yt-list-item-view-model[aria-label], toggleable-list-item-view-model").first();
 
-  const checkbox = option.locator('[role="checkbox"], tp-yt-paper-checkbox').first();
-  await checkbox.waitFor({ timeout: 15000 });
+  await Promise.race([
+    legacyDialog.waitFor({ timeout: 15000 }),
+    modernSheet.waitFor({ timeout: 15000 })
+  ]);
 
-  const checkboxState = await checkbox.evaluate((node) => {
-    const element = /** @type {HTMLElement} */ (node);
-    const ariaChecked = element.getAttribute("aria-checked");
-    if (ariaChecked) return ariaChecked;
-    if ("checked" in element) {
-      return element.checked ? "true" : "false";
+  if (await legacyDialog.count()) {
+    const option = legacyDialog.locator("ytd-playlist-add-to-option-renderer").filter({
+      has: legacyDialog.getByText(playlistName, { exact: false }).first()
+    }).first();
+    if (await option.count()) {
+      await option.waitFor({ timeout: 15000 });
+
+      const checkbox = option.locator('[role="checkbox"], tp-yt-paper-checkbox').first();
+      await checkbox.waitFor({ timeout: 15000 });
+
+      const checkboxState = await checkbox.evaluate((node) => {
+        const element = /** @type {HTMLElement} */ (node);
+        const ariaChecked = element.getAttribute("aria-checked");
+        if (ariaChecked) return ariaChecked;
+        if ("checked" in element) {
+          return element.checked ? "true" : "false";
+        }
+        return "unknown";
+      });
+
+      if (checkboxState !== "true") {
+        await checkbox.click();
+        await page.waitForTimeout(500);
+        const updatedState = await checkbox.getAttribute("aria-checked");
+        if (updatedState !== "true") {
+          throw new Error(`Could not confirm playlist selection for ${playlistName}.`);
+        }
+      }
+    } else {
+      throw new Error(`Could not find playlist option for ${playlistName} in legacy playlist dialog.`);
     }
-    return "unknown";
-  });
+  } else {
+    const option = page.locator("yt-list-item-view-model[aria-label]").filter({
+      hasText: playlistName
+    }).first();
+    await option.waitFor({ timeout: 15000 });
 
-  if (checkboxState !== "true") {
-    await checkbox.click();
-    await page.waitForTimeout(500);
-    const updatedState = await checkbox.getAttribute("aria-checked");
-    if (updatedState !== "true") {
-      throw new Error(`Could not confirm playlist selection for ${playlistName}.`);
+    const currentState = await option.evaluate((node) => {
+      const element = /** @type {HTMLElement} */ (node);
+      const ariaPressed = element.getAttribute("aria-pressed");
+      if (ariaPressed) return ariaPressed;
+      const ariaLabel = element.getAttribute("aria-label") ?? "";
+      if (/selected/i.test(ariaLabel)) return "true";
+      return "false";
+    });
+
+    if (currentState !== "true") {
+      await option.click();
+      await page.waitForTimeout(500);
+
+      const updatedState = await option.evaluate((node) => {
+        const element = /** @type {HTMLElement} */ (node);
+        const ariaPressed = element.getAttribute("aria-pressed");
+        if (ariaPressed) return ariaPressed;
+        const ariaLabel = element.getAttribute("aria-label") ?? "";
+        if (/selected/i.test(ariaLabel)) return "true";
+        return "false";
+      });
+
+      if (updatedState !== "true") {
+        throw new Error(`Could not confirm playlist selection for ${playlistName}.`);
+      }
     }
   }
 

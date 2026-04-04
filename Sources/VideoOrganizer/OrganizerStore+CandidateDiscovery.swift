@@ -2,18 +2,13 @@ import Foundation
 import TaggingKit
 
 extension OrganizerStore {
-    func activateDisplayMode(_ mode: TopicDisplayMode, for topicId: Int64) async {
-        setDisplayMode(mode, for: topicId)
+    func activatePageDisplayMode(_ mode: TopicDisplayMode) async {
+        setPageDisplayMode(mode)
         guard mode == .watchCandidates else {
             candidateRefreshToken += 1
             return
         }
-        if CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: topicId, store: self) {
-            AppLogger.discovery.info("Using cached candidates for topic \(topicId, privacy: .public)")
-            candidateRefreshToken += 1
-            return
-        }
-        await ensureCandidates(for: topicId)
+        await ensureCandidatesForWatchPage()
     }
 
     func candidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
@@ -34,6 +29,34 @@ extension OrganizerStore {
         } catch {
             return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error.localizedDescription)]
         }
+    }
+
+    func candidateVideosForAllTopics() -> [CandidateVideoViewModel] {
+        topics
+            .flatMap { topic in
+                guard !candidateLoadingTopics.contains(topic.id) else { return [CandidateVideoViewModel]() }
+                return ((try? store.candidatesForTopic(id: topic.id, limit: 36)) ?? [])
+                    .map(CandidateVideoViewModel.init(from:))
+            }
+            .filter { !$0.isPlaceholder }
+            .sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.publishedAt ?? "")
+                    let rhsDate = CreatorAnalytics.parseISO8601Date(rhs.publishedAt ?? "")
+                    switch (lhsDate, rhsDate) {
+                    case let (l?, r?) where l != r:
+                        return l > r
+                    case (_?, nil):
+                        return true
+                    case (nil, _?):
+                        return false
+                    default:
+                        break
+                    }
+                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.score > rhs.score
+            }
     }
 
     func candidateProgress(for topicId: Int64) -> Double {
@@ -68,19 +91,21 @@ extension OrganizerStore {
     }
 
     var candidateProgressOverlay: CandidateProgressOverlayState? {
-        guard let topicId = selectedTopicId,
-              displayMode(for: topicId) == .watchCandidates,
-              candidateLoadingTopics.contains(topicId),
-              let topic = topics.first(where: { $0.id == topicId }) else {
+        guard pageDisplayMode == .watchCandidates,
+              watchRefreshTotalTopics > 0 else {
             return nil
         }
 
         return CandidateProgressOverlayState(
-            topicId: topicId,
-            topicName: topic.name,
-            progress: candidateProgress(for: topicId),
-            title: candidateProgressTitle(for: topicId),
-            detail: candidateProgressDetail(for: topicId)
+            topicId: selectedTopicId ?? -1,
+            topicName: watchRefreshCurrentTopicName ?? "All Topics",
+            progress: watchRefreshTotalTopics > 0 ? Double(watchRefreshCompletedTopics) / Double(watchRefreshTotalTopics) : 0,
+            title: watchRefreshCurrentTopicName == nil
+                ? "Preparing watch candidates"
+                : "Refreshing watch candidates: \(watchRefreshCompletedTopics) of \(watchRefreshTotalTopics)",
+            detail: watchRefreshCurrentTopicName == nil
+                ? "Checking cached creator archives and refreshing only stale topics."
+                : "Refreshing \(watchRefreshCurrentTopicName!) and ranking new videos across your watch candidates."
         )
     }
 
@@ -203,6 +228,42 @@ extension OrganizerStore {
             CandidateDiscoveryCoordinator.presentQuotaAlertIfNeeded(for: error, store: self)
             AppLogger.discovery.error("Candidate refresh failed for topic \(topicId, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    func ensureCandidatesForWatchPage() async {
+        guard watchRefreshTask == nil else { return }
+
+        let topicsToRefresh = topics
+        watchRefreshTotalTopics = topicsToRefresh.count
+        watchRefreshCompletedTopics = 0
+        watchRefreshCurrentTopicName = topicsToRefresh.first?.name
+        candidateRefreshToken += 1
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.watchRefreshTask = nil
+                self.watchRefreshTotalTopics = 0
+                self.watchRefreshCompletedTopics = 0
+                self.watchRefreshCurrentTopicName = nil
+                self.candidateRefreshToken += 1
+            }
+
+            for topic in topicsToRefresh {
+                self.watchRefreshCurrentTopicName = topic.name
+                self.candidateRefreshToken += 1
+
+                if !CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: topic.id, store: self) {
+                    await self.ensureCandidates(for: topic.id)
+                }
+
+                self.watchRefreshCompletedTopics += 1
+                self.candidateRefreshToken += 1
+            }
+        }
+
+        watchRefreshTask = task
+        await task.value
     }
 }
 

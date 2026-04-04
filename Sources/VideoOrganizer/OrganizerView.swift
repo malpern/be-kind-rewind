@@ -26,6 +26,10 @@ struct OrganizerView: View {
                 }
                 .toolbar {
                     ToolbarItemGroup(placement: .automatic) {
+                        pageModeControls
+                    }
+
+                    ToolbarItemGroup(placement: .automatic) {
                         sortButtons
                     }
 
@@ -65,6 +69,20 @@ struct OrganizerView: View {
 
     @ViewBuilder
     private var sortButtons: some View {
+        if store.pageDisplayMode == .watchCandidates {
+            Picker("Watch Layout", selection: Binding(
+                get: { store.watchPresentationMode },
+                set: { store.setWatchPresentationMode($0) }
+            )) {
+                ForEach(WatchPresentationMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+            .help("Choose how Watch videos are shown")
+        }
+
         ForEach(SortOrder.allCases, id: \.self) { order in
             Button {
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -89,6 +107,24 @@ struct OrganizerView: View {
             .accessibilityLabel(order.accessibilityLabel)
             .accessibilityValue(displaySettings.sortOrder == order ? "Active" : "Inactive")
         }
+    }
+
+    @ViewBuilder
+    private var pageModeControls: some View {
+        Picker("Page Mode", selection: Binding(
+            get: { store.pageDisplayMode },
+            set: { newMode in
+                Task { @MainActor in
+                    await store.activatePageDisplayMode(newMode)
+                }
+            }
+        )) {
+            Text("Saved").tag(TopicDisplayMode.saved)
+            Text("Watch").tag(TopicDisplayMode.watchCandidates)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 160)
+        .help("Switch between saved videos and watch discovery")
     }
 
     @ViewBuilder

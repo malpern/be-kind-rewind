@@ -3,11 +3,13 @@ import TaggingKit
 
 @main
 struct VideoOrganizerApp: App {
+    @AppStorage("hasSeenCredentialOnboarding") private var hasSeenCredentialOnboarding = false
     @State private var store: OrganizerStore?
     @State private var thumbnailCache = ThumbnailCache()
     @State private var displaySettings = DisplaySettings()
     @State private var youTubeAuth = YouTubeAuthController()
     @State private var loadError: String?
+    @State private var showCredentialOnboarding = false
 
     var body: some Scene {
         WindowGroup {
@@ -37,6 +39,12 @@ struct VideoOrganizerApp: App {
             }
             .onAppear {
                 showSplashWindow()
+            }
+            .sheet(isPresented: $showCredentialOnboarding) {
+                FirstRunCredentialOnboardingView {
+                    hasSeenCredentialOnboarding = true
+                    showCredentialOnboarding = false
+                }
             }
         }
         .defaultSize(width: 1200, height: 800)
@@ -121,6 +129,7 @@ struct VideoOrganizerApp: App {
             let dbPath = resolveDbPath()
             let newStore = try OrganizerStore(dbPath: dbPath, claudeClient: client)
             store = newStore
+            evaluateCredentialOnboardingEligibility()
 
             let allVideoIds = newStore.topics.flatMap { topic in
                 newStore.videosForTopic(topic.id).compactMap { $0.videoId.isEmpty ? nil : $0.videoId }
@@ -138,6 +147,113 @@ struct VideoOrganizerApp: App {
             environment.currentDirectoryURL.appendingPathComponent("video-tagger.db")
         ]
         return environment.preferredDatabaseURL(legacyCandidates: legacyCandidates).path
+    }
+
+    private func evaluateCredentialOnboardingEligibility() {
+        guard !hasSeenCredentialOnboarding else { return }
+
+        let hasAnthropicKey = ClaudeClient.hasStoredAPIKey()
+        let hasYouTubeAPIKey = YouTubeClient.hasStoredAPIKey()
+        let hasYouTubeOAuthConfig = YouTubeOAuthClientConfig.isAvailable()
+        showCredentialOnboarding = !(hasAnthropicKey && hasYouTubeAPIKey && hasYouTubeOAuthConfig)
+    }
+}
+
+private struct FirstRunCredentialOnboardingView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openSettings) private var openSettings
+    let complete: () -> Void
+
+    private let hasAnthropicKey = ClaudeClient.hasStoredAPIKey()
+    private let hasYouTubeAPIKey = YouTubeClient.hasStoredAPIKey()
+    private let hasYouTubeOAuthConfig = YouTubeOAuthClientConfig.isAvailable()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Finish Setup")
+                    .font(.largeTitle.weight(.semibold))
+
+                Text("Be Kind, Rewind can store your API keys securely in Keychain. You can finish setup from Settings without touching Terminal.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                onboardingRow(
+                    title: "Anthropic API key",
+                    detail: hasAnthropicKey
+                        ? "Available"
+                        : "Needed for AI topic discovery and suggestions.",
+                    isReady: hasAnthropicKey
+                )
+
+                onboardingRow(
+                    title: "YouTube Data API key",
+                    detail: hasYouTubeAPIKey
+                        ? "Available"
+                        : "Needed for candidate refreshes, metadata, and playlist verification.",
+                    isReady: hasYouTubeAPIKey
+                )
+
+                onboardingRow(
+                    title: "Google OAuth client JSON",
+                    detail: hasYouTubeOAuthConfig
+                        ? "Available"
+                        : "Import the downloaded desktop OAuth client JSON to enable playlist saves and private-playlist access.",
+                    isReady: hasYouTubeOAuthConfig
+                )
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+
+            Text("Open Settings to paste keys or import the Google OAuth client JSON. You can skip this for now and come back later.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 12) {
+                Button("Continue for Now") {
+                    complete()
+                    dismiss()
+                }
+
+                Spacer()
+
+                Button("Open Settings") {
+                    complete()
+                    openSettings()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(28)
+        .frame(width: 560)
+    }
+
+    @ViewBuilder
+    private func onboardingRow(title: String, detail: String, isReady: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: isReady ? "checkmark.circle.fill" : "circle.dashed")
+                .font(.title3)
+                .foregroundStyle(isReady ? .green : .orange)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+        }
     }
 }
 

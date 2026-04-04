@@ -10,9 +10,12 @@ struct GridSectionBuilder {
         let sortOrder: SortOrder?
         let sortAscending: Bool
         let channelCounts: [String: Int]
+        let pageDisplayMode: TopicDisplayMode
+        let watchPresentationMode: WatchPresentationMode
         let displayModeForTopic: (Int64) -> TopicDisplayMode
         let videosForTopic: (Int64, TopicDisplayMode) -> [VideoGridItemModel]
         let videosForSubtopic: (Int64) -> [VideoGridItemModel]
+        let allWatchVideos: () -> [VideoGridItemModel]
         let videoIsInSelectedPlaylist: (String) -> Bool
     }
 
@@ -24,43 +27,58 @@ struct GridSectionBuilder {
     static func build(context: Context) -> Result {
         var baseSections: [TopicSection] = []
 
-        for topic in context.topics {
-            let displayMode = context.displayModeForTopic(topic.id)
-            if topic.subtopics.isEmpty {
-                let videos = context.videosForTopic(topic.id, displayMode)
-                if !videos.isEmpty {
-                    baseSections.append(
-                        TopicSection(topicId: topic.id, topicName: topic.name, videos: videos, displayMode: displayMode)
-                    )
-                }
-                continue
-            }
-
-            var allVideos: [VideoGridItemModel] = []
-            var subtopicMap: [String: Int64] = [:]
-            if displayMode == .saved {
-                for sub in topic.subtopics {
-                    let videos = context.videosForSubtopic(sub.id)
-                    for video in videos {
-                        subtopicMap[video.id] = sub.id
-                    }
-                    allVideos.append(contentsOf: videos)
-                }
-                allVideos.append(contentsOf: context.videosForTopic(topic.id, .saved))
-            } else {
-                allVideos = context.videosForTopic(topic.id, displayMode)
-            }
-
-            if !allVideos.isEmpty {
-                baseSections.append(
+        if context.pageDisplayMode == .watchCandidates,
+           context.watchPresentationMode == .allTogether {
+            let allWatchVideos = context.allWatchVideos()
+            if !allWatchVideos.isEmpty {
+                baseSections = [
                     TopicSection(
-                        topicId: topic.id,
-                        topicName: topic.name,
-                        videos: allVideos,
-                        videoSubtopicMap: subtopicMap,
-                        displayMode: displayMode
+                        topicId: -1,
+                        topicName: "Watch",
+                        videos: allWatchVideos,
+                        displayMode: .watchCandidates
                     )
-                )
+                ]
+            }
+        } else {
+            for topic in context.topics {
+                let displayMode = context.displayModeForTopic(topic.id)
+                if topic.subtopics.isEmpty {
+                    let videos = context.videosForTopic(topic.id, displayMode)
+                    if !videos.isEmpty {
+                        baseSections.append(
+                            TopicSection(topicId: topic.id, topicName: topic.name, videos: videos, displayMode: displayMode)
+                        )
+                    }
+                    continue
+                }
+
+                var allVideos: [VideoGridItemModel] = []
+                var subtopicMap: [String: Int64] = [:]
+                if displayMode == .saved {
+                    for sub in topic.subtopics {
+                        let videos = context.videosForSubtopic(sub.id)
+                        for video in videos {
+                            subtopicMap[video.id] = sub.id
+                        }
+                        allVideos.append(contentsOf: videos)
+                    }
+                    allVideos.append(contentsOf: context.videosForTopic(topic.id, .saved))
+                } else {
+                    allVideos = context.videosForTopic(topic.id, displayMode)
+                }
+
+                if !allVideos.isEmpty {
+                    baseSections.append(
+                        TopicSection(
+                            topicId: topic.id,
+                            topicName: topic.name,
+                            videos: allVideos,
+                            videoSubtopicMap: subtopicMap,
+                            displayMode: displayMode
+                        )
+                    )
+                }
             }
         }
 
@@ -118,18 +136,15 @@ struct GridSectionBuilder {
         if let sortOrder = context.sortOrder {
             if sortOrder == .creator {
                 result = result.flatMap { section in
-                    section.displayMode == .saved
-                        ? GridSectionLogic.groupByCreator(
-                            section: section,
-                            ascending: context.sortAscending,
-                            channelCounts: context.channelCounts,
-                            includeTopicMarker: true
-                        )
-                        : [section]
+                    GridSectionLogic.groupByCreator(
+                        section: section,
+                        ascending: context.sortAscending,
+                        channelCounts: context.channelCounts,
+                        includeTopicMarker: context.watchPresentationMode == .allTogether ? false : true
+                    )
                 }
             } else {
                 result = result.map { section in
-                    guard section.displayMode == .saved else { return section }
                     return TopicSection(
                         topicId: section.topicId,
                         topicName: section.topicName,
@@ -139,6 +154,25 @@ struct GridSectionBuilder {
                         displayMode: section.displayMode
                     )
                 }
+            }
+        } else if context.pageDisplayMode == .watchCandidates,
+                  context.watchPresentationMode == .allTogether {
+            result = result.map { section in
+                TopicSection(
+                    topicId: section.topicId,
+                    topicName: section.topicName,
+                    videos: section.videos.sorted { lhs, rhs in
+                        let lhsScore = lhs.candidateScore ?? 0
+                        let rhsScore = rhs.candidateScore ?? 0
+                        if lhsScore == rhsScore {
+                            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                        }
+                        return lhsScore > rhsScore
+                    },
+                    totalCount: section.totalCount,
+                    videoSubtopicMap: section.videoSubtopicMap,
+                    displayMode: section.displayMode
+                )
             }
         }
 
@@ -167,7 +201,7 @@ struct GridSectionBuilder {
             }
 
             let matchingVideos = section.videos.filter { video in
-                query.matches(fields: [video.title, video.channelName ?? "", section.topicName])
+                query.matches(fields: [video.title, video.channelName ?? "", video.topicName ?? section.topicName])
             }
             if !matchingVideos.isEmpty {
                 filteredSections.append(

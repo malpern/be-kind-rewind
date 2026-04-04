@@ -24,6 +24,8 @@ struct GridSectionBuilderTests {
             sortOrder: nil,
             sortAscending: false,
             channelCounts: [:],
+            pageDisplayMode: .saved,
+            watchPresentationMode: .byTopic,
             displayModeForTopic: { _ in .saved },
             videosForTopic: { _, _ in
                 [Self.video(id: "topic-root", title: "Alpha Root", channel: "Alpha Channel", channelId: "chan-alpha")]
@@ -38,6 +40,7 @@ struct GridSectionBuilderTests {
                     return []
                 }
             },
+            allWatchVideos: { [] },
             videoIsInSelectedPlaylist: { $0 == "sub-layout" }
         )
 
@@ -45,7 +48,7 @@ struct GridSectionBuilderTests {
 
         #expect(result.searchResultCount == 2)
         #expect(result.sections.count == 1)
-        #expect(result.sections.first?.videos.map(\.id) == ["sub-layout"])
+        #expect(result.sections.first?.videos.map { $0.id } == ["sub-layout"])
         #expect(result.sections.first?.totalCount == 1)
     }
 
@@ -61,6 +64,8 @@ struct GridSectionBuilderTests {
             sortOrder: .creator,
             sortAscending: false,
             channelCounts: ["Alpha Channel": 2, "Beta Channel": 1],
+            pageDisplayMode: .saved,
+            watchPresentationMode: .byTopic,
             displayModeForTopic: { _ in .saved },
             videosForTopic: { _, _ in
                 [
@@ -70,6 +75,7 @@ struct GridSectionBuilderTests {
                 ]
             },
             videosForSubtopic: { _ in [] },
+            allWatchVideos: { [] },
             videoIsInSelectedPlaylist: { _ in true }
         )
 
@@ -79,7 +85,7 @@ struct GridSectionBuilderTests {
         #expect(result.sections[0].videos.isEmpty)
         #expect(result.sections[0].headerCountOverride == 3)
         #expect(result.sections[1].creatorName == "Alpha Channel")
-        #expect(result.sections[1].videos.map(\.id) == ["a-new", "a-old"])
+        #expect(result.sections[1].videos.map { $0.id } == ["a-new", "a-old"])
         #expect(result.sections[2].creatorName == "Beta Channel")
     }
 
@@ -94,12 +100,14 @@ struct GridSectionBuilderTests {
             id: id,
             title: title,
             channelName: channel,
+            topicName: nil,
             thumbnailUrl: nil,
             viewCount: nil,
             publishedAt: publishedAt,
             duration: nil,
             channelIconUrl: nil,
             channelId: channelId,
+            candidateScore: nil,
             stateTag: nil,
             isPlaceholder: false,
             placeholderMessage: nil

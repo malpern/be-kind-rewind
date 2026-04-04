@@ -65,23 +65,28 @@ public actor ClaudeClient {
     }
 
     private static func readFromKeychain() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "anthropic-api-key",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+        APIKeyStore().load(service: .anthropic)
+    }
 
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+    public static func hasStoredAPIKey() -> Bool {
+        if readFromConfigFile() != nil { return true }
+        if readFromKeychain() != nil { return true }
+        if let key = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"], !key.isEmpty { return true }
+        return false
+    }
 
-        guard status == errSecSuccess, let data = result as? Data,
-              let key = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-
+    public static func storeAPIKey(_ key: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        guard trimmed.hasPrefix("sk-ant-") else {
+            throw APIKeyStoreError.invalidKeyFormat
+        }
+        try APIKeyStore().save(trimmed, service: .anthropic)
+        cachedKey = trimmed
+    }
+
+    public static func clearStoredAPIKey() {
+        APIKeyStore().clear(service: .anthropic)
+        cachedKey = nil
     }
 
     public func complete(

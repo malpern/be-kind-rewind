@@ -23,6 +23,8 @@ public struct YouTubeClient: Sendable {
     public init(session: URLSession = .shared) throws {
         if let key = ProcessInfo.processInfo.environment["YOUTUBE_API_KEY"] ?? ProcessInfo.processInfo.environment["GOOGLE_API_KEY"] {
             self.apiKey = key
+        } else if let key = APIKeyStore().load(service: .youtube) {
+            self.apiKey = key
         } else {
             let configPath = NSString("~/.config/youtube/api-key").expandingTildeInPath
             guard FileManager.default.fileExists(atPath: configPath),
@@ -36,6 +38,29 @@ public struct YouTubeClient: Sendable {
         self.accessToken = ProcessInfo.processInfo.environment["YOUTUBE_ACCESS_TOKEN"]
             ?? ProcessInfo.processInfo.environment["GOOGLE_OAUTH_ACCESS_TOKEN"]
             ?? YouTubeOAuthTokenStore().load()?.accessToken
+    }
+
+    public static func hasStoredAPIKey() -> Bool {
+        if let key = ProcessInfo.processInfo.environment["YOUTUBE_API_KEY"] ?? ProcessInfo.processInfo.environment["GOOGLE_API_KEY"], !key.isEmpty {
+            return true
+        }
+        if APIKeyStore().load(service: .youtube) != nil {
+            return true
+        }
+        let configPath = NSString("~/.config/youtube/api-key").expandingTildeInPath
+        return FileManager.default.fileExists(atPath: configPath)
+    }
+
+    public static func storeAPIKey(_ key: String) throws {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw APIKeyStoreError.invalidKeyFormat
+        }
+        try APIKeyStore().save(trimmed, service: .youtube)
+    }
+
+    public static func clearStoredAPIKey() {
+        APIKeyStore().clear(service: .youtube)
     }
 
     /// Fetch metadata for up to 50 video IDs in a single request.

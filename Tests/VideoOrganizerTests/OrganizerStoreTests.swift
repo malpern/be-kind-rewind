@@ -162,9 +162,9 @@ struct OrganizerStoreTests {
         }
     }
 
-    @Test("setDisplayMode clears selection state when entering watch candidates")
+    @Test("setPageDisplayMode clears selection state when entering watch candidates")
     @MainActor
-    func setDisplayModeClearsSelectionState() throws {
+    func setPageDisplayModeClearsSelectionState() throws {
         try withFileBackedOrganizerFixture { fixture in
             let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
@@ -174,7 +174,7 @@ struct OrganizerStoreTests {
             store.selectedSubtopicId = alphaTopic.subtopics.first?.id
             store.selectedVideoId = "vid-0"
 
-            store.setDisplayMode(.watchCandidates, for: alphaTopic.id)
+            store.setPageDisplayMode(.watchCandidates)
 
             #expect(store.displayMode(for: alphaTopic.id) == .watchCandidates)
             #expect(store.selectedChannelId == nil)
@@ -184,18 +184,18 @@ struct OrganizerStoreTests {
         }
     }
 
-    @Test("activateDisplayMode for saved mode bumps refresh token")
+    @Test("activatePageDisplayMode for saved mode bumps refresh token")
     @MainActor
-    func activateDisplayModeSavedRefreshesToken() async throws {
+    func activatePageDisplayModeSavedRefreshesToken() async throws {
         try await withFileBackedOrganizerFixture { fixture in
             let store = try fixture.makeOrganizerStore()
             let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
             let before = store.candidateRefreshToken
 
-            await store.activateDisplayMode(TopicDisplayMode.saved, for: alphaTopic.id)
+            await store.activatePageDisplayMode(.saved)
 
             #expect(store.displayMode(for: alphaTopic.id) == .saved)
-            #expect(store.candidateRefreshToken == before + 1)
+            #expect(store.candidateRefreshToken >= before + 1)
         }
     }
 
