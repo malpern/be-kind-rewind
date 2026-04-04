@@ -3,5 +3,7 @@
 .DS_Store
 *.log
 *.db
+.runtime/
+scripts/__pycache__/
 Video Organizer.app/Contents/MacOS/
 Video Organizer.app/Contents/_CodeSignature/

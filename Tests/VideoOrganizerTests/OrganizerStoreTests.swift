@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import VideoOrganizer
+@testable import TaggingKit
 
 @Suite("OrganizerStore")
 struct OrganizerStoreTests {
@@ -235,6 +236,34 @@ struct OrganizerStoreTests {
 
         #expect(store.displayMode(for: alphaTopic.id) == .saved)
         #expect(store.candidateRefreshToken == before + 1)
+    }
+
+    @Test("watch later badge takes precedence for saved candidates")
+    @MainActor
+    func watchLaterBadgeForCandidate() throws {
+        try withTemporaryDirectory { directory in
+            let dbPath = directory.appendingPathComponent("organizer.db").path
+            try makeOrganizerStoreFixture(at: dbPath)
+
+            let fixtureStore = try TopicStore(path: dbPath)
+            let alphaTopic = try fixtureStore.topicIdByName("Alpha Topic").unsafelyUnwrapped
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "vid-3", title: "Gamma Debugging", channelId: "chan-gamma", channelName: "Gamma Channel", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 10, reason: "adjacent creator", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+            try fixtureStore.upsertPlaylist(PlaylistRecord(playlistId: "WL", title: "Watch Later", visibility: "Private", videoCount: nil, source: "test", fetchedAt: "2026-04-04T00:00:00Z"))
+            try fixtureStore.addPlaylistMembership(PlaylistMembershipRecord(playlistId: "WL", videoId: "vid-3", position: nil, verifiedAt: "2026-04-04T00:00:00Z"))
+            try fixtureStore.setCandidateState(topicId: alphaTopic, videoId: "vid-3", state: .saved)
+
+            let store = try OrganizerStore(dbPath: dbPath)
+
+            let candidates = store.candidateVideosForTopic(alphaTopic)
+            #expect(candidates.map(\.videoId) == ["vid-3"])
+            #expect(store.badgeTagForVideo("vid-3", candidateState: CandidateState.saved.rawValue) == "Watch Later")
+        }
     }
 
     @Test("renameTopic updates the topic list")

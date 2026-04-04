@@ -264,6 +264,48 @@ struct TopicStoreCommitTests {
         #expect(plan.count == 1)
         #expect(plan[0].videoId == "v2")
     }
+
+    @Test("routes Watch Later and Not Interested to the browser executor")
+    func executorRouting() throws {
+        let store = try TopicStore(inMemory: true)
+        try store.queueCommit(action: "add_to_playlist", videoId: "v1", playlist: "WL")
+        try store.queueCommit(action: "not_interested", videoId: "v2", playlist: "__youtube__")
+        try store.queueCommit(action: "add_to_playlist", videoId: "v3", playlist: "PL123")
+
+        let browserPlan = try store.pendingSyncPlan(executor: .browser)
+        let apiPlan = try store.pendingSyncPlan(executor: .api)
+
+        #expect(Set(browserPlan.map(\.videoId)) == Set(["v1", "v2"]))
+        #expect(browserPlan.allSatisfy { $0.executor == .browser })
+        #expect(apiPlan.map(\.videoId) == ["v3"])
+        #expect(apiPlan.allSatisfy { $0.executor == .api })
+    }
+}
+
+@Suite("TopicStore — Candidates")
+struct TopicStoreCandidateTests {
+    @Test("saved candidates stay visible while dismissed and watched are excluded")
+    func candidateStateFiltering() throws {
+        let store = try TopicStore(inMemory: true)
+        let topicId = try store.createTopic(name: "Candidates")
+        try store.replaceCandidates(
+            forTopic: topicId,
+            candidates: [
+                TopicCandidate(topicId: topicId, videoId: "keep", title: "Keep", channelId: "c1", channelName: "Alpha", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 5, reason: "keep", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                TopicCandidate(topicId: topicId, videoId: "saved", title: "Saved", channelId: "c1", channelName: "Alpha", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 4, reason: "saved", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                TopicCandidate(topicId: topicId, videoId: "dismissed", title: "Dismissed", channelId: "c1", channelName: "Alpha", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 3, reason: "dismissed", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                TopicCandidate(topicId: topicId, videoId: "watched", title: "Watched", channelId: "c1", channelName: "Alpha", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 2, reason: "watched", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+            ],
+            sources: []
+        )
+
+        try store.setCandidateState(topicId: topicId, videoId: "saved", state: .saved)
+        try store.setCandidateState(topicId: topicId, videoId: "dismissed", state: .dismissed)
+        try store.setCandidateState(topicId: topicId, videoId: "watched", state: .watched)
+
+        let visible = try store.candidatesForTopic(id: topicId)
+        #expect(Set(visible.map(\.videoId)) == Set(["keep", "saved"]))
+    }
 }
 
 // MARK: - VideoItem Tests

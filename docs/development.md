@@ -214,8 +214,14 @@ If working on OAuth flows, also place your Google desktop client JSON at:
 ```
 
 If you need playlist provenance refreshes for private playlists, make sure OAuth is connected first so `video-tagger verify-all-playlists` can read them.
-`sync-pending` uses the same OAuth connection for playlist-save actions. `Not Interested` stays in the queue as a browser-only deferred action until a Playwright executor is added.
-Browser-backed sync uses a persistent Playwright Chromium profile. Run `browser-sync-login` once, sign in to YouTube in that window, then later `sync-pending` or the app’s background sync loop can consume deferred browser actions. Failure screenshots/HTML are written to `output/playwright/browser-sync/`.
+`sync-pending` uses the same OAuth connection for playlist-save actions. `Not Interested` stays in the queue as a browser-only deferred action until a browser executor is ready.
+Browser-backed sync uses the dedicated Chrome profile at `~/.config/be-kind-rewind/playwright-profile`. Run `browser-sync-login` once, sign in to YouTube in that window, then later `sync-pending` or the app’s background sync loop can consume deferred browser actions. Failure screenshots/HTML are written to `output/playwright/browser-sync/`.
+
+## Runtime Dependencies
+
+- `./build-app.sh` is the supported packaging path; it signs the app bundle and bootstraps the managed discovery runtime
+- discovery fallback installs `scrapetube` into `.runtime/discovery-venv` from `scripts/requirements-discovery.txt`
+- the browser-sync Chrome profile is separate from your normal browser profile and is used for browser-only actions and API fallback
 
 ## Seen History Imports
 
