@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app-icon.png" width="128" height="128" alt="Be Kind Rewind app icon" />
+  <img src="Sources/VideoOrganizer/Resources/app-icon-about-clean.png" width="128" height="128" alt="Be Kind Rewind app icon" />
 </p>
 
 # Be Kind Rewind 📼
