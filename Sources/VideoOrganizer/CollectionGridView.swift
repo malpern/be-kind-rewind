@@ -509,7 +509,8 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 cacheDir: cacheDir,
                 thumbnailSize: thumbnailSize,
                 showMetadata: showMetadata,
-                isSelected: renderedSelectedVideoIds.contains(video.id)
+                isSelected: renderedSelectedVideoIds.contains(video.id),
+                highlightTerms: store?.parsedQuery.includeTerms ?? []
             )
         }
 
@@ -638,7 +639,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func headerModel(for section: TopicSection, at sectionIndex: Int?) -> CollectionSectionHeaderModel {
-            let scrollProgress = sectionIndex.map(sectionScrollProgress(forSectionAt:)) ?? 0
+            let scrollProgress: Double
+            if section.creatorName != nil || isTopicMarkerInCreatorGrouping(section) {
+                scrollProgress = topicScrollProgress(forTopicId: section.topicId)
+            } else {
+                scrollProgress = sectionIndex.map(sectionScrollProgress(forSectionAt:)) ?? 0
+            }
+
             if let creatorName = section.creatorName {
                 return .creator(
                     channelName: creatorName,
@@ -684,6 +691,32 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             )
         }
 
+        private func isTopicMarkerInCreatorGrouping(_ section: TopicSection) -> Bool {
+            section.creatorName == nil && renderedSections.contains { $0.topicId == section.topicId && $0.creatorName != nil }
+        }
+
+        private func topicScrollProgress(forTopicId topicId: Int64) -> Double {
+            guard let collectionView,
+                  let scrollView = collectionView.enclosingScrollView else { return 0 }
+
+            let visibleBounds = scrollView.contentView.bounds
+            guard visibleBounds.height > 0 else { return 0 }
+
+            let sectionIndices = renderedSections.indices.filter { renderedSections[$0].topicId == topicId }
+            guard !sectionIndices.isEmpty else { return 0 }
+
+            var topicFrame: CGRect?
+            for sectionIndex in sectionIndices {
+                guard let sectionFrame = frameForSection(at: sectionIndex) else { continue }
+                topicFrame = topicFrame.map { $0.union(sectionFrame) } ?? sectionFrame
+            }
+
+            guard let frame = topicFrame else { return 0 }
+            let scrollableDistance = max(frame.height - visibleBounds.height, 1)
+            let scrolled = visibleBounds.minY - frame.minY
+            return min(max(scrolled / scrollableDistance, 0), 1)
+        }
+
         private func sectionScrollProgress(forSectionAt sectionIndex: Int) -> Double {
             guard let collectionView,
                   let scrollView = collectionView.enclosingScrollView,
@@ -691,6 +724,15 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
             let visibleBounds = scrollView.contentView.bounds
             guard visibleBounds.height > 0 else { return 0 }
+
+            guard let frame = frameForSection(at: sectionIndex) else { return 0 }
+            let scrollableDistance = max(frame.height - visibleBounds.height, 1)
+            let scrolled = visibleBounds.minY - frame.minY
+            return min(max(scrolled / scrollableDistance, 0), 1)
+        }
+
+        private func frameForSection(at sectionIndex: Int) -> CGRect? {
+            guard let collectionView else { return nil }
 
             let headerIndexPath = IndexPath(item: 0, section: sectionIndex)
             var sectionFrame = collectionView.collectionViewLayout?.layoutAttributesForSupplementaryView(
@@ -706,10 +748,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 sectionFrame = sectionFrame.map { $0.union(itemsFrame) } ?? itemsFrame
             }
 
-            guard let frame = sectionFrame else { return 0 }
-            let scrollableDistance = max(frame.height - visibleBounds.height, 1)
-            let scrolled = visibleBounds.minY - frame.minY
-            return min(max(scrolled / scrollableDistance, 0), 1)
+            return sectionFrame
         }
 
         private func refreshVisibleHeaders() {
@@ -1405,11 +1444,19 @@ final class VideoItemCell: NSCollectionViewItem {
         self.view = trackingView
     }
 
-    func configure(video: VideoGridItemModel, cacheDir: URL, thumbnailSize: Double, showMetadata: Bool, isSelected: Bool) {
+    func configure(
+        video: VideoGridItemModel,
+        cacheDir: URL,
+        thumbnailSize: Double,
+        showMetadata: Bool,
+        isSelected: Bool,
+        highlightTerms: [String]
+    ) {
         let content = VideoCellContent(
             video: video, cacheDir: cacheDir,
             thumbnailSize: thumbnailSize, showMetadata: showMetadata,
-            isSelected: isSelected
+            isSelected: isSelected,
+            highlightTerms: highlightTerms
         )
         if let hostingView {
             hostingView.rootView = content
@@ -1501,6 +1548,7 @@ private struct VideoCellContent: View {
     let thumbnailSize: Double
     let showMetadata: Bool
     let isSelected: Bool
+    var highlightTerms: [String] = []
 
     private var cornerRadius: CGFloat { GridConstants.cornerRadius(for: thumbnailSize) }
     private var metadataLine: String? {
@@ -1561,23 +1609,30 @@ private struct VideoCellContent: View {
                 }
             }
 
-            Text(video.title)
-                .font(GridConstants.titleFont(for: thumbnailSize))
-                .lineLimit(2)
-                .foregroundStyle(.primary)
+            if showMetadata {
+                Text(video.title)
+                    .font(GridConstants.titleFont(for: thumbnailSize))
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
 
-            if showMetadata, let channel = video.channelName {
-                Text(channel)
-                    .font(GridConstants.channelFont(for: thumbnailSize))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+                if let channel = video.channelName {
+                    Text(channel)
+                        .font(GridConstants.channelFont(for: thumbnailSize))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
 
-            if showMetadata, let metadataLine {
-                Text(metadataLine)
-                    .font(GridConstants.metadataFont(for: thumbnailSize))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
+                if let metadataLine {
+                    Text(metadataLine)
+                        .font(GridConstants.metadataFont(for: thumbnailSize))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            } else if !highlightTerms.isEmpty {
+                HighlightedText(video.title, terms: highlightTerms)
+                    .font(GridConstants.titleFont(for: thumbnailSize))
+                    .lineLimit(2)
+                    .padding(.top, 2)
             }
         }
     }
@@ -1697,14 +1752,11 @@ private struct SectionHeaderContent: View {
                 highlightTerms: highlightTerms
             )
             .onTapGesture(perform: onInspect)
-            .onDoubleClick {
+            .contextMenu {
                 if let channelUrl {
-                    NSWorkspace.shared.open(channelUrl)
-                }
-            }
-            .onHover { hovering in
-                if hovering {
-                    onInspect()
+                    Button("Open Channel on YouTube") {
+                        NSWorkspace.shared.open(channelUrl)
+                    }
                 }
             }
         }

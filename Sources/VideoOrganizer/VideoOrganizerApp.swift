@@ -78,6 +78,10 @@ struct VideoOrganizerApp: App {
     }
 
     private func toggleSort(_ order: SortOrder) {
+        if store?.selectedChannelId != nil {
+            store?.clearChannelFilter()
+            displaySettings.toast.show("Creator Filter Cleared", icon: "person.crop.circle.badge.xmark")
+        }
         withAnimation(.easeInOut(duration: 0.3)) {
             if displaySettings.sortOrder == order {
                 if order == .shuffle {
@@ -438,6 +442,10 @@ private struct AppMenuCommands: Commands {
     }
 
     private func toggleSort(_ order: SortOrder) {
+        if store?.selectedChannelId != nil {
+            store?.clearChannelFilter()
+            displaySettings.toast.show("Creator Filter Cleared", icon: "person.crop.circle.badge.xmark")
+        }
         withAnimation(.easeInOut(duration: 0.3)) {
             if displaySettings.sortOrder == order {
                 if order == .shuffle {

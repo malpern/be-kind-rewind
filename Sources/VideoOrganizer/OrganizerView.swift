@@ -64,7 +64,14 @@ struct OrganizerView: View {
                 dismissButton: .default(Text("OK"))
             )
         }
+        .task(id: watchThumbnailPrefetchKey) {
+            await prefetchWatchThumbnailsIfNeeded()
+        }
         .accessibilityIdentifier("mainWindow")
+    }
+
+    private var watchThumbnailPrefetchKey: String {
+        "\(store.pageDisplayMode.rawValue)-\(store.candidateRefreshToken)"
     }
 
     @ViewBuilder
@@ -85,6 +92,10 @@ struct OrganizerView: View {
 
         ForEach(SortOrder.allCases, id: \.self) { order in
             Button {
+                if store.selectedChannelId != nil {
+                    store.clearChannelFilter()
+                    displaySettings.toast.show("Creator Filter Cleared", icon: "person.crop.circle.badge.xmark")
+                }
                 withAnimation(.easeInOut(duration: 0.3)) {
                     if displaySettings.sortOrder == order {
                         if order == .shuffle {
@@ -155,6 +166,13 @@ struct OrganizerView: View {
             }
             .accessibilityLabel("Downloading thumbnails: \(thumbnailCache.downloadedCount) of \(thumbnailCache.totalCount)")
         }
+    }
+
+    private func prefetchWatchThumbnailsIfNeeded() async {
+        guard store.pageDisplayMode == .watchCandidates else { return }
+        let videoIds = Array(Set(store.candidateVideosForAllTopics().map(\.videoId)))
+        guard !videoIds.isEmpty else { return }
+        await thumbnailCache.prefetch(videoIds: videoIds)
     }
 }
 

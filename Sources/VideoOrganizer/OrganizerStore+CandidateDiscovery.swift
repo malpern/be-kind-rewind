@@ -23,12 +23,21 @@ extension OrganizerStore {
         do {
             let storedCandidates = try store.candidatesForTopic(id: topicId, limit: 36)
             if storedCandidates.isEmpty {
-                return [.placeholder(topicId: topicId, title: "No candidates yet", message: "No unseen candidates were found from this topic’s creators or adjacent saved-library channels.")]
+                return [.placeholder(
+                    topicId: topicId,
+                    title: "No candidates yet",
+                    message: "No unseen candidates were found from this topic’s creators or adjacent saved-library channels.\(watchHistoryHintSuffix)"
+                )]
             }
             return storedCandidates.map(CandidateVideoViewModel.init(from:))
         } catch {
             return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error.localizedDescription)]
         }
+    }
+
+    private var watchHistoryHintSuffix: String {
+        guard seenHistoryCount == 0 else { return "" }
+        return " Watch history import is optional, but adding it in Settings helps filter out videos you've already watched."
     }
 
     func candidateVideosForAllTopics() -> [CandidateVideoViewModel] {

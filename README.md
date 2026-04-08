@@ -77,7 +77,7 @@ then do this:
 
 If you export Google Takeout / My Activity watch history, you can import it in:
 
-- `Settings > History > Import Seen History…`
+- `Settings > History > Import Watch History…`
 
 That suppresses already-watched videos from the `Watch` candidate list.
 

@@ -140,12 +140,16 @@ struct TopicSidebar: View {
                                         }
                                         .buttonStyle(.plain)
                                         .contentShape(Rectangle())
-                                        .onDoubleClick {
+                                        .contextMenu {
                                             if let url = creator.channelUrl {
-                                                NSWorkspace.shared.open(url)
+                                                Button("Open Channel on YouTube") {
+                                                    NSWorkspace.shared.open(url)
+                                                }
                                             } else {
-                                                let url = URL(string: "https://www.youtube.com/channel/\(creator.channelId)")!
-                                                NSWorkspace.shared.open(url)
+                                                Button("Open Channel on YouTube") {
+                                                    let url = URL(string: "https://www.youtube.com/channel/\(creator.channelId)")!
+                                                    NSWorkspace.shared.open(url)
+                                                }
                                             }
                                         }
                                         .accessibilityIdentifier("creator-\(creator.sectionId)")

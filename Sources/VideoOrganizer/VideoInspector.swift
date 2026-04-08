@@ -33,8 +33,13 @@ struct VideoInspector: View {
                 .font(.system(size: 32))
                 .foregroundStyle(.tertiary)
             Text("Select a video")
+                .font(.headline)
+            Text("Hover a card to preview it here, or select one to see actions, tags, and playlist details.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 24)
         }
         .frame(maxHeight: .infinity)
     }
@@ -72,11 +77,6 @@ struct VideoInspector: View {
                         .buttonStyle(.plain)
                         .help("Show this creator in the library")
                         .contentShape(Rectangle())
-                        .onDoubleClick {
-                            if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
-                                NSWorkspace.shared.open(channelUrl)
-                            }
-                        }
                         .contextMenu {
                             if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
                                 Button("Open Channel on YouTube") {

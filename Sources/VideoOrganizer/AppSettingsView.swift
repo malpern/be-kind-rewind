@@ -187,8 +187,18 @@ struct AppSettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("History")
+                    Text("History (Optional)")
                         .font(.title3.weight(.semibold))
+
+                    authStatusCard(
+                        title: "Watch history",
+                        message: store.seenHistoryCount > 0 ? "Already-watched suppression is on" : "Already-watched suppression is off",
+                        detail: store.seenHistoryCount > 0
+                            ? "Imported \(store.seenHistoryCount) watch history event\(store.seenHistoryCount == 1 ? "" : "s"). Watch recommendations can now filter out videos you've already seen."
+                            : "Watch recommendations still work without this. Importing Google Takeout or My Activity history simply helps hide videos you've already watched.",
+                        icon: store.seenHistoryCount > 0 ? "checkmark.circle.fill" : "info.circle.fill",
+                        tint: store.seenHistoryCount > 0 ? .green : .secondary
+                    )
 
                     HStack {
                         Text("Imported seen events")
@@ -199,13 +209,13 @@ struct AppSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Text("Import a Google Takeout or My Activity export to suppress already-watched videos from watch candidates.")
+                    Text("Import a Google Takeout or My Activity export if you want Watch recommendations to suppress videos you've already seen.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     HStack(spacing: 12) {
-                        Button("Import Seen History…") {
+                        Button("Import Watch History…") {
                             store.importSeenHistoryFromPanel()
                         }
 

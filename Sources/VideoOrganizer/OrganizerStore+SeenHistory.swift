@@ -16,7 +16,7 @@ private enum SeenHistoryController {
     @MainActor
     static func importSeenHistory(from store: OrganizerStore) {
         let panel = NSOpenPanel()
-        panel.title = "Import Seen History"
+        panel.title = "Import Watch History"
         panel.message = "Choose a Google Takeout or My Activity export file."
         panel.allowedContentTypes = [.json, .html, .plainText]
         panel.allowsMultipleSelection = false
@@ -34,13 +34,13 @@ private enum SeenHistoryController {
             store.candidateRefreshToken += 1
             AppLogger.discovery.info("Imported \(imported, privacy: .public) seen-history records from \(url.lastPathComponent, privacy: .public)")
             store.alert = AppAlertState(
-                title: "Seen History Imported",
+                title: "Watch History Imported",
                 message: "Parsed \(records.count) history records and imported \(imported) new entries from \(url.lastPathComponent)."
             )
         } catch {
             AppLogger.discovery.error("Failed to import seen history from \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
             store.alert = AppAlertState(
-                title: "Could Not Import Seen History",
+                title: "Could Not Import Watch History",
                 message: error.localizedDescription
             )
         }
