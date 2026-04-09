@@ -531,6 +531,14 @@ extension OrganizerStore {
         guard watchRefreshTask == nil else { return }
 
         let topicsToRefresh = topics
+
+        // Fast path: if all topics have fresh candidates, skip the refresh entirely
+        let allFresh = topicsToRefresh.allSatisfy { CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: $0.id, store: self) }
+        if allFresh && !storedCandidateVideosByTopic.isEmpty {
+            AppLogger.file.log("All \(topicsToRefresh.count) topics have fresh candidates — skipping refresh", category: "discovery")
+            rebuildWatchPools()
+            return
+        }
         watchRefreshTotalTopics = topicsToRefresh.count
         watchRefreshCompletedTopics = 0
         watchRefreshCurrentTopicName = selectedTopicId.flatMap { topicId in
