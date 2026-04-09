@@ -1,57 +1,29 @@
 import SwiftUI
 
-/// Initial splash screen shown while the database loads on first launch.
-struct SplashView: View {
-    @State private var appeared = false
-
+/// Inline loading state shown in the main window while the database initializes.
+struct InlineLoadingView: View {
     var body: some View {
-        HStack(spacing: 0) {
-            // Left: app icon taking full height
-            if let url = Bundle.module.url(forResource: "splash-image", withExtension: "png"),
+        VStack(spacing: 16) {
+            if let url = Bundle.module.url(forResource: "app-icon", withExtension: "png"),
                let nsImage = NSImage(contentsOf: url) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .interpolation(.high)
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 320, height: 320)
-                    .clipped()
+                    .frame(width: 96, height: 96)
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
             }
 
-            // Right: app info
-            VStack(alignment: .leading, spacing: 0) {
-                Spacer()
+            Text("Be Kind, Rewind")
+                .font(.title2.weight(.semibold))
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Be Kind, Rewind")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
-                }
+            ProgressView()
+                .controlSize(.small)
 
-                Spacer()
-
-                VStack(alignment: .leading, spacing: 4) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.white.opacity(0.5))
-
-                    Text("Version 0.1.0")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.3))
-                    Text("\u{00A9} 2026 Micah Alpern")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.3))
-                }
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Loading library…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
-        .frame(width: 540, height: 320)
-        .background(Color.black)
-        .opacity(appeared ? 1.0 : 0.0)
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.4)) {
-                appeared = true
-            }
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

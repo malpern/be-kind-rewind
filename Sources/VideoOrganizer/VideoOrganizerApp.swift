@@ -30,15 +30,13 @@ struct VideoOrganizerApp: App {
                         Text(loadError)
                             .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    Color.clear
+                    InlineLoadingView()
                 }
             }
             .task {
                 await initializeStore()
-            }
-            .onAppear {
-                showSplashWindow()
             }
             .sheet(isPresented: $showCredentialOnboarding) {
                 FirstRunCredentialOnboardingView {
@@ -95,36 +93,6 @@ struct VideoOrganizerApp: App {
             }
         }
         displaySettings.toast.show(order.helpText, icon: order.sfSymbol)
-    }
-
-    private func showSplashWindow() {
-        let splashWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 320),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        splashWindow.isOpaque = false
-        splashWindow.backgroundColor = .clear
-        splashWindow.hasShadow = true
-        splashWindow.level = .floating
-        splashWindow.center()
-        splashWindow.contentView = NSHostingView(rootView: SplashView())
-        splashWindow.makeKeyAndOrderFront(nil)
-
-        Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            await MainActor.run {
-                NSAnimationContext.runAnimationGroup({ context in
-                    context.duration = 0.4
-                    splashWindow.animator().alphaValue = 0
-                }, completionHandler: {
-                    Task { @MainActor in
-                        splashWindow.orderOut(nil)
-                    }
-                })
-            }
-        }
     }
 
     private func initializeStore() async {

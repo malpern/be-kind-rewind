@@ -8,8 +8,11 @@ struct TopicSidebar: View {
     @State private var showingSettings = false
     @State private var expandedTopicId: Int64? = nil
     @State private var selectedCreatorSectionId: String?
+    @State private var renamingTopicId: Int64?
+    @State private var renameText: String = ""
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
+    @FocusState private var renameFocused: Bool
 
     private var isCreatorMode: Bool {
         displaySettings.sortOrder == .creator
@@ -110,17 +113,12 @@ struct TopicSidebar: View {
 
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(filteredTopics) { topic in
-                            TopicRow(
-                                topic: topic,
-                                count: displayedCount(for: topic),
-                                highlightTerms: store.parsedQuery.includeTerms,
-                                isSelected: isSelected(topic),
-                                isViewport: isViewportTopic(topic)
-                            )
+                            topicRowContent(topic)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                             .simultaneousGesture(
                                 TapGesture(count: 2).onEnded {
+                                    guard renamingTopicId == nil else { return }
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         if expandedTopicId == topic.id {
                                             expandedTopicId = nil
@@ -132,6 +130,7 @@ struct TopicSidebar: View {
                             )
                             .simultaneousGesture(
                                 TapGesture(count: 1).onEnded {
+                                    guard renamingTopicId == nil else { return }
                                     applySidebarSelection(topicId: topic.id, subtopicId: nil)
                                 }
                             )
@@ -357,6 +356,47 @@ struct TopicSidebar: View {
         displaySettings.scrollToTopicRequested = topicId
     }
 
+    @ViewBuilder
+    private func topicRowContent(_ topic: TopicViewModel) -> some View {
+        if renamingTopicId == topic.id {
+            HStack(spacing: 10) {
+                Image(systemName: TopicTheme.iconName(for: topic.name))
+                    .font(.title3)
+                    .foregroundStyle(TopicTheme.iconColor(for: topic.name))
+                    .frame(width: 24)
+
+                TextField("Topic name", text: $renameText)
+                    .textFieldStyle(.plain)
+                    .focused($renameFocused)
+                    .onSubmit { commitRename() }
+                    .onExitCommand { renamingTopicId = nil }
+            }
+            .padding(.vertical, 2)
+            .padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.25))
+            )
+        } else {
+            TopicRow(
+                topic: topic,
+                count: displayedCount(for: topic),
+                highlightTerms: store.parsedQuery.includeTerms,
+                isSelected: isSelected(topic),
+                isViewport: isViewportTopic(topic)
+            )
+        }
+    }
+
+    private func commitRename() {
+        guard let topicId = renamingTopicId else { return }
+        let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty {
+            store.renameTopic(topicId, to: trimmed)
+        }
+        renamingTopicId = nil
+    }
+
     private func applyCreatorSelection(_ creator: CreatorSidebarEntry) {
         selectedCreatorSectionId = creator.sectionId
         let topicId: Int64?
@@ -376,7 +416,11 @@ struct TopicSidebar: View {
 
     @ViewBuilder
     private func contextMenu(for topic: TopicViewModel) -> some View {
-        Button("Rename…") { }
+        Button("Rename…") {
+            renameText = topic.name
+            renamingTopicId = topic.id
+            renameFocused = true
+        }
 
         Divider()
 
