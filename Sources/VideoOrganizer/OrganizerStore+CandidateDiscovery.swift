@@ -503,12 +503,24 @@ extension OrganizerStore {
 
         do {
             try process.run()
-            let (stdoutData, stderrData) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, Data), Error>) in
-                process.terminationHandler = { _ in
-                    let out = stdout.fileHandleForReading.readDataToEndOfFile()
-                    let err = stderr.fileHandleForReading.readDataToEndOfFile()
-                    continuation.resume(returning: (out, err))
+            let (stdoutData, stderrData) = try await withThrowingTaskGroup(of: (Data, Data).self) { group in
+                group.addTask {
+                    await withCheckedContinuation { continuation in
+                        process.terminationHandler = { _ in
+                            let out = stdout.fileHandleForReading.readDataToEndOfFile()
+                            let err = stderr.fileHandleForReading.readDataToEndOfFile()
+                            continuation.resume(returning: (out, err))
+                        }
+                    }
                 }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(30))
+                    process.terminate()
+                    throw CancellationError()
+                }
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
             }
             guard process.terminationStatus == 0 else {
                 let errText = String(data: stderrData, encoding: .utf8) ?? ""
@@ -556,7 +568,7 @@ extension OrganizerStore {
 
             var remainingTopicIds = Set(topicsToRefresh.map(\.id))
 
-            while !remainingTopicIds.isEmpty {
+            while !remainingTopicIds.isEmpty && !Task.isCancelled {
                 let orderedIds = self.prioritizedWatchRefreshTopicIDs(from: Array(remainingTopicIds))
                 guard let nextTopicId = orderedIds.first,
                       let topic = topicsToRefresh.first(where: { $0.id == nextTopicId }) else {

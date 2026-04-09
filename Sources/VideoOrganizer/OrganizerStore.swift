@@ -109,7 +109,6 @@ final class OrganizerStore {
     var syncLoopTask: Task<Void, Never>?
     var browserStatusTask: Task<Void, Never>?
     var watchRefreshTask: Task<Void, Never>?
-    private var watchPoolVersionSignalTask: Task<Void, Never>?
     private var isUpdatingSelectionFromGrid = false
 
     let store: TopicStore
@@ -684,6 +683,9 @@ final class OrganizerStore {
             viewportSubtopicId = nil
             viewportCreatorSectionId = nil
             visibleWatchTopicIds = []
+        } else {
+            // Cancel background watch refresh when leaving Watch mode
+            watchRefreshTask?.cancel()
         }
         candidateRefreshToken += 1
     }
@@ -711,7 +713,7 @@ final class OrganizerStore {
             topics.flatMap { assigned[$0.id] ?? [] },
             store: self
         )
-        scheduleWatchPoolVersionSignal()
+        watchPoolVersion &+= 1
         let duration = startedAt.duration(to: .now)
         AppLogger.discovery.info(
             "Rebuilt Watch pools for \(self.topics.count, privacy: .public) topics in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public); ranked candidates: \(self.rankedWatchPool.count, privacy: .public)"
@@ -787,14 +789,6 @@ final class OrganizerStore {
         }
     }
 
-    private func scheduleWatchPoolVersionSignal() {
-        watchPoolVersionSignalTask?.cancel()
-        watchPoolVersionSignalTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(120))
-            guard let self, !Task.isCancelled else { return }
-            self.watchPoolVersion &+= 1
-        }
-    }
 
     // Candidate mutation and playlist operations are in OrganizerStore+VideoActions.swift
 

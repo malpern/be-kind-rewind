@@ -103,7 +103,7 @@ public struct DiscoveryFallbackService: Sendable {
         }
     }
 
-    private func runProcess(arguments: [String]) async throws -> ProcessExecutionResult {
+    private func runProcess(arguments: [String], timeout: Duration = .seconds(30)) async throws -> ProcessExecutionResult {
         let process = Process()
         process.currentDirectoryURL = environment.repoRoot()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -115,16 +115,28 @@ public struct DiscoveryFallbackService: Sendable {
         process.standardError = stderr
         try process.run()
 
-        return try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { process in
-                let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-                continuation.resume(returning: ProcessExecutionResult(
-                    terminationStatus: process.terminationStatus,
-                    stdout: stdoutData,
-                    stderr: stderrData
-                ))
+        return try await withThrowingTaskGroup(of: ProcessExecutionResult.self) { group in
+            group.addTask {
+                await withCheckedContinuation { continuation in
+                    process.terminationHandler = { process in
+                        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+                        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+                        continuation.resume(returning: ProcessExecutionResult(
+                            terminationStatus: process.terminationStatus,
+                            stdout: stdoutData,
+                            stderr: stderrData
+                        ))
+                    }
+                }
             }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                process.terminate()
+                throw DiscoveryFallbackError.executionFailed("Process timed out after \(timeout)")
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 }
