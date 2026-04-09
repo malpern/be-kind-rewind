@@ -367,12 +367,26 @@ extension OrganizerStore {
         guard !channelsWithUrl.isEmpty else { return }
         AppLogger.discovery.info("Downloading \(channelsWithUrl.count, privacy: .public) channel icons from CDN")
 
-        // Phase 2: Download icon images from CDN (free)
+        // Phase 2: Download icon images from CDN (free, with per-icon timeout)
         var fetchedCount = 0
         for (channelId, iconUrl, name) in channelsWithUrl {
             do {
-                let (data, response) = try await URLSession.shared.data(from: iconUrl)
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else { continue }
+                let data = try await withThrowingTaskGroup(of: Data.self) { group in
+                    group.addTask {
+                        let (data, response) = try await URLSession.shared.data(from: iconUrl)
+                        guard let http = response as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else {
+                            throw CancellationError()
+                        }
+                        return data
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(4))
+                        throw CancellationError()
+                    }
+                    let result = try await group.next()!
+                    group.cancelAll()
+                    return result
+                }
 
                 if (try? store.channelById(channelId)) == nil {
                     try store.upsertChannel(ChannelRecord(
@@ -386,7 +400,7 @@ extension OrganizerStore {
                 knownChannelsById.removeValue(forKey: channelId)
                 fetchedCount += 1
             } catch {
-                // Non-critical — skip and continue
+                // Timeout or network failure — skip, leave as letter placeholder
             }
         }
 
