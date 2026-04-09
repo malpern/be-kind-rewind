@@ -6,22 +6,23 @@ Audit performed 2026-04-09. Organized by priority.
 
 ## P0 — Structural / Architecture
 
-- [ ] **Break up OrganizerStore (God Object)**
-  2,735 lines across 5 files, 65+ methods, 28+ properties. Handles database access,
-  UI state, filtering, search, candidate discovery, sync, browser automation, and
-  creator analytics in one class.
-  - Extract `CandidateDiscoveryCoordinator` from `OrganizerStore+CandidateDiscovery.swift` (1,001 lines)
-  - Extract `SyncCoordinator` from `OrganizerStore+Sync.swift` (228 lines)
-  - Extract `CreatorAnalyticsProvider` from `OrganizerStore+CreatorAnalytics.swift` (113 lines)
-  - Keep `OrganizerStore` as a thin facade delegating to these coordinators
+- [x] **Replace deprecated Alert API**
+  `OrganizerView.swift` — migrated to `.alert(_:isPresented:actions:message:)`.
 
-- [ ] **Replace deprecated Alert API**
-  `OrganizerView.swift:67-73` uses the old `Alert` struct with `.alert(item:)`.
-  Migrate to `.alert(_:isPresented:actions:message:)`.
+- [x] **Fix `nonisolated(unsafe)` static cache in ClaudeClient**
+  Replaced with `Mutex<String?>` from Synchronization framework.
 
-- [ ] **Fix `nonisolated(unsafe)` static cache in ClaudeClient**
-  `ClaudeClient.swift:18` — `nonisolated(unsafe) private static var cachedKey` is a
-  thread-unsafe shared mutable. Use an actor-isolated property or a lock.
+- [x] **Target macOS 15** (was macOS 14)
+  Updated `Package.swift` platforms to `.macOS(.v15)`.
+
+- [x] **Extract view models from OrganizerStore**
+  Moved 336 lines of enums/structs to `OrganizerViewModels.swift`.
+
+- [ ] **Break up OrganizerStore further (God Object)**
+  Still 1,100+ lines with 65+ methods. Consider extracting:
+  - Candidate mutation methods → `OrganizerStore+CandidateMutations.swift`
+  - Creator navigation logic → standalone coordinator
+  - Playlist save/remove operations → dedicated helper
 
 - [ ] **Split VideoTaggerCommand.swift**
   1,293 lines in a single CLI command file. Break into subcommand files.
@@ -29,6 +30,10 @@ Audit performed 2026-04-09. Organized by priority.
 ---
 
 ## P2 — Testability & Coverage
+
+- [x] **Replace silent `try?` calls with logged errors**
+  12 calls converted to do/catch with AppLogger in OrganizerStore,
+  Sync, SeenHistory, and CandidateDiscovery.
 
 - [ ] **Add tests for BrowserSyncService** (254 lines, zero tests)
   Orchestrates an external Node.js process. At minimum, test the command
@@ -51,41 +56,34 @@ Audit performed 2026-04-09. Organized by priority.
   - `ThumbnailCache` — creates its own `URLSession` internally
   These block unit testing of the consuming types.
 
-- [ ] **Replace silent `try?` calls with logged errors**
-  `OrganizerStore+CandidateDiscovery.swift` has multiple `try?` calls that
-  silently swallow errors. At minimum, log the error before discarding it.
-
 ---
 
 ## P3 — File Organization
 
+- [x] **Remove stale backup file** `docs/FlattenedGridView.swift.bak`
+
 - [ ] **Extract cell/header SwiftUI content from CollectionGridView.swift**
-  2,225 lines with 11+ types. The cell SwiftUI body (`line 1868+`) and header
-  SwiftUI body (`line 2036+`) can live in their own files.
+  2,225 lines with 11+ types. The cell SwiftUI body and header
+  SwiftUI body can live in their own files.
 
 - [ ] **Split TopicStore.swift by domain**
   1,500 lines covering CRUD, queries, sync queue, and candidates.
-  Consider `TopicStore+Candidates.swift`, `TopicStore+Sync.swift`.
+  Requires widening column access from `private` to `internal`.
 
 - [ ] **Split YouTubeClient.swift**
   1,014 lines. Consider separating read operations (fetch metadata, search)
   from write operations (add/remove playlist items).
 
-- [ ] **Remove stale backup file**
-  `docs/FlattenedGridView.swift.bak` is a leftover backup in the docs folder.
-
 ---
 
 ## P4 — Apple Best Practices
 
-- [ ] **Document `@unchecked Sendable` safety invariants**
-  `YouTubeAuthController.swift:143` — `OAuthLoopbackReceiver` uses
-  `@unchecked Sendable` without documenting why it's safe. Add a comment
-  explaining the threading guarantees.
+- [x] **Document `@unchecked Sendable` safety invariants**
+  Added safety documentation to `OAuthLoopbackReceiver` in
+  `YouTubeAuthController.swift`.
 
-- [ ] **Audit `nonisolated(unsafe)` on boundsObserver**
-  `CollectionGridView.swift:1538` — verify the observer lifecycle is correct
-  and document the safety rationale.
+- [x] **Audit `nonisolated(unsafe)` on boundsObserver**
+  Added safety rationale comment in `CollectionGridView.swift`.
 
 - [ ] **Add retry/backoff for network-dependent services**
   `YouTubeClient`, `BrowserSyncService`, and `DiscoveryFallbackService` have
@@ -95,22 +93,20 @@ Audit performed 2026-04-09. Organized by priority.
 
 ## P5 — Documentation
 
-- [ ] **Add doc comments to OrganizerStore public API**
-  40+ public properties and methods with no documentation. Prioritize
-  `candidateVideosForTopic()`, `candidateVideosForAllTopics()`,
-  `navigateToCreatorInWatch()`, `pageDisplayMode`, and state lifecycle.
+- [x] **Add doc comments to OrganizerStore public API**
+  Added class-level doc, extension index, and key property/method docs.
 
-- [ ] **Document CollectionGridView AppKit bridge architecture**
-  2,225 lines with zero doc comments. Needs a file-level overview explaining
-  the NSViewRepresentable → Coordinator → Cell → SwiftUI hosting chain.
+- [x] **Document CollectionGridView AppKit bridge architecture**
+  Added file-level architecture overview explaining the full hosting chain.
 
-- [ ] **Document TopicSidebar filtering logic** (623 lines, zero docs)
+- [x] **Document PKCE OAuth flow in YouTubeOAuth.swift**
+  Added step-by-step flow documentation on `YouTubeOAuthService`.
 
-- [ ] **Document VideoInspector** (535 lines, zero docs)
+- [x] **Add doc comments to all undocumented UI files**
+  All 17 UI files now have at least a one-line type-level doc comment.
 
-- [ ] **Document PKCE OAuth flow in YouTubeOAuth.swift**
-  The authorization code flow with PKCE is non-trivial and undocumented.
+- [ ] **Document TopicSidebar filtering logic** (623 lines)
+  Internal methods that build the sidebar sections need explanation.
 
-- [ ] **Add doc comments to remaining 20 undocumented UI files**
-  At minimum, each file should have a one-line `///` comment on the main type
-  explaining its role.
+- [ ] **Document VideoInspector** (535 lines)
+  The multi-section inspector layout logic is undocumented.
