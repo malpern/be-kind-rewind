@@ -25,7 +25,7 @@ Download the latest packaged app from [GitHub Releases](https://github.com/malpe
 
 1. Download the latest `Be.Kind.Rewind.zip` from [Releases](https://github.com/malpern/be-kind-rewind/releases/latest).
 2. Unzip it.
-3. Move `Video Organizer.app` into `Applications`.
+3. Move `Be Kind, Rewind.app` into `Applications`.
 4. Open the app.
 
 On first launch, new installs with missing credentials will show a short setup screen that points you to the right Settings panels. If you already have keys configured, the app skips that screen.
@@ -190,7 +190,7 @@ swift build
 
 # Build and package the app
 ./build-app.sh
-open "Video Organizer.app"
+open "Be Kind, Rewind.app"
 
 # Run tests
 swift test

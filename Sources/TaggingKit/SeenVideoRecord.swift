@@ -42,6 +42,7 @@ public enum SeenVideoSource: String, Sendable, CaseIterable {
     case myActivity
     case manual
     case browser
+    case app
 }
 
 public enum SeenVideoConfidence: String, Sendable, CaseIterable {

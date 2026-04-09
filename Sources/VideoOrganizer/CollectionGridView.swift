@@ -290,6 +290,8 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
             container.onBoundsChanged = { [weak self] in
                 self?.refreshVisibleHeaders()
+                self?.refreshTopicScrollProgress()
+                self?.refreshViewportContext()
             }
             installActionObserversIfNeeded()
         }
@@ -372,6 +374,9 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 applySelectionToCollectionView()
                 refreshVisibleItems()
             }
+
+            refreshTopicScrollProgress()
+            refreshViewportContext()
         }
 
         // MARK: Data Source
@@ -634,7 +639,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 return 56
             }
 
-            let channels = section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : []
+            let channels = headerChannels(for: section)
             return channels.isEmpty ? 48 : 112
         }
 
@@ -664,8 +669,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
 
             let highlightTerms = store?.parsedQuery.includeTerms ?? []
-            let channels = section.displayMode == .saved ? (store?.channelsForTopic(section.topicId) ?? []) : []
-            let selectedChannelId = section.displayMode == .saved ? store?.selectedChannelId : nil
+            let channels = headerChannels(for: section)
+            let selectedChannelId = store?.selectedChannelId
+            let watchCandidatesForSection = section.displayMode == .watchCandidates
+                ? (section.topicId == -1
+                    ? store?.recentCandidateVideosForAllTopics() ?? []
+                    : store?.recentCandidateVideosForTopic(section.topicId) ?? [])
+                : []
 
             return .topic(
                 name: section.topicName,
@@ -678,17 +688,126 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 channels: channels,
                 selectedChannelId: selectedChannelId,
                 videoCountForChannel: { [weak store] channelId in
-                    store?.videoCountForChannel(channelId, inTopic: section.topicId) ?? 0
+                    guard let store else { return 0 }
+                    if section.displayMode == .watchCandidates {
+                        let channel = channels.first(where: { $0.channelId == channelId })
+                        return store.watchCandidateCountForChannel(
+                            channel?.channelId ?? channelId,
+                            channelName: channel?.name,
+                            inCandidates: watchCandidatesForSection
+                        )
+                    }
+                    return store.videoCountForChannel(channelId, inTopic: section.topicId)
                 },
                 hasRecentContent: { [weak store] channelId in
-                    store?.channelHasRecentContent(channelId, inTopic: section.topicId) ?? false
+                    guard let store else { return false }
+                    if section.displayMode == .watchCandidates {
+                        let channel = channels.first(where: { $0.channelId == channelId })
+                        return store.latestWatchCandidateDateForChannel(
+                            channel?.channelId ?? channelId,
+                            channelName: channel?.name,
+                            inCandidates: watchCandidatesForSection
+                        ) != nil
+                    }
+                    return store.channelHasRecentContent(channelId, inTopic: section.topicId)
+                },
+                latestPublishedAtForChannel: { [weak store] channelId in
+                    guard let store else { return nil }
+                    if section.displayMode == .watchCandidates {
+                        let channel = channels.first(where: { $0.channelId == channelId })
+                        return store.latestWatchCandidateDateForChannel(
+                            channel?.channelId ?? channelId,
+                            channelName: channel?.name,
+                            inCandidates: watchCandidatesForSection
+                        )
+                    }
+                    return self.latestSavedPublishedDateForChannel(channelId, topicId: section.topicId)
                 },
                 onSelectChannel: { [weak store] channelId in
                     guard let store else { return }
-                    let channel = store.channelsForTopic(section.topicId).first(where: { $0.channelId == channelId })
-                    _ = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: section.topicId)
+                    let channel = channels.first(where: { $0.channelId == channelId })
+                    if section.displayMode == .watchCandidates {
+                        _ = store.navigateToCreatorInWatch(channelId: channel?.channelId ?? channelId, channelName: channel?.name, preferredTopicId: section.topicId)
+                    } else {
+                        _ = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: section.topicId)
+                    }
                 }
             )
+        }
+
+        private func headerChannels(for section: TopicSection) -> [ChannelRecord] {
+            guard let store else { return [] }
+            if section.displayMode == .watchCandidates {
+                return watchChannels(for: section)
+            }
+            return store.channelsForTopic(section.topicId)
+        }
+
+        private func watchChannels(for section: TopicSection) -> [ChannelRecord] {
+            guard let store else { return [] }
+            let sourceVideos: [CandidateVideoViewModel]
+            if section.topicId == -1 {
+                sourceVideos = store.recentCandidateVideosForAllTopics()
+            } else {
+                sourceVideos = store.recentCandidateVideosForTopic(section.topicId)
+            }
+
+            var bestByChannelId: [String: ChannelRecord] = [:]
+            for video in sourceVideos where !video.isPlaceholder {
+                let channelId = if let channelId = video.channelId, !channelId.isEmpty {
+                    channelId
+                } else {
+                    "watch-\(video.channelName ?? "unknown")"
+                }
+                if let known = store.channelsForTopic(section.topicId).first(where: { $0.channelId == video.channelId }) {
+                    bestByChannelId[channelId] = known
+                    continue
+                }
+
+                if bestByChannelId[channelId] == nil {
+                    bestByChannelId[channelId] = ChannelRecord(
+                        channelId: channelId,
+                        name: video.channelName ?? "Unknown Creator",
+                        handle: nil,
+                        channelUrl: video.channelId.flatMap { "https://www.youtube.com/channel/\($0)" },
+                        iconUrl: video.channelIconUrl,
+                        iconData: nil,
+                        subscriberCount: nil,
+                        description: nil,
+                        videoCountTotal: nil,
+                        fetchedAt: nil
+                    )
+                }
+            }
+
+            return Array(bestByChannelId.values)
+        }
+
+        private func latestSavedPublishedDateForChannel(_ channelId: String, topicId: Int64) -> Date? {
+            guard let store else { return nil }
+            return store.videosForTopicIncludingSubtopics(topicId)
+                .filter { $0.channelId == channelId }
+                .compactMap { video in
+                    guard let publishedAt = video.publishedAt else { return nil }
+                    return parsedPublishedDate(from: publishedAt)
+                }
+                .max()
+        }
+
+        private func effectiveChannelKey(for video: VideoGridItemModel) -> String {
+            if let channelId = video.channelId, !channelId.isEmpty {
+                return channelId
+            }
+            return "watch-\(video.channelName ?? "unknown")"
+        }
+
+        private func parsedPublishedDate(from publishedAt: String) -> Date? {
+            if let iso = CreatorAnalytics.parseISO8601Date(publishedAt) {
+                return iso
+            }
+            let ageDays = CreatorAnalytics.parseAge(publishedAt)
+            guard ageDays != .max else { return nil }
+            return Calendar.current.date(byAdding: .day, value: -ageDays, to: Date())
         }
 
         private func isTopicMarkerInCreatorGrouping(_ section: TopicSection) -> Bool {
@@ -769,7 +888,158 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
         }
 
+        private func refreshTopicScrollProgress() {
+            guard let store else { return }
+            guard store.pageDisplayMode == .saved,
+                  let topicId = store.selectedTopicId else {
+                if store.topicScrollProgress != 0 {
+                    store.topicScrollProgress = 0
+                }
+                return
+            }
+
+            let progress = topicScrollProgress(forTopicId: topicId)
+            if abs(store.topicScrollProgress - progress) > 0.001 {
+                store.topicScrollProgress = progress
+            }
+        }
+
+        private func refreshViewportContext() {
+            guard let store,
+                  store.pageDisplayMode == .saved,
+                  let collectionView,
+                  let scrollView = collectionView.enclosingScrollView else {
+                store?.updateViewportContext(topicId: nil, subtopicId: nil, creatorSectionId: nil)
+                return
+            }
+
+            let visibleBounds = scrollView.contentView.bounds
+            guard let sectionIndex = primaryVisibleSectionIndex(in: visibleBounds) else {
+                store.updateViewportContext(topicId: nil, subtopicId: nil, creatorSectionId: nil)
+                return
+            }
+
+            let section = renderedSections[sectionIndex]
+            let isCreatorMode = renderedSections.contains(where: { $0.creatorName != nil })
+
+            if isCreatorMode {
+                let creatorSectionId = currentVisibleCreatorSectionId(in: visibleBounds, topicId: section.topicId)
+                store.updateViewportContext(topicId: section.topicId, subtopicId: nil, creatorSectionId: creatorSectionId)
+                return
+            }
+
+            let subtopicId = currentVisibleSubtopicId(inSectionAt: sectionIndex, visibleBounds: visibleBounds)
+            store.updateViewportContext(topicId: section.topicId, subtopicId: subtopicId, creatorSectionId: nil)
+        }
+
+        private func primaryVisibleSectionIndex(in visibleBounds: CGRect) -> Int? {
+            var bestIndex: Int?
+            var bestPriority = Int.max
+            var bestDistance = CGFloat.greatestFiniteMagnitude
+
+            for sectionIndex in renderedSections.indices {
+                guard let frame = frameForSection(at: sectionIndex) else { continue }
+
+                let priority: Int
+                let distance: CGFloat
+                if frame.minY <= visibleBounds.minY, frame.maxY >= visibleBounds.minY {
+                    priority = 0
+                    distance = visibleBounds.minY - frame.minY
+                } else if frame.minY > visibleBounds.minY {
+                    priority = 1
+                    distance = frame.minY - visibleBounds.minY
+                } else {
+                    priority = 2
+                    distance = visibleBounds.minY - frame.maxY
+                }
+
+                if priority < bestPriority || (priority == bestPriority && distance < bestDistance) {
+                    bestPriority = priority
+                    bestDistance = distance
+                    bestIndex = sectionIndex
+                }
+            }
+
+            return bestIndex
+        }
+
+        private func currentVisibleCreatorSectionId(in visibleBounds: CGRect, topicId: Int64) -> String? {
+            guard let collectionView else { return nil }
+
+            let candidateIndices = renderedSections.indices.filter { renderedSections[$0].topicId == topicId && renderedSections[$0].creatorName != nil }
+            guard !candidateIndices.isEmpty else { return nil }
+
+            let dockTolerance: CGFloat = 1
+            let dockedIndices = candidateIndices.filter { sectionIndex in
+                let headerIndexPath = IndexPath(item: 0, section: sectionIndex)
+                guard let headerFrame = collectionView.collectionViewLayout?.layoutAttributesForSupplementaryView(
+                    ofKind: NSCollectionView.elementKindSectionHeader,
+                    at: headerIndexPath
+                )?.frame else {
+                    return false
+                }
+                return headerFrame.minY <= visibleBounds.minY + dockTolerance
+            }
+
+            if let docked = dockedIndices.max() {
+                return renderedSections[docked].id
+            }
+
+            if let store,
+               store.viewportTopicId == topicId,
+               let current = store.viewportCreatorSectionId,
+               candidateIndices.contains(where: { renderedSections[$0].id == current }) {
+                return current
+            }
+
+            return candidateIndices.first.map { renderedSections[$0].id }
+        }
+
+        private func currentVisibleSubtopicId(inSectionAt sectionIndex: Int, visibleBounds: CGRect) -> Int64? {
+            guard let collectionView,
+                  renderedSections.indices.contains(sectionIndex) else { return nil }
+
+            let section = renderedSections[sectionIndex]
+            let visibleItems = collectionView.indexPathsForVisibleItems()
+                .filter { $0.section == sectionIndex }
+                .compactMap { indexPath -> (CGRect, VideoGridItemModel)? in
+                    guard indexPath.item < section.videos.count,
+                          let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame else { return nil }
+                    return (frame, section.videos[indexPath.item])
+                }
+                .sorted { lhs, rhs in
+                    let lhsDistance = distanceFromViewportTop(lhs.0, visibleTop: visibleBounds.minY)
+                    let rhsDistance = distanceFromViewportTop(rhs.0, visibleTop: visibleBounds.minY)
+                    if lhsDistance == rhsDistance {
+                        if lhs.0.minY == rhs.0.minY {
+                            return lhs.0.minX < rhs.0.minX
+                        }
+                        return lhs.0.minY < rhs.0.minY
+                    }
+                    return lhsDistance < rhsDistance
+                }
+
+            for (_, video) in visibleItems {
+                if let subtopicId = section.videoSubtopicMap[video.id] {
+                    return subtopicId
+                }
+            }
+
+            return nil
+        }
+
+        private func distanceFromViewportTop(_ frame: CGRect, visibleTop: CGFloat) -> CGFloat {
+            if frame.minY <= visibleTop, frame.maxY >= visibleTop {
+                return visibleTop - frame.minY
+            }
+            if frame.minY > visibleTop {
+                return frame.minY - visibleTop
+            }
+            return visibleTop - frame.maxY
+        }
+
         private func openOnYouTube(_ video: VideoGridItemModel) {
+            store?.recordOpenedVideo(video)
             guard let url = URL(string: "https://www.youtube.com/watch?v=\(video.id)") else { return }
             NSWorkspace.shared.open(url)
         }
@@ -819,6 +1089,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             let allCandidates = selectedItems.allSatisfy { isCandidateVideo($0.id) }
             let allSaved = selectedItems.allSatisfy { !isCandidateVideo($0.id) }
             let selectedVideoIds = selectedItems.map(\.id)
+            let selectedCreatorKeys = Set(selectedItems.compactMap { video -> String? in
+                guard let channelId = video.channelId, !channelId.isEmpty else { return nil }
+                return channelId
+            })
+            let singleSelectedCreator = selectedCreatorKeys.count == 1
+                ? selectedItems.first(where: { $0.channelId == selectedCreatorKeys.first })
+                : nil
 
             let openTitle = selectionCount == 1 ? "Open on YouTube" : "Open \(selectionCount) on YouTube"
             let openItem = NSMenuItem(title: openTitle, action: #selector(contextOpenOnYouTube(_:)), keyEquivalent: "\r")
@@ -922,6 +1199,19 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     notInterested.target = self
                     notInterested.keyEquivalent = "n"
                     menu.addItem(notInterested)
+
+                    if let creator = singleSelectedCreator,
+                       let channelId = creator.channelId,
+                       !channelId.isEmpty {
+                        let excludeCreator = NSMenuItem(title: "Exclude Creator from Watch", action: #selector(contextExcludeCreatorFromWatch(_:)), keyEquivalent: "")
+                        excludeCreator.representedObject = [
+                            "channelId": channelId,
+                            "channelName": creator.channelName ?? "",
+                            "channelIconUrl": creator.channelIconUrl?.absoluteString ?? ""
+                        ]
+                        excludeCreator.target = self
+                        menu.addItem(excludeCreator)
+                    }
                 }
 
                 for item in menu.items {
@@ -988,6 +1278,22 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             } else {
                 store.saveVideosToWatchLater(videoIds: Array(renderedSelectedVideoIds))
             }
+        }
+
+        @objc private func contextExcludeCreatorFromWatch(_ sender: Any?) {
+            guard let store,
+                  let payload = (sender as? NSMenuItem)?.representedObject as? [String: String],
+                  let channelId = payload["channelId"], !channelId.isEmpty else {
+                return
+            }
+
+            let channelName = payload["channelName"]
+            let channelIconUrl = payload["channelIconUrl"]
+            store.excludeCreatorFromWatch(
+                channelId: channelId,
+                channelName: channelName,
+                channelIconUrl: channelIconUrl?.isEmpty == false ? channelIconUrl : nil
+            )
         }
 
         private func handleSaveToWatchLaterShortcut() {
@@ -1296,6 +1602,8 @@ private final class CollectionGridContainerView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
         scrollView.autohidesScrollers = true
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets()
         scrollView.contentView.postsBoundsChangedNotifications = true
 
         addSubview(scrollView)
@@ -1382,6 +1690,7 @@ enum CollectionSectionHeaderModel {
         selectedChannelId: String?,
         videoCountForChannel: (String) -> Int,
         hasRecentContent: (String) -> Bool,
+        latestPublishedAtForChannel: (String) -> Date?,
         onSelectChannel: (String) -> Void
     )
     case creator(
@@ -1399,7 +1708,7 @@ enum CollectionSectionHeaderModel {
 
     var height: CGFloat {
         switch self {
-        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, onSelectChannel: _):
+        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, latestPublishedAtForChannel: _, onSelectChannel: _):
             return channels.isEmpty ? 48 : 112
         case .creator:
             return 56
@@ -1715,7 +2024,7 @@ private struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, onSelectChannel):
+        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, latestPublishedAtForChannel, onSelectChannel):
             VStack(spacing: 0) {
                 SectionHeaderView(
                     name: name,
@@ -1733,8 +2042,10 @@ private struct SectionHeaderContent: View {
                         channels: channels,
                         selectedChannelId: selectedChannelId,
                         topicId: topicId,
+                        collapseLowCountCreators: displayMode != .watchCandidates,
                         videoCountForChannel: videoCountForChannel,
                         hasRecentContent: hasRecentContent,
+                        latestPublishedAtForChannel: latestPublishedAtForChannel,
                         onSelect: onSelectChannel
                     )
                 }

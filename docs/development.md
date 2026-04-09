@@ -53,13 +53,13 @@ Build and package the app bundle:
 The packaging script:
 
 - builds `VideoOrganizerApp`
-- copies the built binary into `Video Organizer.app`
+- copies the built binary into `Be Kind, Rewind.app`
 - stops a running packaged app first if needed
 
 Launch the packaged app:
 
 ```bash
-open "Video Organizer.app"
+open "Be Kind, Rewind.app"
 ```
 
 ## Run the CLI
@@ -314,7 +314,7 @@ Package and launch app:
 
 ```bash
 ./build-app.sh
-open "Video Organizer.app"
+open "Be Kind, Rewind.app"
 ```
 
 Run CLI help:

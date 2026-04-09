@@ -12,6 +12,11 @@ struct OrganizerView: View {
         } detail: {
             CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                 .navigationTitle("")
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if store.pageDisplayMode == .saved, store.selectedTopicId != nil {
+                        TopicScrollProgressBar(progress: store.topicScrollProgress)
+                    }
+                }
                 .overlay(alignment: .top) {
                     if let overlay = store.candidateProgressOverlay {
                         CandidateProgressOverlayView(state: overlay)
@@ -176,46 +181,44 @@ struct OrganizerView: View {
     }
 }
 
+private struct TopicScrollProgressBar: View {
+    let progress: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.accentColor.opacity(0.12))
+
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: geo.size.width * min(max(progress, 0), 1))
+                    .animation(.easeOut(duration: GridConstants.progressAnimationDuration), value: progress)
+            }
+        }
+        .frame(height: GridConstants.progressBarHeight)
+        .background(.bar)
+        .accessibilityLabel("Topic scroll progress")
+        .accessibilityValue("\(Int((min(max(progress, 0), 1) * 100).rounded())) percent")
+    }
+}
+
 private struct CandidateProgressOverlayView: View {
     let state: CandidateProgressOverlayState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Label("Finding Watch Videos", systemImage: "sparkles")
-                    .font(.headline.weight(.semibold))
-
-                Spacer(minLength: 0)
-
-                Text(state.topicName)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text(hudTitle)
+                .font(.headline.weight(.semibold))
+                .lineLimit(1)
 
             ProgressView(value: min(max(state.progress, 0), 1), total: 1)
                 .progressViewStyle(.linear)
                 .controlSize(.small)
-
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(state.title)
-                    .font(.subheadline.weight(.semibold))
-
-                Spacer(minLength: 0)
-
-                Text("\(Int((min(max(state.progress, 0), 1) * 100).rounded()))%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(state.detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: 420)
+        .padding(.vertical, 12)
+        .frame(maxWidth: 320)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -223,5 +226,12 @@ private struct CandidateProgressOverlayView: View {
         }
         .shadow(color: .black.opacity(0.14), radius: 14, y: 8)
         .allowsHitTesting(false)
+    }
+
+    private var hudTitle: String {
+        if state.topicName == "All Topics" {
+            return "Refreshing Watch"
+        }
+        return "Refreshing \(state.topicName)"
     }
 }

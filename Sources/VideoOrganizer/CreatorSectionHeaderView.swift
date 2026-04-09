@@ -12,36 +12,22 @@ struct CreatorSectionHeaderView: View {
     var highlightTerms: [String] = []
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                channelIcon
+        HStack(spacing: 10) {
+            channelIcon
 
-                HighlightedText(channelName, terms: highlightTerms)
-                    .font(.title3.bold())
+            HighlightedText(channelName, terms: highlightTerms)
+                .font(.title3.bold())
 
-                countBadge
+            countBadge
 
-                if !topicNames.isEmpty {
-                    topicPills
-                }
-
-                Spacer()
+            if !topicNames.isEmpty {
+                topicPills
             }
-            .padding(.horizontal, GridConstants.horizontalPadding)
-            .padding(.vertical, 10)
 
-            ZStack(alignment: .leading) {
-                Rectangle()
-                    .fill(Color.accentColor.opacity(0.1))
-                GeometryReader { geo in
-                    Rectangle()
-                        .fill(Color.accentColor)
-                        .frame(width: geo.size.width * max(progress, 0))
-                        .animation(.easeOut(duration: GridConstants.progressAnimationDuration), value: progress)
-                }
-            }
-            .frame(height: GridConstants.progressBarHeight)
+            Spacer()
         }
+        .padding(.horizontal, GridConstants.horizontalPadding)
+        .padding(.vertical, 10)
         .background(.bar)
         .contextMenu {
             if let channelUrl {

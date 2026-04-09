@@ -103,7 +103,6 @@ struct GridSectionBuilder {
 
         if let channelId = context.selectedChannelId {
             result = result.compactMap { section in
-                guard section.displayMode == .saved else { return section }
                 let filtered = section.videos.filter { $0.channelId == channelId }
                 guard !filtered.isEmpty else { return nil }
                 return TopicSection(

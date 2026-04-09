@@ -295,6 +295,22 @@ struct VideoInspector: View {
                 .controlSize(.large)
                 .buttonStyle(.bordered)
                 .help("Hide locally and queue a future YouTube Not Interested action")
+
+                if let channelId = video.channelId, !channelId.isEmpty {
+                    Button(role: .destructive) {
+                        store.excludeCreatorFromWatch(
+                            channelId: channelId,
+                            channelName: video.channelName,
+                            channelIconUrl: video.channelIconUrl
+                        )
+                    } label: {
+                        Label("Exclude Creator from Watch", systemImage: "person.crop.circle.badge.xmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered)
+                    .help("Hide this creator from future Watch discovery until restored in Settings")
+                }
             }
         }
     }

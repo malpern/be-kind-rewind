@@ -24,9 +24,6 @@ struct SplashView: View {
                     Text("Be Kind, Rewind")
                         .font(.system(size: 20, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("Video Organizer")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
                 }
 
                 Spacer()

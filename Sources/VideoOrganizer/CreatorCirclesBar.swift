@@ -6,8 +6,10 @@ struct CreatorCirclesBar: View {
     let channels: [ChannelRecord]
     let selectedChannelId: String?
     let topicId: Int64
+    let collapseLowCountCreators: Bool
     let videoCountForChannel: (String) -> Int
     let hasRecentContent: (String) -> Bool  // true if creator has video from last 7 days
+    let latestPublishedAtForChannel: (String) -> Date?
     let onSelect: (String) -> Void
 
     @State private var isExpanded = false
@@ -16,13 +18,21 @@ struct CreatorCirclesBar: View {
     private let collapsedCircleSize: CGFloat = 32
     private let spacing: CGFloat = 12
 
+    private var allSortedChannels: [ChannelRecord] {
+        channels.sorted { a, b in
+            sortScore(a) > sortScore(b)
+        }
+    }
+
     /// Channels with >2 videos shown prominently; ≤2 collapsed behind "+N more"
     private var prominentChannels: [ChannelRecord] {
-        channels.filter { videoCountForChannel($0.channelId) > 2 }
+        guard collapseLowCountCreators else { return allSortedChannels }
+        return channels.filter { videoCountForChannel($0.channelId) > 2 }
     }
 
     private var collapsedChannels: [ChannelRecord] {
-        channels.filter { videoCountForChannel($0.channelId) <= 2 }
+        guard collapseLowCountCreators else { return [] }
+        return channels.filter { videoCountForChannel($0.channelId) <= 2 }
     }
 
     var body: some View {
@@ -84,9 +94,7 @@ struct CreatorCirclesBar: View {
 
     /// Sort by recency-weighted score: recent content floats left, then by video count
     private var sortedProminent: [ChannelRecord] {
-        prominentChannels.sorted { a, b in
-            sortScore(a) > sortScore(b)
-        }
+        prominentChannels.sorted { a, b in sortScore(a) > sortScore(b) }
     }
 
     private var sortedCollapsed: [ChannelRecord] {
@@ -96,10 +104,17 @@ struct CreatorCirclesBar: View {
     }
 
     private func sortScore(_ channel: ChannelRecord) -> Int {
-        var score = videoCountForChannel(channel.channelId) * 10
-        if hasRecentContent(channel.channelId) {
-            score += 1000  // recent creators float to front
+        let freshnessBucket: Int
+        if let latest = latestPublishedAtForChannel(channel.channelId) {
+            freshnessBucket = max(Int(latest.timeIntervalSince1970 / 86_400), 0)
+        } else if hasRecentContent(channel.channelId) {
+            freshnessBucket = 1
+        } else {
+            freshnessBucket = 0
         }
+
+        var score = videoCountForChannel(channel.channelId) * 10
+        score += freshnessBucket * 1000 // freshest creators float to front first
         return score
     }
 

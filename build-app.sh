@@ -21,10 +21,15 @@ if [[ ! -x "$BUILT_APP" ]]; then
   exit 1
 fi
 
-APP_DIR="Video Organizer.app"
+APP_DIR="Be Kind, Rewind.app"
 PACKAGED_APP="$APP_DIR/Contents/MacOS/VideoOrganizerApp"
 DEFAULT_SIGNING_IDENTITY="Apple Development: Micah Alpern (3YFH89N33S)"
 SIGNING_IDENTITY="${CODESIGN_IDENTITY:-$DEFAULT_SIGNING_IDENTITY}"
+LEGACY_APP_DIR="Video Organizer.app"
+
+if [[ -d "$LEGACY_APP_DIR" && ! -d "$APP_DIR" ]]; then
+  mv "$LEGACY_APP_DIR" "$APP_DIR"
+fi
 
 if pgrep -f "$PACKAGED_APP" >/dev/null 2>&1; then
   echo "Stopping running app process..."
@@ -34,6 +39,9 @@ fi
 
 echo "Packaging into $APP_DIR..."
 install -m 755 "$BUILT_APP" "$PACKAGED_APP"
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleName Be Kind, Rewind" "$APP_DIR/Contents/Info.plist" >/dev/null
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Be Kind, Rewind" "$APP_DIR/Contents/Info.plist" >/dev/null
 
 if ! cmp -s "$BUILT_APP" "$PACKAGED_APP"; then
   echo "error: packaged app does not match fresh build output" >&2

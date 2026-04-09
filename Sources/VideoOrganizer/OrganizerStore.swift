@@ -18,8 +18,13 @@ final class OrganizerStore {
     var lastSyncErrorMessage: String?
     var lastSyncErrorIsBrowser = false
     var seenHistoryCount = 0
+    var excludedCreators: [ExcludedChannelRecord] = []
     var browserExecutorReady = false
     var browserExecutorStatusMessage = "Checking browser executor status…"
+    var topicScrollProgress = 0.0
+    var viewportTopicId: Int64?
+    var viewportSubtopicId: Int64?
+    var viewportCreatorSectionId: String?
 
     // Selected state
     var selectedTopicId: Int64? {
@@ -27,6 +32,7 @@ final class OrganizerStore {
             if oldValue != selectedTopicId {
                 selectedChannelId = nil
                 inspectedCreatorName = nil
+                topicScrollProgress = 0
             }
         }
     }
@@ -98,6 +104,7 @@ final class OrganizerStore {
         recoverInterruptedSyncActions(context: "startup")
         refreshSyncQueueSummary()
         refreshSeenHistoryCount()
+        refreshExcludedCreators()
         if startBackgroundTasks {
             refreshBrowserExecutorStatus()
             processPendingSync(reason: "startup")
@@ -113,6 +120,10 @@ final class OrganizerStore {
         suggester = client.map { TopicSuggester(client: $0) }
         youtubeClient = try? YouTubeClient()
         AppLogger.auth.info("Refreshed credential-backed service clients")
+    }
+
+    func refreshExcludedCreators() {
+        excludedCreators = (try? store.excludedChannelsList()) ?? []
     }
 
     // MARK: - Loading
@@ -366,6 +377,129 @@ final class OrganizerStore {
         selectedChannelId = nil
     }
 
+    func isExcludedCreator(_ channelId: String?) -> Bool {
+        guard let channelId, !channelId.isEmpty else { return false }
+        return excludedCreators.contains(where: { $0.channelId == channelId })
+    }
+
+    private var watchRecentWindowDays: Int { 30 }
+
+    func isRecentWatchPublishedAt(_ publishedAt: String?) -> Bool {
+        guard let date = watchPublishedDate(from: publishedAt) else { return false }
+        return date >= Date().addingTimeInterval(TimeInterval(-watchRecentWindowDays * 86_400))
+    }
+
+    func watchPublishedDate(from publishedAt: String?) -> Date? {
+        guard let publishedAt, !publishedAt.isEmpty else { return nil }
+        if let iso = CreatorAnalytics.parseISO8601Date(publishedAt) {
+            return iso
+        }
+        let ageDays = CreatorAnalytics.parseAge(publishedAt)
+        guard ageDays != .max else { return nil }
+        return Calendar.current.date(byAdding: .day, value: -ageDays, to: Date())
+    }
+
+    func recentCandidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
+        watchPoolForTopic(topicId, applyingChannelFilter: false)
+    }
+
+    func recentCandidateVideosForAllTopics() -> [CandidateVideoViewModel] {
+        watchPoolForAllTopics(applyingChannelFilter: false)
+    }
+
+    func watchCandidateCountForChannel(_ channelId: String?, channelName: String?, inTopic topicId: Int64, recentOnly: Bool = true) -> Int {
+        let candidates = recentOnly
+            ? watchPoolForTopic(topicId, applyingChannelFilter: false)
+            : storedCandidateVideosForTopic(topicId).filter { !$0.isPlaceholder }
+        return watchCandidateCountForChannel(channelId, channelName: channelName, inCandidates: candidates)
+    }
+
+    func watchCandidateCountForChannel(_ channelId: String?, channelName: String?, inCandidates candidates: [CandidateVideoViewModel]) -> Int {
+        candidates.filter { candidate in
+            if let channelId, !channelId.isEmpty, candidate.channelId == channelId {
+                return true
+            }
+            if let channelName, !channelName.isEmpty, candidate.channelName == channelName {
+                return true
+            }
+            return false
+        }.count
+    }
+
+    func latestWatchCandidateDateForChannel(_ channelId: String?, channelName: String?, inTopic topicId: Int64) -> Date? {
+        latestWatchCandidateDateForChannel(
+            channelId,
+            channelName: channelName,
+            inCandidates: watchPoolForTopic(topicId, applyingChannelFilter: false)
+        )
+    }
+
+    func latestWatchCandidateDateForChannel(_ channelId: String?, channelName: String?, inCandidates candidates: [CandidateVideoViewModel]) -> Date? {
+        candidates
+        .filter { candidate in
+            if let channelId, !channelId.isEmpty, candidate.channelId == channelId {
+                return true
+            }
+            if let channelName, !channelName.isEmpty, candidate.channelName == channelName {
+                return true
+            }
+            return false
+        }
+        .compactMap { watchPublishedDate(from: $0.publishedAt) }
+        .max()
+    }
+
+    func hasRecentWatchCandidateContent(_ channelId: String?, channelName: String?, inTopic topicId: Int64) -> Bool {
+        latestWatchCandidateDateForChannel(channelId, channelName: channelName, inTopic: topicId)
+            .map { $0 >= Date().addingTimeInterval(TimeInterval(-watchRecentWindowDays * 86_400)) } ?? false
+    }
+
+    @discardableResult
+    func navigateToCreatorInWatch(channelId: String?, channelName: String?, preferredTopicId: Int64? = nil) -> Int64? {
+        let priorTopicId = selectedTopicId
+        let priorChannelId = selectedChannelId
+        let matchingTopics = topics.compactMap { topic -> Int64? in
+            let count = watchCandidateCountForChannel(channelId, channelName: channelName, inTopic: topic.id, recentOnly: true)
+            return count > 0 ? topic.id : nil
+        }
+
+        guard !matchingTopics.isEmpty else { return nil }
+
+        let targetTopicId: Int64
+        if let preferredTopicId, matchingTopics.contains(preferredTopicId) {
+            targetTopicId = preferredTopicId
+        } else if let selectedTopicId, matchingTopics.contains(selectedTopicId) {
+            targetTopicId = selectedTopicId
+        } else {
+            targetTopicId = matchingTopics[0]
+        }
+
+        let normalizedChannelId = (channelId?.isEmpty == false) ? channelId : nil
+        let targetCandidates = watchPoolForTopic(targetTopicId, applyingChannelFilter: false)
+            .filter { candidate in
+                if let normalizedChannelId, candidate.channelId == normalizedChannelId {
+                    return true
+                }
+                if let channelName, !channelName.isEmpty, candidate.channelName == channelName {
+                    return true
+                }
+                return false
+            }
+
+        clearPlaylistFilter()
+        selectedSubtopicId = nil
+        hoveredVideoId = nil
+        selectedTopicId = targetTopicId
+
+        let shouldClear = priorChannelId == normalizedChannelId && pageDisplayMode == .watchCandidates && priorTopicId == targetTopicId
+        selectedChannelId = shouldClear ? nil : normalizedChannelId
+        inspectedCreatorName = shouldClear ? nil : channelName
+        selectedVideoId = shouldClear ? nil : targetCandidates.first?.videoId
+
+        AppLogger.discovery.info("Navigated to watch creator \(channelName ?? "", privacy: .public) in topic \(targetTopicId, privacy: .public)")
+        return targetTopicId
+    }
+
     @discardableResult
     func navigateToCreator(channelId: String?, channelName: String?, preferredTopicId: Int64? = nil) -> Int64? {
         let matchingTopics = topics.compactMap { topic -> Int64? in
@@ -457,8 +591,17 @@ final class OrganizerStore {
             selectedChannelId = nil
             selectedSubtopicId = nil
             selectedVideoId = nil
+            viewportTopicId = nil
+            viewportSubtopicId = nil
+            viewportCreatorSectionId = nil
         }
         candidateRefreshToken += 1
+    }
+
+    func updateViewportContext(topicId: Int64?, subtopicId: Int64?, creatorSectionId: String?) {
+        viewportTopicId = topicId
+        viewportSubtopicId = subtopicId
+        viewportCreatorSectionId = creatorSectionId
     }
 
     func setWatchPresentationMode(_ mode: WatchPresentationMode) {
@@ -479,6 +622,76 @@ final class OrganizerStore {
     func dismissCandidates(topicId: Int64, videoIds: [String]) {
         for videoId in videoIds {
             dismissCandidate(topicId: topicId, videoId: videoId)
+        }
+    }
+
+    func excludeCreatorFromWatch(channelId: String?, channelName: String?, channelIconUrl: String? = nil) {
+        guard let channelId, !channelId.isEmpty else {
+            errorMessage = "This creator cannot be excluded because its channel ID is missing."
+            return
+        }
+
+        let resolvedName = channelName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let resolvedName, !resolvedName.isEmpty else {
+            errorMessage = "This creator cannot be excluded because its channel name is missing."
+            return
+        }
+
+        do {
+            try store.excludeChannel(
+                channelId: channelId,
+                channelName: resolvedName,
+                iconUrl: channelIconUrl,
+                reason: "watch_feedback"
+            )
+            refreshExcludedCreators()
+
+            if selectedChannelId == channelId {
+                selectedChannelId = nil
+                inspectedCreatorName = nil
+            }
+
+            selectedVideoId = nil
+            hoveredVideoId = nil
+            candidateRefreshToken += 1
+            AppLogger.discovery.info("Excluded creator from watch: \(channelId, privacy: .public)")
+            alert = AppAlertState(
+                title: "Excluded Creator",
+                message: "\(resolvedName) will no longer appear in Watch until you restore them in Settings."
+            )
+        } catch {
+            AppLogger.discovery.error("Failed to exclude creator \(channelId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func restoreExcludedCreator(channelId: String) {
+        do {
+            try store.restoreExcludedChannel(channelId: channelId)
+            refreshExcludedCreators()
+            candidateRefreshToken += 1
+            AppLogger.discovery.info("Restored excluded creator \(channelId, privacy: .public)")
+        } catch {
+            AppLogger.discovery.error("Failed to restore excluded creator \(channelId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func recordOpenedVideo(_ video: VideoGridItemModel) {
+        do {
+            let imported = try store.recordSeenVideo(
+                videoId: video.id,
+                title: video.title,
+                channelName: video.channelName,
+                rawURL: "https://www.youtube.com/watch?v=\(video.id)",
+                source: .app,
+                confidence: .probable
+            )
+            if imported > 0 {
+                refreshSeenHistoryCount()
+            }
+        } catch {
+            AppLogger.discovery.error("Failed to record app-seen event for \(video.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 

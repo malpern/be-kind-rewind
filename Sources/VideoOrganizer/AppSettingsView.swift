@@ -228,6 +228,51 @@ struct AppSettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 12) {
+                    Text("Watch Filters")
+                        .font(.title3.weight(.semibold))
+
+                    authStatusCard(
+                        title: "Excluded creators",
+                        message: store.excludedCreators.isEmpty ? "No creators excluded" : "\(store.excludedCreators.count) creator\(store.excludedCreators.count == 1 ? "" : "s") excluded",
+                        detail: store.excludedCreators.isEmpty
+                            ? "Exclude off-topic or unwanted creators from Watch and restore them here later."
+                            : "Excluded creators are removed from future Watch discovery until you restore them.",
+                        icon: store.excludedCreators.isEmpty ? "line.3.horizontal.decrease.circle" : "person.crop.circle.badge.xmark",
+                        tint: store.excludedCreators.isEmpty ? .secondary : .orange
+                    )
+
+                    if store.excludedCreators.isEmpty {
+                        Text("Use “Exclude Creator from Watch” from a Watch video or the inspector to keep a creator out of future discovery.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(store.excludedCreators) { creator in
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(creator.channelName)
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(creator.channelId)
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    Button("Restore") {
+                                        store.restoreExcludedCreator(channelId: creator.channelId)
+                                    }
+                                }
+                                .padding(.vertical, 6)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
                     Text("Sync")
                         .font(.title3.weight(.semibold))
 
@@ -324,6 +369,7 @@ struct AppSettingsView: View {
         .onAppear {
             store.refreshSyncQueueSummary()
             store.refreshSeenHistoryCount()
+            store.refreshExcludedCreators()
             store.refreshBrowserExecutorStatus()
             store.refreshCredentialBackedClients()
         }

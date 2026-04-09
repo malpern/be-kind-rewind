@@ -19,6 +19,7 @@ public final class TopicStore: Sendable {
     private let channelDiscoveryArchive = Table("channel_discovery_archive")
     private let channelDiscoveryState = Table("channel_discovery_state")
     private let seenVideos = Table("seen_videos")
+    private let excludedChannels = Table("excluded_channels")
 
     // Topic columns
     private let topicId = SQLite.Expression<Int64>("id")
@@ -105,6 +106,13 @@ public final class TopicStore: Sendable {
     private let seenSource = SQLite.Expression<String>("source")
     private let seenConfidence = SQLite.Expression<String>("confidence")
     private let seenImportedAt = SQLite.Expression<String>("imported_at")
+
+    // Excluded-channel columns
+    private let excludedChannelId = SQLite.Expression<String>("channel_id")
+    private let excludedChannelName = SQLite.Expression<String>("channel_name")
+    private let excludedChannelIconUrl = SQLite.Expression<String?>("icon_url")
+    private let excludedChannelExcludedAt = SQLite.Expression<String>("excluded_at")
+    private let excludedChannelReason = SQLite.Expression<String?>("reason")
 
     // Commit log columns
     private let commitId = SQLite.Expression<Int64>("id")
@@ -314,6 +322,14 @@ public final class TopicStore: Sendable {
             t.column(seenImportedAt, defaultValue: ISO8601DateFormatter().string(from: Date()))
         })
 
+        try db.run(excludedChannels.create(ifNotExists: true) { t in
+            t.column(excludedChannelId, primaryKey: true)
+            t.column(excludedChannelName)
+            t.column(excludedChannelIconUrl)
+            t.column(excludedChannelExcludedAt, defaultValue: ISO8601DateFormatter().string(from: Date()))
+            t.column(excludedChannelReason)
+        })
+
         try db.run("CREATE INDEX IF NOT EXISTS idx_topics_parent_id ON topics(parent_id)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_source ON videos(topic_id, source_index)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_channel_source ON videos(topic_id, channel_id, source_index)")
@@ -328,6 +344,7 @@ public final class TopicStore: Sendable {
         try db.run("CREATE INDEX IF NOT EXISTS idx_commit_log_sync_queue ON commit_log(synced, executor, state, next_attempt_at, created_at)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_seen_videos_video_id ON seen_videos(video_id)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_seen_videos_seen_at ON seen_videos(seen_at DESC)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_excluded_channels_excluded_at ON excluded_channels(excluded_at DESC)")
     }
 
     // MARK: - Import
@@ -589,6 +606,41 @@ public final class TopicStore: Sendable {
     public func channelById(_ id: String) throws -> ChannelRecord? {
         guard let row = try db.pluck(channels.filter(channelId == id)) else { return nil }
         return channelFromRow(row)
+    }
+
+    public func excludeChannel(channelId id: String, channelName name: String, iconUrl: String? = nil, reason: String? = nil) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try db.run(excludedChannels.insert(or: .replace,
+            excludedChannelId <- id,
+            excludedChannelName <- name,
+            excludedChannelIconUrl <- iconUrl,
+            excludedChannelExcludedAt <- now,
+            excludedChannelReason <- reason
+        ))
+    }
+
+    public func restoreExcludedChannel(channelId id: String) throws {
+        try db.run(excludedChannels.filter(excludedChannelId == id).delete())
+    }
+
+    public func excludedChannelsList() throws -> [ExcludedChannelRecord] {
+        try db.prepare(excludedChannels.order(excludedChannelExcludedAt.desc)).map { row in
+            ExcludedChannelRecord(
+                channelId: row[excludedChannelId],
+                channelName: row[excludedChannelName],
+                iconUrl: row[excludedChannelIconUrl],
+                excludedAt: row[excludedChannelExcludedAt],
+                reason: row[excludedChannelReason]
+            )
+        }
+    }
+
+    public func excludedChannelIDs() throws -> Set<String> {
+        Set(try db.prepare(excludedChannels.select(excludedChannelId)).map { $0[excludedChannelId] })
+    }
+
+    public func isChannelExcluded(_ id: String) throws -> Bool {
+        try db.pluck(excludedChannels.filter(excludedChannelId == id)) != nil
     }
 
     /// Return all channels that have at least one video in the given topic.
@@ -891,6 +943,7 @@ public final class TopicStore: Sendable {
                   FROM seen_videos sv
                   WHERE sv.video_id = c.video_id
                     AND sv.video_id IS NOT NULL
+                    AND sv.source != 'app'
               )
             ORDER BY c.score DESC, c.published_at DESC
         """
@@ -936,6 +989,7 @@ public final class TopicStore: Sendable {
                   FROM seen_videos sv
                   WHERE sv.video_id = c.video_id
                     AND sv.video_id IS NOT NULL
+                    AND sv.source != 'app'
               )
             LIMIT 1
         """
@@ -1115,6 +1169,29 @@ public final class TopicStore: Sendable {
 
     public func seenVideoCount() throws -> Int {
         try db.scalar(seenVideos.count)
+    }
+
+    @discardableResult
+    public func recordSeenVideo(
+        videoId: String,
+        title: String? = nil,
+        channelName: String? = nil,
+        rawURL: String? = nil,
+        source: SeenVideoSource,
+        confidence: SeenVideoConfidence = .probable
+    ) throws -> Int {
+        try importSeenVideoRecords([
+            SeenVideoRecord(
+                videoId: videoId,
+                title: title,
+                channelName: channelName,
+                rawURL: rawURL,
+                seenAt: ISO8601DateFormatter().string(from: Date()),
+                source: source,
+                confidence: confidence,
+                importedAt: ISO8601DateFormatter().string(from: Date())
+            )
+        ])
     }
 
     public func addPlaylistMembership(_ membership: PlaylistMembershipRecord) throws {

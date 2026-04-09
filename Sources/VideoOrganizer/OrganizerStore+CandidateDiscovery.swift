@@ -2,6 +2,42 @@ import Foundation
 import TaggingKit
 
 extension OrganizerStore {
+    func storedCandidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
+        ((try? store.candidatesForTopic(id: topicId, limit: 36)) ?? []).map(CandidateVideoViewModel.init(from:))
+    }
+
+    func watchPoolForTopic(_ topicId: Int64, applyingChannelFilter: Bool = true) -> [CandidateVideoViewModel] {
+        let base = CandidateDiscoveryCoordinator.recentEligibleWatchVideos(
+            storedCandidateVideosForTopic(topicId),
+            store: self
+        ).filter { candidate in
+            !isExcludedCreator(candidate.channelId)
+        }
+
+        guard applyingChannelFilter, let selectedChannelId else {
+            return base
+        }
+
+        return base.filter { candidate in
+            candidate.channelId == selectedChannelId
+        }
+    }
+
+    func watchPoolForAllTopics(applyingChannelFilter: Bool = true) -> [CandidateVideoViewModel] {
+        let deduped = CandidateDiscoveryCoordinator.deduplicateWatchVideos(
+            topics.flatMap { watchPoolForTopic($0.id, applyingChannelFilter: false) }
+        )
+        let reranked = CandidateDiscoveryCoordinator.rerankWatchVideos(deduped, store: self)
+
+        guard applyingChannelFilter, let selectedChannelId else {
+            return reranked
+        }
+
+        return reranked.filter { candidate in
+            candidate.channelId == selectedChannelId
+        }
+    }
+
     func activatePageDisplayMode(_ mode: TopicDisplayMode) async {
         setPageDisplayMode(mode)
         guard mode == .watchCandidates else {
@@ -12,16 +48,25 @@ extension OrganizerStore {
     }
 
     func candidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
-        if candidateLoadingTopics.contains(topicId) {
-            return [.placeholder(topicId: topicId, title: "Finding candidates…", message: "Checking cached creator archives and pulling only fresh uploads where needed.")]
-        }
-
-        if let error = candidateErrors[topicId] {
-            return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error)]
-        }
-
         do {
             let storedCandidates = try store.candidatesForTopic(id: topicId, limit: 36)
+            let visibleCandidates = watchPoolForTopic(topicId)
+            if !visibleCandidates.isEmpty {
+                return visibleCandidates
+            }
+
+            if candidateLoadingTopics.contains(topicId) {
+                return [.placeholder(
+                    topicId: topicId,
+                    title: "Refreshing Watch",
+                    message: "Looking for recent videos for this topic."
+                )]
+            }
+
+            if let error = candidateErrors[topicId] {
+                return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error)]
+            }
+
             if storedCandidates.isEmpty {
                 return [.placeholder(
                     topicId: topicId,
@@ -29,7 +74,12 @@ extension OrganizerStore {
                     message: "No unseen candidates were found from this topic’s creators or adjacent saved-library channels.\(watchHistoryHintSuffix)"
                 )]
             }
-            return storedCandidates.map(CandidateVideoViewModel.init(from:))
+
+            return [.placeholder(
+                topicId: topicId,
+                title: "No recent videos",
+                message: "No recent unseen videos were found for this topic in the current watch window."
+            )]
         } catch {
             return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error.localizedDescription)]
         }
@@ -41,31 +91,7 @@ extension OrganizerStore {
     }
 
     func candidateVideosForAllTopics() -> [CandidateVideoViewModel] {
-        topics
-            .flatMap { topic in
-                guard !candidateLoadingTopics.contains(topic.id) else { return [CandidateVideoViewModel]() }
-                return ((try? store.candidatesForTopic(id: topic.id, limit: 36)) ?? [])
-                    .map(CandidateVideoViewModel.init(from:))
-            }
-            .filter { !$0.isPlaceholder }
-            .sorted { lhs, rhs in
-                if lhs.score == rhs.score {
-                    let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.publishedAt ?? "")
-                    let rhsDate = CreatorAnalytics.parseISO8601Date(rhs.publishedAt ?? "")
-                    switch (lhsDate, rhsDate) {
-                    case let (l?, r?) where l != r:
-                        return l > r
-                    case (_?, nil):
-                        return true
-                    case (nil, _?):
-                        return false
-                    default:
-                        break
-                    }
-                    return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-                }
-                return lhs.score > rhs.score
-            }
+        watchPoolForAllTopics()
     }
 
     func candidateProgress(for topicId: Int64) -> Double {
@@ -110,11 +136,9 @@ extension OrganizerStore {
             topicName: watchRefreshCurrentTopicName ?? "All Topics",
             progress: watchRefreshTotalTopics > 0 ? Double(watchRefreshCompletedTopics) / Double(watchRefreshTotalTopics) : 0,
             title: watchRefreshCurrentTopicName == nil
-                ? "Preparing watch candidates"
-                : "Refreshing watch candidates: \(watchRefreshCompletedTopics) of \(watchRefreshTotalTopics)",
-            detail: watchRefreshCurrentTopicName == nil
-                ? "Checking cached creator archives and refreshing only stale topics."
-                : "Refreshing \(watchRefreshCurrentTopicName!) and ranking new videos across your watch candidates."
+                ? "Refreshing Watch"
+                : "Updated \(watchRefreshCompletedTopics) of \(watchRefreshTotalTopics) topics",
+            detail: ""
         )
     }
 
@@ -163,7 +187,6 @@ extension OrganizerStore {
             candidateTotalChannelsByTopic[topicId] = channelPlans.count
             candidateCompletedChannelsByTopic[topicId] = 0
             candidateCurrentChannelNameByTopic[topicId] = channelPlans.first?.channel.name
-            candidateRefreshToken += 1
 
             for plan in channelPlans {
                 let archived = try await CandidateDiscoveryCoordinator.refreshChannelArchiveIfNeeded(
@@ -173,7 +196,6 @@ extension OrganizerStore {
                 )
 
                 candidateCurrentChannelNameByTopic[topicId] = plan.channel.name
-                candidateRefreshToken += 1
 
                 for video in archived {
                     CandidateDiscoveryCoordinator.accumulateCandidate(
@@ -191,7 +213,37 @@ extension OrganizerStore {
                 completedChannels += 1
                 candidateCompletedChannelsByTopic[topicId] = completedChannels
                 candidateProgressByTopic[topicId] = Double(completedChannels) / Double(totalChannels)
-                candidateRefreshToken += 1
+            }
+
+            if let youtubeClient {
+                let searchPlans = CandidateDiscoveryCoordinator.searchPlans(for: topicId, store: self)
+                for plan in searchPlans {
+                    do {
+                        let results = try await youtubeClient.searchVideos(
+                            query: plan.query,
+                            maxResults: 5,
+                            publishedAfterDays: 30
+                        )
+
+                        for video in results {
+                            if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
+                                continue
+                            }
+                            let creatorAffinity = (try? store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)) ?? 0
+                            CandidateDiscoveryCoordinator.accumulateCandidate(
+                                video: video,
+                                sourceKind: "search_query_recent",
+                                sourceRef: plan.query,
+                                creatorAffinity: creatorAffinity,
+                                reasonHint: plan.query,
+                                existingVideoIds: existingVideoIds,
+                                aggregate: &aggregate
+                            )
+                        }
+                    } catch {
+                        AppLogger.discovery.error("Search discovery failed for topic \(topicId, privacy: .public), query \(plan.query, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    }
+                }
             }
 
             let ranked = aggregate.values
@@ -246,7 +298,6 @@ extension OrganizerStore {
         watchRefreshTotalTopics = topicsToRefresh.count
         watchRefreshCompletedTopics = 0
         watchRefreshCurrentTopicName = topicsToRefresh.first?.name
-        candidateRefreshToken += 1
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -255,19 +306,16 @@ extension OrganizerStore {
                 self.watchRefreshTotalTopics = 0
                 self.watchRefreshCompletedTopics = 0
                 self.watchRefreshCurrentTopicName = nil
-                self.candidateRefreshToken += 1
             }
 
             for topic in topicsToRefresh {
                 self.watchRefreshCurrentTopicName = topic.name
-                self.candidateRefreshToken += 1
 
                 if !CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: topic.id, store: self) {
                     await self.ensureCandidates(for: topic.id)
                 }
 
                 self.watchRefreshCompletedTopics += 1
-                self.candidateRefreshToken += 1
             }
         }
 
@@ -277,9 +325,87 @@ extension OrganizerStore {
 }
 
 @MainActor
-private enum CandidateDiscoveryCoordinator {
-    static func candidateChannelPlans(for topicId: Int64, store: OrganizerStore) -> [CandidateChannelPlan] {
-        let coreChannels = Array(store.channelsForTopic(topicId).prefix(candidateCreatorScanLimit(for: topicId, store: store)))
+enum CandidateDiscoveryCoordinator {
+    static func recentEligibleWatchVideos(_ videos: [CandidateVideoViewModel], store: OrganizerStore) -> [CandidateVideoViewModel] {
+        videos.filter { video in
+            !video.isPlaceholder && store.isRecentWatchPublishedAt(video.publishedAt)
+        }
+    }
+
+    static func deduplicateWatchVideos(_ videos: [CandidateVideoViewModel]) -> [CandidateVideoViewModel] {
+        var bestByVideoId: [String: CandidateVideoViewModel] = [:]
+
+        for video in videos {
+            guard let existing = bestByVideoId[video.videoId] else {
+                bestByVideoId[video.videoId] = video
+                continue
+            }
+
+            if prefers(video, over: existing) {
+                bestByVideoId[video.videoId] = video
+            }
+        }
+
+        return Array(bestByVideoId.values)
+    }
+
+    static func rerankWatchVideos(_ videos: [CandidateVideoViewModel], store: OrganizerStore) -> [CandidateVideoViewModel] {
+        let prelim = videos.sorted { lhs, rhs in
+            if lhs.score == rhs.score {
+                let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.publishedAt ?? "")
+                let rhsDate = CreatorAnalytics.parseISO8601Date(rhs.publishedAt ?? "")
+                switch (lhsDate, rhsDate) {
+                case let (l?, r?) where l != r:
+                    return l > r
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    break
+                }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+            return lhs.score > rhs.score
+        }
+
+        var creatorCounts: [String: Int] = [:]
+        var scored: [(CandidateVideoViewModel, Double)] = []
+
+        for video in prelim {
+            let creatorKey = (video.channelId?.isEmpty == false ? video.channelId : video.channelName) ?? "unknown"
+            let seenPenalty = appSeenPenalty(for: video, store: store)
+            let repeatPenalty = creatorRepeatPenalty(for: video, currentCount: creatorCounts[creatorKey] ?? 0)
+            let adjusted = video.score - seenPenalty - repeatPenalty
+            scored.append((video, adjusted))
+            creatorCounts[creatorKey, default: 0] += 1
+        }
+
+        return scored.sorted { lhs, rhs in
+            if lhs.1 == rhs.1 {
+                let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.0.publishedAt ?? "")
+                let rhsDate = CreatorAnalytics.parseISO8601Date(rhs.0.publishedAt ?? "")
+                switch (lhsDate, rhsDate) {
+                case let (l?, r?) where l != r:
+                    return l > r
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.0.title.localizedStandardCompare(rhs.0.title) == .orderedAscending
+                }
+            }
+            return lhs.1 > rhs.1
+        }.map(\.0)
+    }
+
+    fileprivate static func candidateChannelPlans(for topicId: Int64, store: OrganizerStore) -> [CandidateChannelPlan] {
+        let coreChannels = Array(
+            store.channelsForTopic(topicId)
+                .filter { !store.isExcludedCreator($0.channelId) }
+                .prefix(candidateCreatorScanLimit(for: topicId, store: store))
+        )
         var plans = coreChannels.map {
             CandidateChannelPlan(
                 channel: $0,
@@ -306,6 +432,66 @@ private enum CandidateDiscoveryCoordinator {
             )
         })
         return plans
+    }
+
+    fileprivate static func searchPlans(for topicId: Int64, store: OrganizerStore) -> [CandidateSearchPlan] {
+        guard let topic = store.topics.first(where: { $0.id == topicId }) else { return [] }
+        return generatedSearchQueries(for: topic).map(CandidateSearchPlan.init(query:))
+    }
+
+    private static func appSeenPenalty(for video: CandidateVideoViewModel, store: OrganizerStore) -> Double {
+        guard let summary = store.seenSummary(for: video.videoId) else { return 0 }
+        guard summary.latestSource == .app else { return 0 }
+        let countPenalty = Double(min(summary.eventCount, 3)) * 18
+        return countPenalty
+    }
+
+    private static func creatorRepeatPenalty(for video: CandidateVideoViewModel, currentCount: Int) -> Double {
+        guard currentCount > 0 else { return 0 }
+        let ageDays = ageDays(for: video.publishedAt)
+        let ageMultiplier: Double
+        switch ageDays {
+        case ...14:
+            ageMultiplier = 0.35
+        case ...45:
+            ageMultiplier = 0.75
+        case ...120:
+            ageMultiplier = 1.2
+        default:
+            ageMultiplier = 1.8
+        }
+
+        return Double(currentCount) * 16 * ageMultiplier
+    }
+
+    private static func ageDays(for publishedAt: String?) -> Int {
+        guard let publishedAt, !publishedAt.isEmpty else { return .max }
+        if let date = CreatorAnalytics.parseISO8601Date(publishedAt) {
+            let days = Int(Date().timeIntervalSince(date) / 86_400)
+            return max(days, 0)
+        }
+        return CreatorAnalytics.parseAge(publishedAt)
+    }
+
+    private static func prefers(_ lhs: CandidateVideoViewModel, over rhs: CandidateVideoViewModel) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score > rhs.score
+        }
+
+        let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.publishedAt ?? "")
+        let rhsDate = CreatorAnalytics.parseISO8601Date(rhs.publishedAt ?? "")
+        switch (lhsDate, rhsDate) {
+        case let (l?, r?) where l != r:
+            return l > r
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            break
+        }
+
+        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
     }
 
     static func refreshChannelArchiveIfNeeded(channel: ChannelRecord, youtubeClient: YouTubeClient?, store: OrganizerStore) async throws -> [ArchivedChannelVideo] {
@@ -366,7 +552,7 @@ private enum CandidateDiscoveryCoordinator {
         }
     }
 
-    static func accumulateCandidate(
+    fileprivate static func accumulateCandidate(
         video: ArchivedChannelVideo,
         channel: ChannelRecord,
         sourceKind: String,
@@ -376,9 +562,70 @@ private enum CandidateDiscoveryCoordinator {
         existingVideoIds: Set<String>,
         aggregate: inout [String: AggregatedCandidate]
     ) {
-        guard !existingVideoIds.contains(video.videoId) else { return }
+        accumulateCandidate(
+            videoId: video.videoId,
+            title: video.title,
+            channelId: channel.channelId,
+            channelName: video.channelName ?? channel.name,
+            viewCount: video.viewCount,
+            publishedAt: video.publishedAt,
+            duration: video.duration,
+            channelIconUrl: video.channelIconUrl ?? channel.iconUrl,
+            sourceKind: sourceKind,
+            sourceRef: sourceRef,
+            creatorAffinity: creatorAffinity,
+            reasonHint: reasonHint,
+            existingVideoIds: existingVideoIds,
+            aggregate: &aggregate
+        )
+    }
 
-        let publishedDays = CreatorAnalytics.parseAge(video.publishedAt ?? "")
+    fileprivate static func accumulateCandidate(
+        video: DiscoveredVideo,
+        sourceKind: String,
+        sourceRef: String,
+        creatorAffinity: Int,
+        reasonHint: String?,
+        existingVideoIds: Set<String>,
+        aggregate: inout [String: AggregatedCandidate]
+    ) {
+        accumulateCandidate(
+            videoId: video.videoId,
+            title: video.title,
+            channelId: video.channelId,
+            channelName: video.channelTitle,
+            viewCount: video.viewCount,
+            publishedAt: video.publishedAt,
+            duration: video.duration,
+            channelIconUrl: nil,
+            sourceKind: sourceKind,
+            sourceRef: sourceRef,
+            creatorAffinity: creatorAffinity,
+            reasonHint: reasonHint,
+            existingVideoIds: existingVideoIds,
+            aggregate: &aggregate
+        )
+    }
+
+    private static func accumulateCandidate(
+        videoId: String,
+        title: String,
+        channelId: String?,
+        channelName: String?,
+        viewCount: String?,
+        publishedAt: String?,
+        duration: String?,
+        channelIconUrl: String?,
+        sourceKind: String,
+        sourceRef: String,
+        creatorAffinity: Int,
+        reasonHint: String?,
+        existingVideoIds: Set<String>,
+        aggregate: inout [String: AggregatedCandidate]
+    ) {
+        guard !existingVideoIds.contains(videoId) else { return }
+
+        let publishedDays = CreatorAnalytics.parseAge(publishedAt ?? "")
         let recencyBonus: Int
         switch publishedDays {
         case ...7: recencyBonus = 30
@@ -389,7 +636,7 @@ private enum CandidateDiscoveryCoordinator {
         }
 
         let creatorBonus = min(creatorAffinity, 16)
-        let qualityBonus = min(CreatorAnalytics.parseViewCount(video.viewCount ?? "") / 75_000, 6)
+        let qualityBonus = min(CreatorAnalytics.parseViewCount(viewCount ?? "") / 75_000, 6)
 
         let sourceScore: (freshness: Int, creatorWeight: Int, bonus: Int)
         let reason: String
@@ -404,6 +651,13 @@ private enum CandidateDiscoveryCoordinator {
             } else {
                 reason = "Fresh upload from a creator adjacent to this topic in your saved library"
             }
+        case "search_query_recent":
+            sourceScore = (8, 1, 12)
+            if let reasonHint, !reasonHint.isEmpty {
+                reason = "Recent search match for this topic via \(reasonHint)"
+            } else {
+                reason = "Recent search match for this topic"
+            }
         default:
             sourceScore = (4, 2, 0)
             reason = "Recent candidate from a related creator"
@@ -411,31 +665,36 @@ private enum CandidateDiscoveryCoordinator {
 
         let score = Double(sourceScore.freshness + recencyBonus * 4 + creatorBonus * sourceScore.creatorWeight + qualityBonus + sourceScore.bonus)
 
-        if var existing = aggregate[video.videoId] {
+        if var existing = aggregate[videoId] {
             existing.score += score + 3
             let nowHasCoreSource = existing.sources.contains(where: { $0.kind == "channel_archive_recent" }) || sourceKind == "channel_archive_recent"
             let nowHasAdjacentSource = existing.sources.contains(where: { $0.kind == "playlist_adjacent_recent" }) || sourceKind == "playlist_adjacent_recent"
+            let nowHasSearchSource = existing.sources.contains(where: { $0.kind == "search_query_recent" }) || sourceKind == "search_query_recent"
             if nowHasCoreSource && nowHasAdjacentSource {
                 existing.reason = "Fresh upload connected to this topic and your saved playlists"
+            } else if nowHasCoreSource && nowHasSearchSource {
+                existing.reason = "Fresh upload from a topic creator that also matched a topic search"
             } else if sourceKind == "playlist_adjacent_recent" {
+                existing.reason = reason
+            } else if sourceKind == "search_query_recent" {
                 existing.reason = reason
             } else if sourceKind == "channel_archive_recent" {
                 existing.reason = "Fresh upload from a creator already in this topic"
             }
             existing.sources.insert(CandidateSource(kind: sourceKind, ref: sourceRef))
-            aggregate[video.videoId] = existing
+            aggregate[videoId] = existing
             return
         }
 
-        aggregate[video.videoId] = AggregatedCandidate(
-            videoId: video.videoId,
-            title: video.title,
-            channelId: channel.channelId,
-            channelName: video.channelName ?? channel.name,
-            viewCount: video.viewCount,
-            publishedAt: video.publishedAt,
-            duration: video.duration,
-            channelIconUrl: video.channelIconUrl ?? channel.iconUrl,
+        aggregate[videoId] = AggregatedCandidate(
+            videoId: videoId,
+            title: title,
+            channelId: channelId,
+            channelName: channelName,
+            viewCount: viewCount,
+            publishedAt: publishedAt,
+            duration: duration,
+            channelIconUrl: channelIconUrl,
             score: score,
             reason: reason,
             sources: [CandidateSource(kind: sourceKind, ref: sourceRef)]
@@ -504,13 +763,14 @@ private enum CandidateDiscoveryCoordinator {
 
         guard !playlistWeights.isEmpty else { return [] }
 
-        var overlapByChannel: [String: (score: Double, bestPlaylistId: String, sampleVideo: VideoViewModel)] = [:]
+        var overlapByChannel: [String: (score: Double, bestPlaylistId: String, sampleVideo: VideoViewModel, playlistIds: Set<String>)] = [:]
         for (videoId, playlists) in store.playlistsByVideoId {
             guard !topicVideoIDs.contains(videoId),
                   let video = store.videoMap[videoId],
                   let channelId = video.channelId,
                   !channelId.isEmpty,
-                  !excludedChannelIds.contains(channelId) else {
+                  !excludedChannelIds.contains(channelId),
+                  !store.isExcludedCreator(channelId) else {
                 continue
             }
 
@@ -527,9 +787,16 @@ private enum CandidateDiscoveryCoordinator {
             guard overlapScore > 0, let bestPlaylist else { continue }
 
             if let current = overlapByChannel[channelId] {
-                overlapByChannel[channelId] = (current.score + overlapScore, current.bestPlaylistId, current.sampleVideo)
+                var playlistIds = current.playlistIds
+                playlists.forEach { playlist in
+                    if playlistWeights[playlist.playlistId] != nil {
+                        playlistIds.insert(playlist.playlistId)
+                    }
+                }
+                overlapByChannel[channelId] = (current.score + overlapScore, current.bestPlaylistId, current.sampleVideo, playlistIds)
             } else {
-                overlapByChannel[channelId] = (overlapScore, bestPlaylist.id, video)
+                let matchedPlaylistIds = Set(playlists.compactMap { playlistWeights[$0.playlistId] != nil ? $0.playlistId : nil })
+                overlapByChannel[channelId] = (overlapScore, bestPlaylist.id, video, matchedPlaylistIds)
             }
         }
 
@@ -553,6 +820,7 @@ private enum CandidateDiscoveryCoordinator {
             }
             .prefix(limit)
             .compactMap { channelId, entry in
+                guard adjacentCreatorMeetsAdmissionThreshold(score: entry.score, matchedPlaylistCount: entry.playlistIds.count) else { return nil }
                 guard let channel = resolveChannelRecord(channelId: channelId, fallbackName: entry.sampleVideo.channelName, fallbackIconURL: entry.sampleVideo.channelIconUrl, store: store) else {
                     return nil
                 }
@@ -566,10 +834,53 @@ private enum CandidateDiscoveryCoordinator {
             }
     }
 
+    static func adjacentCreatorMeetsAdmissionThreshold(score: Double, matchedPlaylistCount: Int) -> Bool {
+        if matchedPlaylistCount >= 2 {
+            return score >= 1.4
+        }
+        return score >= 2.2
+    }
+
+    static func generatedSearchQueries(for topic: TopicViewModel) -> [String] {
+        let base = topic.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return [] }
+
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let modifier = searchModifier(for: base)
+        let raw = [
+            base,
+            "\(base) review",
+            "\(base) \(currentYear)",
+            "\(base) \(modifier)"
+        ]
+
+        var seen: Set<String> = []
+        return raw.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0.lowercased()).inserted }
+    }
+
+    private static func searchModifier(for topicName: String) -> String {
+        let lower = topicName.lowercased()
+        if lower.contains("keyboard") { return "qmk" }
+        if lower.contains("swift") || lower.contains("ios") || lower.contains("mac") || lower.contains("programming") || lower.contains("software") {
+            return "tutorial"
+        }
+        if lower.contains("claude") || lower.contains("ai") || lower.contains("mcp") || lower.contains("automation") {
+            return "news"
+        }
+        if lower.contains("gadget") || lower.contains("hardware") || lower.contains("review") {
+            return "hands on"
+        }
+        return "update"
+    }
+
     private static func isUsefulDiscoveryPlaylist(_ playlist: PlaylistRecord) -> Bool {
         if playlist.playlistId == "WL" { return false }
         let normalized = playlist.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized == "old watch" || normalized == "watch later" { return false }
+        if normalized.contains("watch later") { return false }
+        if normalized.contains("watch-later") { return false }
         if let videoCount = playlist.videoCount, videoCount > 800 { return false }
         return true
     }
@@ -612,6 +923,10 @@ private struct ExploratoryChannelCandidate {
     let affinity: Int
     let sourceRef: String
     let reasonHint: String?
+}
+
+private struct CandidateSearchPlan {
+    let query: String
 }
 
 private struct AggregatedCandidate {

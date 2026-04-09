@@ -306,6 +306,49 @@ struct TopicStoreCandidateTests {
         let visible = try store.candidatesForTopic(id: topicId)
         #expect(Set(visible.map(\.videoId)) == Set(["keep", "saved"]))
     }
+
+    @Test("app seen events soft-derank but do not hide candidates")
+    func appSeenEventsRemainVisible() throws {
+        let store = try TopicStore(inMemory: true)
+        let topicId = try store.createTopic(name: "Candidates")
+        try store.replaceCandidates(
+            forTopic: topicId,
+            candidates: [
+                TopicCandidate(topicId: topicId, videoId: "keep", title: "Keep", channelId: "c1", channelName: "Alpha", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 5, reason: "keep", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                TopicCandidate(topicId: topicId, videoId: "opened", title: "Opened", channelId: "c2", channelName: "Beta", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 4, reason: "opened", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+            ],
+            sources: []
+        )
+
+        _ = try store.recordSeenVideo(
+            videoId: "opened",
+            title: "Opened",
+            channelName: "Beta",
+            rawURL: "https://youtube.com/watch?v=opened",
+            source: .app,
+            confidence: .probable
+        )
+
+        let visible = try store.candidatesForTopic(id: topicId)
+        #expect(Set(visible.map(\.videoId)) == Set(["keep", "opened"]))
+    }
+
+    @Test("excluded creators can be listed and restored")
+    func excludedCreatorsRoundTrip() throws {
+        let store = try TopicStore(inMemory: true)
+
+        try store.excludeChannel(channelId: "chan-alpha", channelName: "Alpha Channel", iconUrl: "https://example.com/a.png", reason: "watch_feedback")
+        #expect(try store.isChannelExcluded("chan-alpha") == true)
+
+        let excluded = try store.excludedChannelsList()
+        #expect(excluded.count == 1)
+        #expect(excluded[0].channelId == "chan-alpha")
+        #expect(excluded[0].channelName == "Alpha Channel")
+
+        try store.restoreExcludedChannel(channelId: "chan-alpha")
+        #expect(try store.isChannelExcluded("chan-alpha") == false)
+        #expect(try store.excludedChannelsList().isEmpty)
+    }
 }
 
 // MARK: - VideoItem Tests

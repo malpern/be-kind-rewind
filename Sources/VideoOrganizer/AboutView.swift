@@ -47,11 +47,6 @@ struct AboutView: View {
                 Text("Be Kind, Rewind")
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .multilineTextAlignment(.center)
-
-                Text("Video Organizer")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
 
             Label("Version 0.1.0", systemImage: "play.rectangle.fill")

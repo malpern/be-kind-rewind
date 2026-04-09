@@ -208,7 +208,7 @@ struct OrganizerStoreTests {
             try fixtureStore.replaceCandidates(
                 forTopic: alphaTopic,
                 candidates: [
-                    TopicCandidate(topicId: alphaTopic, videoId: "vid-3", title: "Gamma Debugging", channelId: "chan-gamma", channelName: "Gamma Channel", videoUrl: nil, viewCount: nil, publishedAt: nil, duration: nil, channelIconUrl: nil, score: 10, reason: "adjacent creator", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                    TopicCandidate(topicId: alphaTopic, videoId: "vid-3", title: "Gamma Debugging", channelId: "chan-gamma", channelName: "Gamma Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-07T00:00:00Z", duration: nil, channelIconUrl: nil, score: 10, reason: "adjacent creator", state: CandidateState.candidate.rawValue, discoveredAt: nil)
                 ],
                 sources: []
             )
@@ -221,6 +221,148 @@ struct OrganizerStoreTests {
             let candidates = store.candidateVideosForTopic(alphaTopic)
             #expect(candidates.map(\.videoId) == ["vid-3"])
             #expect(store.badgeTagForVideo("vid-3", candidateState: CandidateState.saved.rawValue) == "Watch Later")
+        }
+    }
+
+    @Test("watch show all reranking limits old backlog from a single creator")
+    @MainActor
+    func watchShowAllDiversifiesCreators() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+            let betaTopic = try #require(try fixtureStore.topicIdByName("Beta Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "old-alpha-1", title: "Old Alpha One", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2024-01-01T00:00:00Z", duration: nil, channelIconUrl: nil, score: 100, reason: "affinity", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                    TopicCandidate(topicId: alphaTopic, videoId: "old-alpha-2", title: "Old Alpha Two", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2024-01-02T00:00:00Z", duration: nil, channelIconUrl: nil, score: 99, reason: "affinity", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+            try fixtureStore.replaceCandidates(
+                forTopic: betaTopic,
+                candidates: [
+                    TopicCandidate(topicId: betaTopic, videoId: "fresh-beta", title: "Fresh Beta", channelId: "chan-beta", channelName: "Beta Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-07T00:00:00Z", duration: nil, channelIconUrl: nil, score: 96, reason: "fresh", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+
+            let ranked = store.candidateVideosForAllTopics().map(\.videoId)
+            #expect(ranked.prefix(3).contains("fresh-beta"))
+            #expect(ranked.firstIndex(of: "fresh-beta") ?? .max < ranked.firstIndex(of: "old-alpha-2") ?? .max)
+        }
+    }
+
+    @Test("watch show all deduplicates videos that appear in multiple topics")
+    @MainActor
+    func watchShowAllDeduplicatesAcrossTopics() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+            let betaTopic = try #require(try fixtureStore.topicIdByName("Beta Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "shared-video", title: "Shared", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-06T00:00:00Z", duration: nil, channelIconUrl: nil, score: 90, reason: "alpha", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+            try fixtureStore.replaceCandidates(
+                forTopic: betaTopic,
+                candidates: [
+                    TopicCandidate(topicId: betaTopic, videoId: "shared-video", title: "Shared", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-06T00:00:00Z", duration: nil, channelIconUrl: nil, score: 88, reason: "beta", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                    TopicCandidate(topicId: betaTopic, videoId: "unique-video", title: "Unique", channelId: "chan-beta", channelName: "Beta Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-07T00:00:00Z", duration: nil, channelIconUrl: nil, score: 70, reason: "unique", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            let ranked = store.candidateVideosForAllTopics().map(\.videoId)
+
+            #expect(ranked.filter { $0 == "shared-video" }.count == 1)
+            #expect(Set(ranked) == Set(["shared-video", "unique-video"]))
+        }
+    }
+
+    @Test("watch pool excludes older candidates from visible topic results")
+    @MainActor
+    func watchPoolIsRecentOnly() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "fresh", title: "Fresh", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-08T00:00:00Z", duration: nil, channelIconUrl: nil, score: 20, reason: "fresh", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                    TopicCandidate(topicId: alphaTopic, videoId: "old", title: "Old", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2025-12-01T00:00:00Z", duration: nil, channelIconUrl: nil, score: 99, reason: "old", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            let visible = store.candidateVideosForTopic(alphaTopic).map(\.videoId)
+
+            #expect(visible == ["fresh"])
+        }
+    }
+
+    @Test("watch creator filter stays in watch and filters current topic pool")
+    @MainActor
+    func watchCreatorFilterStaysInWatch() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "alpha-fresh", title: "Alpha Fresh", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-08T00:00:00Z", duration: nil, channelIconUrl: nil, score: 30, reason: "alpha", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                    TopicCandidate(topicId: alphaTopic, videoId: "beta-fresh", title: "Beta Fresh", channelId: "chan-beta", channelName: "Beta Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-07T00:00:00Z", duration: nil, channelIconUrl: nil, score: 29, reason: "beta", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            store.setPageDisplayMode(.watchCandidates)
+
+            _ = store.navigateToCreatorInWatch(channelId: "chan-alpha", channelName: "Alpha Channel", preferredTopicId: alphaTopic)
+
+            #expect(store.pageDisplayMode == .watchCandidates)
+            #expect(store.selectedTopicId == alphaTopic)
+            #expect(store.selectedChannelId == "chan-alpha")
+            #expect(store.candidateVideosForTopic(alphaTopic).map(\.videoId) == ["alpha-fresh"])
+        }
+    }
+
+    @Test("excluding a creator hides them from Watch immediately")
+    @MainActor
+    func excludingCreatorHidesWatchCandidates() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "alpha-fresh", title: "Alpha Fresh", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-08T00:00:00Z", duration: nil, channelIconUrl: nil, score: 30, reason: "alpha", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                    TopicCandidate(topicId: alphaTopic, videoId: "beta-fresh", title: "Beta Fresh", channelId: "chan-beta", channelName: "Beta Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-07T00:00:00Z", duration: nil, channelIconUrl: nil, score: 29, reason: "beta", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            store.setPageDisplayMode(.watchCandidates)
+            #expect(Set(store.candidateVideosForTopic(alphaTopic).map(\.videoId)) == Set(["alpha-fresh", "beta-fresh"]))
+
+            store.excludeCreatorFromWatch(channelId: "chan-alpha", channelName: "Alpha Channel")
+
+            #expect(store.excludedCreators.contains(where: { $0.channelId == "chan-alpha" }))
+            #expect(store.candidateVideosForTopic(alphaTopic).map(\.videoId) == ["beta-fresh"])
         }
     }
 
@@ -347,5 +489,27 @@ struct OrganizerStoreTests {
                 #expect(try topicStore.listTopics().count == 2, "topics missing on iteration \(iteration)")
             }
         }
+    }
+
+    @Test("phase 2 adjacent creator admission requires stronger evidence")
+    @MainActor
+    func adjacentCreatorAdmissionThreshold() {
+        #expect(CandidateDiscoveryCoordinator.adjacentCreatorMeetsAdmissionThreshold(score: 1.3, matchedPlaylistCount: 2) == false)
+        #expect(CandidateDiscoveryCoordinator.adjacentCreatorMeetsAdmissionThreshold(score: 1.5, matchedPlaylistCount: 2))
+        #expect(CandidateDiscoveryCoordinator.adjacentCreatorMeetsAdmissionThreshold(score: 2.1, matchedPlaylistCount: 1) == false)
+        #expect(CandidateDiscoveryCoordinator.adjacentCreatorMeetsAdmissionThreshold(score: 2.2, matchedPlaylistCount: 1))
+    }
+
+    @Test("phase 2 search queries include topic review year and a topic-specific modifier")
+    @MainActor
+    func phase2GeneratedSearchQueries() {
+        let topic = TopicViewModel(id: 42, name: "Mechanical Keyboards", videoCount: 0, subtopics: [])
+        let queries = CandidateDiscoveryCoordinator.generatedSearchQueries(for: topic)
+
+        #expect(queries.contains("Mechanical Keyboards"))
+        #expect(queries.contains("Mechanical Keyboards review"))
+        #expect(queries.contains("Mechanical Keyboards 2026"))
+        #expect(queries.contains("Mechanical Keyboards qmk"))
+        #expect(Set(queries.map { $0.lowercased() }).count == queries.count)
     }
 }

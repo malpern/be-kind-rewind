@@ -14,6 +14,10 @@ struct TopicSidebar: View {
         displaySettings.sortOrder == .creator
     }
 
+    private var isWatchMode: Bool {
+        store.pageDisplayMode == .watchCandidates
+    }
+
     private var filteredTopics: [TopicViewModel] {
         let query = store.parsedQuery
         guard !query.isEmpty else { return store.topics }
@@ -31,6 +35,14 @@ struct TopicSidebar: View {
             return selectedSubtopicId == topic.id
         }
         return store.selectedTopicId == topic.id
+    }
+
+    private func isViewportTopic(_ topic: TopicViewModel) -> Bool {
+        store.viewportTopicId == topic.id
+    }
+
+    private func isExpanded(_ topic: TopicViewModel) -> Bool {
+        expandedTopicId == topic.id || store.viewportTopicId == topic.id
     }
 
     var body: some View {
@@ -97,7 +109,13 @@ struct TopicSidebar: View {
 
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(filteredTopics) { topic in
-                            TopicRow(topic: topic, highlightTerms: store.parsedQuery.includeTerms, isSelected: isSelected(topic))
+                            TopicRow(
+                                topic: topic,
+                                count: displayedCount(for: topic),
+                                highlightTerms: store.parsedQuery.includeTerms,
+                                isSelected: isSelected(topic),
+                                isViewport: isViewportTopic(topic)
+                            )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                             .simultaneousGesture(
@@ -117,7 +135,7 @@ struct TopicSidebar: View {
                                 }
                             )
                             .accessibilityIdentifier("topic-\(topic.id)")
-                            .accessibilityLabel("\(topic.name), \(topic.videoCount) videos")
+                            .accessibilityLabel("\(topic.name), \(displayedCount(for: topic)) videos")
                             .accessibilityAddTraits(.isButton)
                             .accessibilityAction {
                                 applySidebarSelection(topicId: topic.id, subtopicId: nil)
@@ -125,7 +143,7 @@ struct TopicSidebar: View {
                             .contextMenu { contextMenu(for: topic) }
                             .id(topic.id)
 
-                            if expandedTopicId == topic.id {
+                            if isExpanded(topic) {
                                 if isCreatorMode {
                                     ForEach(creatorEntries(for: topic)) { creator in
                                         Button {
@@ -134,7 +152,8 @@ struct TopicSidebar: View {
                                             CreatorSidebarRow(
                                                 creator: creator,
                                                 highlightTerms: store.parsedQuery.includeTerms,
-                                                isSelected: selectedCreatorSectionId == creator.sectionId
+                                                isSelected: selectedCreatorSectionId == creator.sectionId,
+                                                isViewport: store.viewportCreatorSectionId == creator.sectionId
                                             )
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                         }
@@ -159,7 +178,14 @@ struct TopicSidebar: View {
                                     }
                                 } else if !topic.subtopics.isEmpty {
                                     ForEach(topic.subtopics) { sub in
-                                        TopicRow(topic: sub, highlightTerms: store.parsedQuery.includeTerms, isSubtopic: true, isSelected: isSelected(sub))
+                                        TopicRow(
+                                            topic: sub,
+                                            count: displayedCount(forSubtopic: sub, parentTopicId: topic.id),
+                                            highlightTerms: store.parsedQuery.includeTerms,
+                                            isSubtopic: true,
+                                            isSelected: isSelected(sub),
+                                            isViewport: store.viewportSubtopicId == sub.id
+                                        )
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                         .contentShape(Rectangle())
                                         .simultaneousGesture(
@@ -168,7 +194,7 @@ struct TopicSidebar: View {
                                             }
                                         )
                                         .accessibilityIdentifier("topic-\(sub.id)")
-                                        .accessibilityLabel("\(sub.name), \(sub.videoCount) videos")
+                                        .accessibilityLabel("\(sub.name), \(displayedCount(forSubtopic: sub, parentTopicId: topic.id)) videos")
                                         .accessibilityAddTraits(.isButton)
                                         .accessibilityAction {
                                             applySidebarSelection(topicId: topic.id, subtopicId: sub.id)
@@ -214,6 +240,33 @@ struct TopicSidebar: View {
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     scrollProxy.scrollTo(filteredTopics.first?.id, anchor: .top)
+                }
+            }
+            .onChange(of: store.viewportTopicId) { _, topicId in
+                guard let topicId else { return }
+                if expandedTopicId != topicId {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        expandedTopicId = topicId
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    scrollProxy.scrollTo(topicId, anchor: .center)
+                }
+            }
+            .onChange(of: store.viewportCreatorSectionId) { _, creatorSectionId in
+                guard isCreatorMode, let creatorSectionId else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        scrollProxy.scrollTo(creatorSectionId, anchor: .center)
+                    }
+                }
+            }
+            .onChange(of: store.viewportSubtopicId) { _, subtopicId in
+                guard !isCreatorMode, let subtopicId else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        scrollProxy.scrollTo(subtopicId, anchor: .center)
+                    }
                 }
             }
             .onChange(of: displaySettings.focusSidebarRequested) { _, requested in
@@ -294,7 +347,17 @@ struct TopicSidebar: View {
 
     private func applyCreatorSelection(_ creator: CreatorSidebarEntry) {
         selectedCreatorSectionId = creator.sectionId
-        if let topicId = store.navigateToCreator(channelId: creator.channelId, channelName: creator.creatorName, preferredTopicId: creator.topicId) {
+        let topicId: Int64?
+        if isWatchMode {
+            topicId = store.navigateToCreatorInWatch(
+                channelId: creator.channelId.isEmpty ? nil : creator.channelId,
+                channelName: creator.creatorName,
+                preferredTopicId: creator.topicId
+            )
+        } else {
+            topicId = store.navigateToCreator(channelId: creator.channelId, channelName: creator.creatorName, preferredTopicId: creator.topicId)
+        }
+        if let topicId {
             displaySettings.scrollToTopicRequested = topicId
         }
     }
@@ -323,6 +386,38 @@ struct TopicSidebar: View {
     }
 
     private func creatorEntries(for topic: TopicViewModel) -> [CreatorSidebarEntry] {
+        if isWatchMode {
+            let grouped = Dictionary(grouping: store.recentCandidateVideosForTopic(topic.id).filter { !$0.isPlaceholder }) { candidate in
+                (candidate.channelId?.isEmpty == false ? candidate.channelId : nil) ?? candidate.channelName ?? "Unknown Creator"
+            }
+
+            return grouped.values.compactMap { group in
+                guard let first = group.first else { return nil }
+                let count = store.watchCandidateCountForChannel(first.channelId, channelName: first.channelName, inTopic: topic.id)
+                guard count > 0 else { return nil }
+
+                let knownChannel = first.channelId.flatMap { channelId in
+                    store.channelsForTopic(topic.id).first(where: { $0.channelId == channelId })
+                }
+
+                return CreatorSidebarEntry(
+                    sectionId: "creator-\(topic.id)-\((first.channelId?.isEmpty == false ? first.channelId! : first.channelName ?? "unknown"))",
+                    topicId: topic.id,
+                    channelId: first.channelId ?? "",
+                    creatorName: first.channelName ?? "Unknown Creator",
+                    count: count,
+                    channelUrl: knownChannel?.channelUrl.flatMap(URL.init(string:)) ?? first.channelId.flatMap { URL(string: "https://www.youtube.com/channel/\($0)") },
+                    channelIconUrl: knownChannel?.iconUrl.flatMap(URL.init(string:)) ?? first.channelIconUrl.flatMap(URL.init(string:))
+                )
+            }
+            .sorted {
+                if $0.count == $1.count {
+                    return $0.creatorName.localizedStandardCompare($1.creatorName) == .orderedAscending
+                }
+                return $0.count > $1.count
+            }
+        }
+
         let channels = store.channelsForTopic(topic.id)
         return channels.compactMap { channel in
             let count = store.videoCountForChannel(channel.channelId, inTopic: topic.id)
@@ -337,6 +432,32 @@ struct TopicSidebar: View {
                 channelIconUrl: channel.iconUrl.flatMap(URL.init(string:))
             )
         }
+    }
+
+    private func displayedCount(for topic: TopicViewModel) -> Int {
+        guard isWatchMode else { return topic.videoCount }
+        return store.recentCandidateVideosForTopic(topic.id).count
+    }
+
+    private func displayedCount(forSubtopic subtopic: TopicViewModel, parentTopicId: Int64) -> Int {
+        guard isWatchMode else { return subtopic.videoCount }
+
+        let candidateVideos = store.recentCandidateVideosForTopic(parentTopicId)
+        guard !candidateVideos.isEmpty else { return 0 }
+
+        let subtopicVideos = store.videosForTopic(subtopic.id)
+        let subtopicChannelIds = Set(subtopicVideos.compactMap(\.channelId))
+        let subtopicChannelNames = Set(subtopicVideos.compactMap(\.channelName))
+
+        return candidateVideos.filter { candidate in
+            if let channelId = candidate.channelId, subtopicChannelIds.contains(channelId) {
+                return true
+            }
+            if let channelName = candidate.channelName, subtopicChannelNames.contains(channelName) {
+                return true
+            }
+            return false
+        }.count
     }
 }
 
@@ -389,9 +510,11 @@ private struct DisplayPopover: View {
 
 private struct TopicRow: View {
     let topic: TopicViewModel
+    let count: Int
     var highlightTerms: [String] = []
     var isSubtopic: Bool = false
     var isSelected: Bool = false
+    var isViewport: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -405,7 +528,7 @@ private struct TopicRow: View {
 
             Spacer()
 
-            Text("\(topic.videoCount)")
+            Text("\(count)")
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
@@ -413,8 +536,18 @@ private struct TopicRow: View {
         .padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.25) : .clear)
+                .fill(backgroundColor)
         )
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.25)
+        }
+        if isViewport {
+            return Color.accentColor.opacity(0.12)
+        }
+        return .clear
     }
 }
 
@@ -434,6 +567,7 @@ private struct CreatorSidebarRow: View {
     let creator: CreatorSidebarEntry
     var highlightTerms: [String] = []
     var isSelected: Bool = false
+    var isViewport: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -454,8 +588,18 @@ private struct CreatorSidebarRow: View {
         .padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.25) : .clear)
+                .fill(backgroundColor)
         )
+    }
+
+    private var backgroundColor: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.25)
+        }
+        if isViewport {
+            return Color.accentColor.opacity(0.12)
+        }
+        return .clear
     }
 
     @ViewBuilder
