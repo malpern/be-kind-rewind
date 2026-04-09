@@ -64,12 +64,18 @@ struct OrganizerView: View {
             ActionToast(state: displaySettings.toast)
                 .padding(.top, 4)
         }
-        .alert(item: $store.alert) { alert in
-            Alert(
-                title: Text(alert.title),
-                message: Text(alert.message),
-                dismissButton: .default(Text("OK"))
+        .alert(
+            store.alert?.title ?? "",
+            isPresented: Binding(
+                get: { store.alert != nil },
+                set: { if !$0 { store.alert = nil } }
             )
+        ) {
+            Button("OK") { store.alert = nil }
+        } message: {
+            if let message = store.alert?.message {
+                Text(message)
+            }
         }
         .task(id: watchThumbnailPrefetchKey) {
             await prefetchWatchThumbnailsIfNeeded()

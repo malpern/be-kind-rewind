@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "VideoTagger",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .library(name: "TaggingKit", targets: ["TaggingKit"]),
         .executable(name: "video-tagger", targets: ["VideoTagger"]),

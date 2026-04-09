@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Lightweight Claude API client using URLSession. No external SDK needed.
 public actor ClaudeClient {
@@ -14,8 +15,13 @@ public actor ClaudeClient {
         self.apiKey = apiKey
     }
 
-    /// Cached key to avoid repeated keychain prompts
-    nonisolated(unsafe) private static var cachedKey: String?
+    /// Thread-safe cache to avoid repeated keychain prompts.
+    private static let keyCache = Mutex<String?>(nil)
+
+    private static var cachedKey: String? {
+        get { keyCache.withLock { $0 } }
+        set { keyCache.withLock { $0 = newValue } }
+    }
 
     public init() throws {
         if let cached = Self.cachedKey {
