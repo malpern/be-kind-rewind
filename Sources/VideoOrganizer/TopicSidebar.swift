@@ -23,11 +23,7 @@ struct TopicSidebar: View {
         let query = store.parsedQuery
         guard !query.isEmpty else { return store.topics }
         return store.topics.filter { topic in
-            if query.matches(fields: [topic.name]) { return true }
-            let videos = store.videosForTopic(topic.id)
-            return videos.contains { v in
-                query.matches(fields: [v.title, v.channelName ?? "", topic.name])
-            }
+            store.topicMatchesSearch(topic, query: query)
         }
     }
 

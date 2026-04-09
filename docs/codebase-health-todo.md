@@ -13,12 +13,11 @@ This list only keeps issues that are still open.
   - Narrowed to selected-topic prefetch from `OrganizerView`
   - Bulk warmup can move to idle/prewarm later
 
-- [ ] **Stop sidebar search/filtering from doing per-topic DB reads**
+- [x] **Stop sidebar search/filtering from doing per-topic DB reads**
   `Sources/VideoOrganizer/TopicSidebar.swift` computes `filteredTopics` by calling
   `store.videosForTopic(topic.id)` for every topic during view recomputation.
-  - Materialize sidebar search/filter data in `OrganizerStore`
-  - Render sidebar from cached topic/search state only
-  - Avoid SQLite fan-out from SwiftUI body recomputation
+  - Materialized topic search corpus in `OrganizerStore`
+  - Sidebar now renders from cached topic/search state only
 
 - [ ] **Finish Watch render-path profiling and remove topic-boundary hitches**
   We now have some timing logs, but the remaining `Watch > By Topic` freeze at

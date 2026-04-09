@@ -88,6 +88,19 @@ struct OrganizerStoreTests {
         }
     }
 
+    @Test("topic search matching uses cached topic corpus")
+    @MainActor
+    func topicSearchMatchingUsesCachedCorpus() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+            let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
+
+            #expect(store.topicMatchesSearch(alphaTopic, query: SearchQuery("Alpha Channel")))
+            #expect(store.topicMatchesSearch(alphaTopic, query: SearchQuery("Alpha SwiftUI Basics")))
+            #expect(store.topicMatchesSearch(alphaTopic, query: SearchQuery("missing")) == false)
+        }
+    }
+
     @Test("creator detail aggregates views ages and coverage")
     @MainActor
     func creatorDetailAggregation() throws {

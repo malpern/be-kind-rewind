@@ -102,6 +102,7 @@ final class OrganizerStore {
     // Cached flat video map — rebuilt on loadTopics()
     var videoMap: [String: VideoViewModel] = [:]
     var videoTopicMap: [String: Int64] = [:]
+    private(set) var topicSearchFields: [Int64: [String]] = [:]
     var syncTask: Task<Void, Never>?
     var browserSyncTask: Task<Void, Never>?
     var syncLoopTask: Task<Void, Never>?
@@ -273,6 +274,11 @@ final class OrganizerStore {
     func topicNameForVideo(_ videoId: String) -> String? {
         guard let topicId = videoTopicMap[videoId] else { return nil }
         return topics.first { $0.id == topicId }?.name
+    }
+
+    func topicMatchesSearch(_ topic: TopicViewModel, query: SearchQuery) -> Bool {
+        guard !query.isEmpty else { return true }
+        return query.matches(fields: topicSearchFields[topic.id] ?? [topic.name])
     }
 
     func playlistsForVideo(_ videoId: String) -> [PlaylistRecord] {
@@ -757,14 +763,21 @@ final class OrganizerStore {
         var tChannels: [Int64: [ChannelRecord]] = [:]
         var tChannelCounts: [Int64: [String: Int]] = [:]
         var tChannelRecent: [Int64: Set<String>] = [:]
+        var tSearchFields: [Int64: [String]] = [:]
 
         for topic in topics {
             var perTopicCounts: [String: Int] = [:]
             var perTopicRecent: Set<String> = []
+            var searchFields = [topic.name]
+            searchFields.append(contentsOf: topic.subtopics.map(\.name))
 
             for video in videosForTopicIncludingSubtopics(topic.id) {
                 vMap[video.videoId] = video
                 tMap[video.videoId] = topic.id
+                searchFields.append(video.title)
+                if let channelName = video.channelName, !channelName.isEmpty {
+                    searchFields.append(channelName)
+                }
                 if let channel = video.channelName {
                     cCounts[channel, default: 0] += 1
                 }
@@ -778,6 +791,7 @@ final class OrganizerStore {
 
             tChannelCounts[topic.id] = perTopicCounts
             tChannelRecent[topic.id] = perTopicRecent
+            tSearchFields[topic.id] = searchFields
 
             do {
                 tChannels[topic.id] = try store.channelsForTopicIncludingSubtopics(id: topic.id)
@@ -791,6 +805,7 @@ final class OrganizerStore {
         topicChannels = tChannels
         topicChannelCounts = tChannelCounts
         topicChannelRecent = tChannelRecent
+        topicSearchFields = tSearchFields
     }
 
     func rebuildPlaylistMaps() {
@@ -935,4 +950,3 @@ final class OrganizerStore {
     }
 
 }
-
