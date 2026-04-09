@@ -7,7 +7,7 @@ import TaggingKit
 @MainActor
 @Observable
 final class YouTubeAuthController {
-    private let tokenStore = YouTubeOAuthTokenStore()
+    private let tokenStore: YouTubeOAuthTokenStore
 
     private(set) var isBusy = false
     private(set) var isConnected = false
@@ -19,7 +19,8 @@ final class YouTubeAuthController {
     private(set) var errorMessage: String?
     private(set) var hasClientConfig = false
 
-    init() {
+    init(tokenStore: YouTubeOAuthTokenStore = YouTubeOAuthTokenStore()) {
+        self.tokenStore = tokenStore
         refreshStatus()
     }
 

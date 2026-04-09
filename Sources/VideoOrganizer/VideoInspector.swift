@@ -45,6 +45,7 @@ struct VideoInspector: View {
         .frame(maxHeight: .infinity)
     }
 
+    /// Main inspector body showing thumbnail, title, channel info, metadata, tags, and action buttons.
     private func inspectorContent(_ inspectedItem: InspectedVideoViewModel) -> some View {
         let video = inspectedItem.video
         let channelPresentation = store.channelPresentation(for: video)
@@ -221,6 +222,7 @@ struct VideoInspector: View {
 
     // MARK: - Actions
 
+    /// Context-sensitive action buttons: Save/Dismiss for watch candidates, playlist management for saved videos.
     private func actionButtons(_ inspectedItem: InspectedVideoViewModel) -> some View {
         let video = inspectedItem.video
         return VStack(spacing: 8) {
@@ -318,6 +320,7 @@ struct VideoInspector: View {
 
     // MARK: - Creator Detail
 
+    /// Full creator profile view showing subscriber count, coverage stats, and per-topic video breakdown.
     private func creatorInspectorContent(_ detail: CreatorDetailViewModel) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -428,6 +431,7 @@ struct VideoInspector: View {
 
     // MARK: - More from Channel
 
+    /// Scrollable row of other videos from the same channel in your library.
     private func moreFromChannel(_ videos: [VideoViewModel], channelName: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("More from \(channelName ?? "this channel")")

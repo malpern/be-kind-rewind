@@ -31,6 +31,7 @@ struct TopicSidebar: View {
         }
     }
 
+    /// In Watch mode, selection is topic-only; in Saved mode, subtopic selection takes priority.
     private func isSelected(_ topic: TopicViewModel) -> Bool {
         if isWatchMode {
             return store.selectedTopicId == topic.id
@@ -338,6 +339,7 @@ struct TopicSidebar: View {
         }
     }
 
+    /// Navigates to the selected typeahead suggestion (topic, subtopic, or channel filter).
     private func selectSuggestion(_ suggestion: TypeaheadSuggestion) {
         switch suggestion.kind {
         case .topic, .subtopic:
@@ -399,6 +401,7 @@ struct TopicSidebar: View {
         }
     }
 
+    /// Builds the inline creator list for expanded topic rows, combining saved and watch candidate creators.
     private func creatorEntries(for topic: TopicViewModel) -> [CreatorSidebarEntry] {
         if isWatchMode {
             let grouped = Dictionary(grouping: store.recentCandidateVideosForTopic(topic.id).filter { !$0.isPlaceholder }) { candidate in
@@ -448,6 +451,7 @@ struct TopicSidebar: View {
         }
     }
 
+    /// Returns the count shown next to a topic row — saved video count or watch candidate count.
     private func displayedCount(for topic: TopicViewModel) -> Int {
         guard isWatchMode else { return topic.videoCount }
         return store.recentCandidateVideosForTopic(topic.id).count

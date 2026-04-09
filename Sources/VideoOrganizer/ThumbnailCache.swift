@@ -12,14 +12,21 @@ final class ThumbnailCache {
     private let cacheDir: URL
     private let session: URLSession
 
-    init() {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        cacheDir = base.appendingPathComponent("VideoOrganizer/thumbnails", isDirectory: true)
-        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+    init(cacheDir: URL? = nil, session: URLSession? = nil) {
+        let resolvedCacheDir = cacheDir ?? {
+            let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            return base.appendingPathComponent("VideoOrganizer/thumbnails", isDirectory: true)
+        }()
+        self.cacheDir = resolvedCacheDir
+        try? FileManager.default.createDirectory(at: resolvedCacheDir, withIntermediateDirectories: true)
 
-        let config = URLSessionConfiguration.default
-        config.httpMaximumConnectionsPerHost = 10
-        session = URLSession(configuration: config)
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.httpMaximumConnectionsPerHost = 10
+            self.session = URLSession(configuration: config)
+        }
     }
 
     /// Get the local path for a thumbnail. Returns nil if not yet cached.
