@@ -389,7 +389,7 @@ final class OrganizerStore {
 
     // Cached channels per topic — rebuilt on loadTopics()
     private(set) var topicChannels: [Int64: [ChannelRecord]] = [:]
-    private(set) var knownChannelsById: [String: ChannelRecord] = [:]
+    var knownChannelsById: [String: ChannelRecord] = [:]
 
     // Cached per-topic channel video counts: [topicId: [channelId: count]]
     var topicChannelCounts: [Int64: [String: Int]] = [:]

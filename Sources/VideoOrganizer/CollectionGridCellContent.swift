@@ -144,7 +144,7 @@ struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, isRefreshing, channels, selectedChannelId, videoCountForChannel, hasRecentContent, latestPublishedAtForChannel, onSelectChannel):
+        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, latestPublishedAtForChannel, onSelectChannel):
             VStack(spacing: 0) {
                 SectionHeaderView(
                     name: name,
@@ -153,8 +153,7 @@ struct SectionHeaderContent: View {
                     topicId: topicId,
                     progress: scrollProgress,
                     showProgress: displayMode != .watchCandidates,
-                    highlightTerms: highlightTerms,
-                    isRefreshing: isRefreshing
+                    highlightTerms: highlightTerms
                 )
                 .accessibilityIdentifier("topic-\(topicId)")
 

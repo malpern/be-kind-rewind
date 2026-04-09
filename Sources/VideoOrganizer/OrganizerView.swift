@@ -173,12 +173,21 @@ struct OrganizerView: View {
         }
 
         if store.watchRefreshTotalTopics > 0 {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 ProgressView().controlSize(.small)
-                Text("Refreshing Watch")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Refreshing Watch \(store.watchRefreshCompletedTopics)/\(store.watchRefreshTotalTopics)")
+                        .font(.caption.monospacedDigit().weight(.medium))
+                    if let name = store.watchRefreshCurrentTopicName {
+                        Text(name)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+                .foregroundStyle(.secondary)
             }
+            .help("Refreshing Watch candidates: \(store.watchRefreshCompletedTopics) of \(store.watchRefreshTotalTopics) topics")
             .accessibilityLabel("Refreshing Watch candidates: \(store.watchRefreshCompletedTopics) of \(store.watchRefreshTotalTopics) topics")
         }
 

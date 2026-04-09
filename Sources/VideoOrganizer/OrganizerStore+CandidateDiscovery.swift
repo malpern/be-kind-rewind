@@ -313,10 +313,70 @@ extension OrganizerStore {
             try store.replaceCandidates(forTopic: topicId, candidates: candidates, sources: sources)
             reloadStoredCandidateCache(for: topicId)
             rebuildWatchPools()
+
+            // Fetch missing channel icons in background (free, no quota)
+            await fetchMissingChannelIcons(from: candidates)
         } catch {
             candidateErrors[topicId] = CandidateDiscoveryCoordinator.friendlyCandidateErrorMessage(for: error)
             CandidateDiscoveryCoordinator.presentQuotaAlertIfNeeded(for: error, store: self)
             AppLogger.discovery.error("Candidate refresh failed for topic \(topicId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Downloads channel icons for candidate creators that have a URL but no cached icon data.
+    /// Uses the YouTube CDN directly (no API quota cost).
+    private func fetchMissingChannelIcons(from candidates: [TopicCandidate]) async {
+        // Collect unique channels that have an icon URL
+        var channelsToFetch: [(channelId: String, iconUrl: URL)] = []
+        var seen = Set<String>()
+
+        for candidate in candidates {
+            guard let channelId = candidate.channelId, !channelId.isEmpty,
+                  let iconUrlString = candidate.channelIconUrl,
+                  let iconUrl = URL(string: iconUrlString),
+                  !seen.contains(channelId) else { continue }
+            seen.insert(channelId)
+
+            // Check if we already have icon data for this channel
+            if let existing = knownChannelsById[channelId], existing.iconData != nil {
+                continue
+            }
+            // Also check the database directly for channels not in our cache
+            if let dbChannel = try? store.channelById(channelId), dbChannel.iconData != nil {
+                continue
+            }
+
+            channelsToFetch.append((channelId, iconUrl))
+        }
+
+        guard !channelsToFetch.isEmpty else { return }
+        AppLogger.discovery.info("Fetching \(channelsToFetch.count, privacy: .public) missing channel icons")
+
+        for (channelId, iconUrl) in channelsToFetch {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: iconUrl)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200, !data.isEmpty else { continue }
+
+                // Ensure the channel record exists before updating icon
+                if (try? store.channelById(channelId)) == nil {
+                    let name = candidates.first(where: { $0.channelId == channelId })?.channelName ?? "Unknown"
+                    try store.upsertChannel(ChannelRecord(
+                        channelId: channelId,
+                        name: name,
+                        channelUrl: "https://www.youtube.com/channel/\(channelId)",
+                        iconUrl: iconUrl.absoluteString
+                    ))
+                }
+                try store.updateChannelIcon(channelId: channelId, iconData: data)
+                // Invalidate cache so next access picks up the icon from DB
+                knownChannelsById.removeValue(forKey: channelId)
+            } catch {
+                // Non-critical — skip and continue
+            }
+        }
+
+        if !channelsToFetch.isEmpty {
+            rebuildWatchPools()
         }
     }
 

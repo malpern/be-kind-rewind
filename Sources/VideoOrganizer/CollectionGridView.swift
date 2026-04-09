@@ -749,7 +749,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 scrollProgress: scrollProgress,
                 highlightTerms: highlightTerms,
                 displayMode: section.displayMode,
-                isRefreshing: store?.candidateLoadingTopics.contains(section.topicId) ?? false,
                 channels: channels,
                 selectedChannelId: selectedChannelId,
                 videoCountForChannel: { [weak store] channelId in
@@ -1828,7 +1827,6 @@ enum CollectionSectionHeaderModel {
         scrollProgress: Double,
         highlightTerms: [String],
         displayMode: TopicDisplayMode,
-        isRefreshing: Bool,
         channels: [ChannelRecord],
         selectedChannelId: String?,
         videoCountForChannel: (String) -> Int,
@@ -1851,7 +1849,7 @@ enum CollectionSectionHeaderModel {
 
     var height: CGFloat {
         switch self {
-        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, isRefreshing: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, latestPublishedAtForChannel: _, onSelectChannel: _):
+        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, latestPublishedAtForChannel: _, onSelectChannel: _):
             return channels.isEmpty ? 48 : 112
         case .creator:
             return 56
