@@ -327,6 +327,10 @@ extension OrganizerStore {
     /// Phase 1: Use YouTube API to resolve icon URLs for unknown channels (1 quota unit per 50).
     /// Phase 2: Download icon images from CDN (free, no quota).
     private func fetchMissingChannelIcons(from candidates: [TopicCandidate]) async {
+        func log(_ msg: String) { AppLogger.discovery.info("\(msg, privacy: .public)") }
+
+        log("=== fetchMissingChannelIcons called with \(candidates.count) candidates ===")
+
         var channelsWithUrl: [(channelId: String, iconUrl: URL, name: String)] = []
         var channelsWithoutUrl: [(channelId: String, name: String)] = []
         var seen = Set<String>()
@@ -348,6 +352,8 @@ extension OrganizerStore {
             }
         }
 
+        log("Icon check: \(channelsWithUrl.count) with URL, \(channelsWithoutUrl.count) without URL")
+
         // Phase 1: Resolve icon URLs for channels that don't have one (uses YouTube API)
         if !channelsWithoutUrl.isEmpty, let youtubeClient {
             let ids = channelsWithoutUrl.map(\.channelId)
@@ -358,13 +364,14 @@ extension OrganizerStore {
                         channelsWithUrl.append((entry.channelId, url, entry.name))
                     }
                 }
-                AppLogger.discovery.info("Resolved \(thumbnailMap.count, privacy: .public) channel icon URLs from API for \(ids.count, privacy: .public) unknown channels")
+                log("Resolved \(thumbnailMap.count) of \(ids.count) channel icon URLs from API")
             } catch {
-                AppLogger.discovery.error("Failed to fetch channel thumbnails: \(error.localizedDescription, privacy: .public)")
+                log("Failed to fetch channel thumbnails: \(error.localizedDescription)")
             }
         }
 
         guard !channelsWithUrl.isEmpty else { return }
+        log("Downloading \(channelsWithUrl.count) channel icons from CDN")
         AppLogger.discovery.info("Downloading \(channelsWithUrl.count, privacy: .public) channel icons from CDN")
 
         // Phase 2: Download icon images from CDN (free, with per-icon timeout)
@@ -399,8 +406,9 @@ extension OrganizerStore {
                 try store.updateChannelIcon(channelId: channelId, iconData: data)
                 knownChannelsById.removeValue(forKey: channelId)
                 fetchedCount += 1
+                log("  OK \(channelId) \(name) (\(data.count) bytes)")
             } catch {
-                // Timeout or network failure — skip, leave as letter placeholder
+                log("  FAIL \(channelId) \(name): \(error)")
             }
         }
 

@@ -83,6 +83,12 @@ struct OrganizerView: View {
                 Text(message)
             }
         }
+        .task {
+            // If we launch directly into Watch mode, trigger the refresh cycle
+            if store.pageDisplayMode == .watchCandidates {
+                store.ensureCandidatesForWatchPage()
+            }
+        }
         .task(id: watchThumbnailPrefetchKey) {
             await prefetchWatchThumbnailsIfNeeded()
         }
