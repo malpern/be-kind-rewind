@@ -19,7 +19,7 @@ import urllib.request
 import urllib.error
 
 
-def fetch_channel_icon(channel_id: str) -> str | None:
+def fetch_channel_icon(channel_id):
     """Fetch the avatar URL for a YouTube channel by scraping the channel page."""
     url = f"https://www.youtube.com/channel/{channel_id}"
     req = urllib.request.Request(url, headers={

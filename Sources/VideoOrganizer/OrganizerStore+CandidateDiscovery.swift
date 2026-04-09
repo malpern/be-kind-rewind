@@ -469,15 +469,22 @@ extension OrganizerStore {
 
         do {
             try process.run()
-            let data = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            let (stdoutData, stderrData) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, Data), Error>) in
                 process.terminationHandler = { _ in
-                    continuation.resume(returning: stdout.fileHandleForReading.readDataToEndOfFile())
+                    let out = stdout.fileHandleForReading.readDataToEndOfFile()
+                    let err = stderr.fileHandleForReading.readDataToEndOfFile()
+                    continuation.resume(returning: (out, err))
                 }
             }
-            guard process.terminationStatus == 0 else { return [:] }
+            guard process.terminationStatus == 0 else {
+                let errText = String(data: stderrData, encoding: .utf8) ?? ""
+                let sanitized = errText.replacingOccurrences(of: "\n", with: " | ").prefix(1000)
+                AppLogger.file.log("Scraper exited \(process.terminationStatus): \(sanitized)", category: "icons")
+                return [:]
+            }
 
             struct Response: Decodable { let icons: [String: String] }
-            let response = try JSONDecoder().decode(Response.self, from: data)
+            let response = try JSONDecoder().decode(Response.self, from: stdoutData)
             return response.icons
         } catch {
             AppLogger.file.log("Channel icon scraper failed: \(error.localizedDescription)", category: "icons")
