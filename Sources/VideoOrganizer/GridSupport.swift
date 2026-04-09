@@ -25,6 +25,7 @@ struct TopicSection: Identifiable {
 
 struct VideoGridItemModel: Identifiable, Equatable {
     let id: String
+    let topicId: Int64?
     let title: String
     let channelName: String?
     let topicName: String?

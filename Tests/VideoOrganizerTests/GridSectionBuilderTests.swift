@@ -19,6 +19,7 @@ struct GridSectionBuilderTests {
             topics: [topic],
             parsedQuery: SearchQuery("alpha"),
             selectedSubtopicId: 2,
+            selectedTopicId: nil,
             selectedChannelId: nil,
             selectedPlaylistId: "PL-1",
             sortOrder: nil,
@@ -59,6 +60,7 @@ struct GridSectionBuilderTests {
             topics: [topic],
             parsedQuery: SearchQuery(""),
             selectedSubtopicId: nil,
+            selectedTopicId: nil,
             selectedChannelId: nil,
             selectedPlaylistId: nil,
             sortOrder: .creator,
@@ -98,6 +100,7 @@ struct GridSectionBuilderTests {
     ) -> VideoGridItemModel {
         VideoGridItemModel(
             id: id,
+            topicId: nil,
             title: title,
             channelName: channel,
             topicName: nil,

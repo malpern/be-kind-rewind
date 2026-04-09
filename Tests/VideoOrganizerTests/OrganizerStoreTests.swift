@@ -148,6 +148,24 @@ struct OrganizerStoreTests {
         }
     }
 
+    @Test("watch refresh prioritizes selected and visible topics first")
+    @MainActor
+    func watchRefreshPrioritizationOrder() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+            let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
+            let betaTopic = try #require(store.topics.first(where: { $0.name == "Beta Topic" }))
+
+            store.selectedTopicId = betaTopic.id
+            store.viewportTopicId = alphaTopic.id
+            store.updateVisibleWatchTopics([alphaTopic.id, betaTopic.id])
+
+            let ordered = store.prioritizedWatchRefreshTopicIDs(from: store.topics.map(\.id))
+
+            #expect(ordered == [betaTopic.id, alphaTopic.id])
+        }
+    }
+
     @Test("candidate progress copy defaults to idle state")
     @MainActor
     func candidateProgressText() throws {
@@ -344,6 +362,36 @@ struct OrganizerStoreTests {
 
             #expect(store.candidateVideosForTopic(alphaTopic).map(\.videoId) == ["shared-video"])
             #expect(store.candidateVideosForTopic(betaTopic).map(\.videoId) == ["unique-video"])
+        }
+    }
+
+    @Test("watch by topic prefers stronger topical evidence over weaker adjacent matches")
+    @MainActor
+    func watchByTopicPrefersStrongerTopicEvidence() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+            let betaTopic = try #require(try fixtureStore.topicIdByName("Beta Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "shared-video", title: "Shared", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-06T00:00:00Z", duration: nil, channelIconUrl: nil, score: 82, reason: "Fresh upload from a creator already in this topic", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+            try fixtureStore.replaceCandidates(
+                forTopic: betaTopic,
+                candidates: [
+                    TopicCandidate(topicId: betaTopic, videoId: "shared-video", title: "Shared", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-06T00:00:00Z", duration: nil, channelIconUrl: nil, score: 90, reason: "Fresh upload from a creator adjacent to this topic via Generic Playlist", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+
+            #expect(store.candidateVideosForTopic(alphaTopic).map(\.videoId) == ["shared-video"])
+            #expect(store.candidateVideosForTopic(betaTopic).contains(where: { $0.videoId == "shared-video" }) == false)
         }
     }
 
@@ -570,5 +618,65 @@ struct OrganizerStoreTests {
         #expect(queries.contains("Mechanical Keyboards 2026"))
         #expect(queries.contains("Mechanical Keyboards qmk"))
         #expect(Set(queries.map { $0.lowercased() }).count == queries.count)
+    }
+
+    @Test("watch topical gate rejects keyboard videos for embedded systems")
+    @MainActor
+    func topicalGateRejectsKeyboardVideosForEmbeddedSystems() {
+        let topic = TopicViewModel(
+            id: 100,
+            name: "Embedded Systems",
+            videoCount: 0,
+            subtopics: []
+        )
+
+        let evidence = CandidateDiscoveryCoordinator.topicalEvidence(
+            for: "Building a Tiny 16x16 Choc Mechanical Keyboard",
+            query: "Embedded Systems 2026",
+            topic: topic
+        )
+
+        #expect(evidence.exploratoryQualifies == false)
+        #expect(evidence.knownCreatorQualifies == false)
+    }
+
+    @Test("watch topical gate rejects terminal videos for macos topic")
+    @MainActor
+    func topicalGateRejectsTerminalVideosForMacOS() {
+        let topic = TopicViewModel(
+            id: 101,
+            name: "macOS & Apple",
+            videoCount: 0,
+            subtopics: []
+        )
+
+        let evidence = CandidateDiscoveryCoordinator.topicalEvidence(
+            for: "[Live Q&A] Ghostty vs Kitty | Mitchell Hashimoto and Kovid Goyal",
+            query: "macOS & Apple tutorial",
+            topic: topic
+        )
+
+        #expect(evidence.exploratoryQualifies == false)
+        #expect(evidence.knownCreatorQualifies == false)
+    }
+
+    @Test("watch topical gate admits keyboard videos for mechanical keyboards")
+    @MainActor
+    func topicalGateAdmitsKeyboardVideosForMechanicalKeyboards() {
+        let topic = TopicViewModel(
+            id: 102,
+            name: "Mechanical Keyboards",
+            videoCount: 0,
+            subtopics: []
+        )
+
+        let evidence = CandidateDiscoveryCoordinator.topicalEvidence(
+            for: "Building a Handwired Mechanical Keyboard with a Knob",
+            query: "Mechanical Keyboards qmk",
+            topic: topic
+        )
+
+        #expect(evidence.exploratoryQualifies)
+        #expect(evidence.knownCreatorQualifies)
     }
 }

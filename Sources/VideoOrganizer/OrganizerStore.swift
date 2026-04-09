@@ -26,6 +26,7 @@ final class OrganizerStore {
     var viewportTopicId: Int64?
     var viewportSubtopicId: Int64?
     var viewportCreatorSectionId: String?
+    var visibleWatchTopicIds: [Int64] = []
 
     // Selected state
     var selectedTopicId: Int64? {
@@ -82,6 +83,7 @@ final class OrganizerStore {
     var watchRefreshCurrentTopicName: String?
     private(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
     private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
+    private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]
 
     // Cached flat video map — rebuilt on loadTopics()
     var videoMap: [String: VideoViewModel] = [:]
@@ -148,6 +150,7 @@ final class OrganizerStore {
             }
             rebuildVideoMaps()
             rebuildPlaylistMaps()
+            reloadStoredCandidateCaches()
             rebuildWatchPools()
             refreshSyncQueueSummary()
             refreshSeenHistoryCount()
@@ -414,6 +417,15 @@ final class OrganizerStore {
         watchPoolForTopic(topicId, applyingChannelFilter: false)
     }
 
+    func recentStoredCandidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
+        CandidateDiscoveryCoordinator.recentEligibleWatchVideos(
+            storedCandidateVideosForTopic(topicId),
+            store: self
+        ).filter { candidate in
+            !isExcludedCreator(candidate.channelId)
+        }
+    }
+
     func recentCandidateVideosForAllTopics() -> [CandidateVideoViewModel] {
         watchPoolForAllTopics(applyingChannelFilter: false)
     }
@@ -605,11 +617,13 @@ final class OrganizerStore {
             viewportTopicId = nil
             viewportSubtopicId = nil
             viewportCreatorSectionId = nil
+            visibleWatchTopicIds = []
         }
         candidateRefreshToken += 1
     }
 
     func rebuildWatchPools() {
+        let startedAt = ContinuousClock.now
         let perTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
             (
                 topic.id,
@@ -629,12 +643,52 @@ final class OrganizerStore {
             store: self
         )
         watchPoolVersion &+= 1
+        let duration = startedAt.duration(to: .now)
+        AppLogger.discovery.info(
+            "Rebuilt Watch pools for \(self.topics.count, privacy: .public) topics in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public); ranked candidates: \(self.rankedWatchPool.count, privacy: .public)"
+        )
+    }
+
+    func reloadStoredCandidateCaches() {
+        storedCandidateVideosByTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
+            (
+                topic.id,
+                ((try? store.candidatesForTopic(id: topic.id, limit: 36)) ?? []).map(CandidateVideoViewModel.init(from:))
+            )
+        })
+    }
+
+    func reloadStoredCandidateCache(for topicId: Int64) {
+        storedCandidateVideosByTopic[topicId] = ((try? store.candidatesForTopic(id: topicId, limit: 36)) ?? []).map(CandidateVideoViewModel.init(from:))
     }
 
     func updateViewportContext(topicId: Int64?, subtopicId: Int64?, creatorSectionId: String?) {
         viewportTopicId = topicId
         viewportSubtopicId = subtopicId
         viewportCreatorSectionId = creatorSectionId
+    }
+
+    func updateVisibleWatchTopics(_ topicIds: [Int64]) {
+        guard visibleWatchTopicIds != topicIds else { return }
+        visibleWatchTopicIds = topicIds
+    }
+
+    func prioritizedWatchRefreshTopicIDs(from topicIds: [Int64]) -> [Int64] {
+        let remaining = Set(topicIds)
+        var ordered: [Int64] = []
+
+        func appendIfEligible(_ topicId: Int64?) {
+            guard let topicId, remaining.contains(topicId), !ordered.contains(topicId) else { return }
+            ordered.append(topicId)
+        }
+
+        appendIfEligible(selectedTopicId)
+        visibleWatchTopicIds.forEach { appendIfEligible($0) }
+        appendIfEligible(viewportTopicId)
+
+        let fallbackOrder = topics.map(\.id).filter { remaining.contains($0) }
+        fallbackOrder.forEach { appendIfEligible($0) }
+        return ordered
     }
 
     func setWatchPresentationMode(_ mode: WatchPresentationMode) {
@@ -1233,6 +1287,20 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
     var thumbnailUrl: URL? {
         guard !isPlaceholder else { return nil }
         return URL(string: "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg")
+    }
+
+    var assignmentStrength: Int {
+        guard let secondaryText else { return 0 }
+        if secondaryText.contains("creator already in this topic") || secondaryText.contains("connected to this topic and your saved playlists") {
+            return 3
+        }
+        if secondaryText.contains("matched a topic search") || secondaryText.contains("search match for this topic") {
+            return 2
+        }
+        if secondaryText.contains("adjacent to this topic") || secondaryText.contains("related creator") {
+            return 1
+        }
+        return 0
     }
 
     init(

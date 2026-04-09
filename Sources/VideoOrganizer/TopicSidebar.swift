@@ -31,6 +31,9 @@ struct TopicSidebar: View {
     }
 
     private func isSelected(_ topic: TopicViewModel) -> Bool {
+        if isWatchMode {
+            return store.selectedTopicId == topic.id
+        }
         if let selectedSubtopicId = store.selectedSubtopicId {
             return selectedSubtopicId == topic.id
         }
@@ -176,7 +179,7 @@ struct TopicSidebar: View {
                                         .padding(.leading, 20)
                                         .id(creator.sectionId)
                                     }
-                                } else if !topic.subtopics.isEmpty {
+                                } else if !isWatchMode && !topic.subtopics.isEmpty {
                                     ForEach(topic.subtopics) { sub in
                                         TopicRow(
                                             topic: sub,
@@ -250,19 +253,29 @@ struct TopicSidebar: View {
                     }
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    scrollProxy.scrollTo(topicId, anchor: .center)
+                    if isWatchMode {
+                        scrollProxy.scrollTo(topicId, anchor: .center)
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            scrollProxy.scrollTo(topicId, anchor: .center)
+                        }
+                    }
                 }
             }
             .onChange(of: store.viewportCreatorSectionId) { _, creatorSectionId in
                 guard isCreatorMode, let creatorSectionId else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    withAnimation(.easeInOut(duration: 0.18)) {
+                    if isWatchMode {
                         scrollProxy.scrollTo(creatorSectionId, anchor: .center)
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            scrollProxy.scrollTo(creatorSectionId, anchor: .center)
+                        }
                     }
                 }
             }
             .onChange(of: store.viewportSubtopicId) { _, subtopicId in
-                guard !isCreatorMode, let subtopicId else { return }
+                guard !isWatchMode, !isCreatorMode, let subtopicId else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     withAnimation(.easeInOut(duration: 0.18)) {
                         scrollProxy.scrollTo(subtopicId, anchor: .center)
@@ -341,7 +354,7 @@ struct TopicSidebar: View {
     private func applySidebarSelection(topicId: Int64, subtopicId: Int64?) {
         selectedCreatorSectionId = nil
         store.selectedTopicId = topicId
-        store.selectedSubtopicId = subtopicId
+        store.selectedSubtopicId = isWatchMode ? nil : subtopicId
         displaySettings.scrollToTopicRequested = topicId
     }
 

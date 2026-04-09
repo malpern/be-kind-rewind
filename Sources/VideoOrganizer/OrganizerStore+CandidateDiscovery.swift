@@ -14,7 +14,7 @@ extension OrganizerStore {
     }
 
     func storedCandidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
-        ((try? store.candidatesForTopic(id: topicId, limit: 36)) ?? []).map(CandidateVideoViewModel.init(from:))
+        storedCandidateVideosByTopic[topicId] ?? []
     }
 
     func watchPoolForTopic(_ topicId: Int64, applyingChannelFilter: Bool = true) -> [CandidateVideoViewModel] {
@@ -43,41 +43,37 @@ extension OrganizerStore {
     }
 
     func candidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
-        do {
-            let storedCandidates = try store.candidatesForTopic(id: topicId, limit: 36)
-            let visibleCandidates = watchPoolForTopic(topicId)
-            if !visibleCandidates.isEmpty {
-                return visibleCandidates
-            }
+        let storedCandidates = storedCandidateVideosForTopic(topicId)
+        let visibleCandidates = watchPoolForTopic(topicId)
+        if !visibleCandidates.isEmpty {
+            return visibleCandidates
+        }
 
-            if candidateLoadingTopics.contains(topicId) {
-                return [.placeholder(
-                    topicId: topicId,
-                    title: "Refreshing Watch",
-                    message: "Looking for recent videos for this topic."
-                )]
-            }
-
-            if let error = candidateErrors[topicId] {
-                return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error)]
-            }
-
-            if storedCandidates.isEmpty {
-                return [.placeholder(
-                    topicId: topicId,
-                    title: "No candidates yet",
-                    message: "No unseen candidates were found from this topic’s creators or adjacent saved-library channels.\(watchHistoryHintSuffix)"
-                )]
-            }
-
+        if candidateLoadingTopics.contains(topicId) {
             return [.placeholder(
                 topicId: topicId,
-                title: "No recent videos",
-                message: "No recent unseen videos were found for this topic in the current watch window."
+                title: "Refreshing Watch",
+                message: "Looking for recent videos for this topic."
             )]
-        } catch {
-            return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error.localizedDescription)]
         }
+
+        if let error = candidateErrors[topicId] {
+            return [.placeholder(topicId: topicId, title: "Could not load candidates", message: error)]
+        }
+
+        if storedCandidates.isEmpty {
+            return [.placeholder(
+                topicId: topicId,
+                title: "No candidates yet",
+                message: "No unseen candidates were found from this topic’s creators or adjacent saved-library channels.\(watchHistoryHintSuffix)"
+            )]
+        }
+
+        return [.placeholder(
+            topicId: topicId,
+            title: "No recent videos",
+            message: "No recent unseen videos were found for this topic in the current watch window."
+        )]
     }
 
     private var watchHistoryHintSuffix: String {
@@ -140,6 +136,7 @@ extension OrganizerStore {
     func setCandidateState(topicId: Int64, videoId: String, state: CandidateState) {
         do {
             try store.setCandidateState(topicId: topicId, videoId: videoId, state: state)
+            reloadStoredCandidateCache(for: topicId)
             rebuildWatchPools()
             AppLogger.discovery.info("Set candidate state for topic \(topicId, privacy: .public), video \(videoId, privacy: .public) to \(state.rawValue, privacy: .public)")
             candidateRefreshToken += 1
@@ -157,7 +154,9 @@ extension OrganizerStore {
         candidateTotalChannelsByTopic[topicId] = 0
         candidateCurrentChannelNameByTopic[topicId] = nil
         candidateErrors[topicId] = nil
-        candidateRefreshToken += 1
+        if pageDisplayMode != .watchCandidates {
+            candidateRefreshToken += 1
+        }
         AppLogger.discovery.info("Starting candidate refresh for topic \(topicId, privacy: .public)")
         defer {
             candidateLoadingTopics.remove(topicId)
@@ -165,7 +164,9 @@ extension OrganizerStore {
             candidateCompletedChannelsByTopic[topicId] = nil
             candidateTotalChannelsByTopic[topicId] = nil
             candidateCurrentChannelNameByTopic[topicId] = nil
-            candidateRefreshToken += 1
+            if pageDisplayMode != .watchCandidates {
+                candidateRefreshToken += 1
+            }
             AppLogger.discovery.info("Finished candidate refresh for topic \(topicId, privacy: .public)")
         }
 
@@ -173,6 +174,8 @@ extension OrganizerStore {
             let channelPlans = CandidateDiscoveryCoordinator.candidateChannelPlans(for: topicId, store: self)
             guard !channelPlans.isEmpty else {
                 try store.replaceCandidates(forTopic: topicId, candidates: [], sources: [])
+                reloadStoredCandidateCache(for: topicId)
+                rebuildWatchPools()
                 return
             }
 
@@ -194,6 +197,14 @@ extension OrganizerStore {
                 candidateCurrentChannelNameByTopic[topicId] = plan.channel.name
 
                 for video in archived {
+                    let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                        forTopic: topicId,
+                        title: video.title,
+                        sourceKind: plan.sourceKind,
+                        sourceRef: plan.sourceRef,
+                        store: self
+                    )
+                    guard admission.shouldAdmit else { continue }
                     CandidateDiscoveryCoordinator.accumulateCandidate(
                         video: video,
                         channel: plan.channel,
@@ -201,6 +212,7 @@ extension OrganizerStore {
                         sourceRef: plan.sourceRef,
                         creatorAffinity: plan.creatorAffinity,
                         reasonHint: plan.reasonHint,
+                        topicalEvidenceBonus: admission.scoreBonus,
                         existingVideoIds: existingVideoIds,
                         aggregate: &aggregate
                     )
@@ -225,6 +237,14 @@ extension OrganizerStore {
                             if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
                                 continue
                             }
+                            let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                                forTopic: topicId,
+                                title: video.title,
+                                sourceKind: "search_query_recent",
+                                sourceRef: plan.query,
+                                store: self
+                            )
+                            guard admission.shouldAdmit else { continue }
                             let creatorAffinity = (try? store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)) ?? 0
                             CandidateDiscoveryCoordinator.accumulateCandidate(
                                 video: video,
@@ -232,6 +252,7 @@ extension OrganizerStore {
                                 sourceRef: plan.query,
                                 creatorAffinity: creatorAffinity,
                                 reasonHint: plan.query,
+                                topicalEvidenceBonus: admission.scoreBonus,
                                 existingVideoIds: existingVideoIds,
                                 aggregate: &aggregate
                             )
@@ -280,6 +301,7 @@ extension OrganizerStore {
             }
 
             try store.replaceCandidates(forTopic: topicId, candidates: candidates, sources: sources)
+            reloadStoredCandidateCache(for: topicId)
             rebuildWatchPools()
         } catch {
             candidateErrors[topicId] = CandidateDiscoveryCoordinator.friendlyCandidateErrorMessage(for: error)
@@ -294,7 +316,9 @@ extension OrganizerStore {
         let topicsToRefresh = topics
         watchRefreshTotalTopics = topicsToRefresh.count
         watchRefreshCompletedTopics = 0
-        watchRefreshCurrentTopicName = topicsToRefresh.first?.name
+        watchRefreshCurrentTopicName = selectedTopicId.flatMap { topicId in
+            topicsToRefresh.first(where: { $0.id == topicId })?.name
+        } ?? topicsToRefresh.first?.name
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -305,7 +329,18 @@ extension OrganizerStore {
                 self.watchRefreshCurrentTopicName = nil
             }
 
-            for topic in topicsToRefresh {
+            var remainingTopicIds = Set(topicsToRefresh.map(\.id))
+
+            while !remainingTopicIds.isEmpty {
+                let orderedIds = self.prioritizedWatchRefreshTopicIDs(from: Array(remainingTopicIds))
+                guard let nextTopicId = orderedIds.first,
+                      let topic = topicsToRefresh.first(where: { $0.id == nextTopicId }) else {
+                    break
+                }
+                remainingTopicIds.remove(nextTopicId)
+                AppLogger.discovery.debug(
+                    "Watch refresh prioritizing topic \(topic.name, privacy: .public); remaining topics: \(remainingTopicIds.count, privacy: .public)"
+                )
                 self.watchRefreshCurrentTopicName = topic.name
 
                 if !CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: topic.id, store: self) {
@@ -315,6 +350,7 @@ extension OrganizerStore {
                 }
 
                 self.watchRefreshCompletedTopics += 1
+                await Task.yield()
             }
         }
 
@@ -520,6 +556,10 @@ enum CandidateDiscoveryCoordinator {
     }
 
     private static func prefers(_ lhs: CandidateVideoViewModel, over rhs: CandidateVideoViewModel) -> Bool {
+        if lhs.assignmentStrength != rhs.assignmentStrength {
+            return lhs.assignmentStrength > rhs.assignmentStrength
+        }
+
         if lhs.score != rhs.score {
             return lhs.score > rhs.score
         }
@@ -605,6 +645,7 @@ enum CandidateDiscoveryCoordinator {
         sourceRef: String,
         creatorAffinity: Int,
         reasonHint: String?,
+        topicalEvidenceBonus: Int,
         existingVideoIds: Set<String>,
         aggregate: inout [String: AggregatedCandidate]
     ) {
@@ -621,6 +662,7 @@ enum CandidateDiscoveryCoordinator {
             sourceRef: sourceRef,
             creatorAffinity: creatorAffinity,
             reasonHint: reasonHint,
+            topicalEvidenceBonus: topicalEvidenceBonus,
             existingVideoIds: existingVideoIds,
             aggregate: &aggregate
         )
@@ -632,6 +674,7 @@ enum CandidateDiscoveryCoordinator {
         sourceRef: String,
         creatorAffinity: Int,
         reasonHint: String?,
+        topicalEvidenceBonus: Int,
         existingVideoIds: Set<String>,
         aggregate: inout [String: AggregatedCandidate]
     ) {
@@ -648,6 +691,7 @@ enum CandidateDiscoveryCoordinator {
             sourceRef: sourceRef,
             creatorAffinity: creatorAffinity,
             reasonHint: reasonHint,
+            topicalEvidenceBonus: topicalEvidenceBonus,
             existingVideoIds: existingVideoIds,
             aggregate: &aggregate
         )
@@ -666,6 +710,7 @@ enum CandidateDiscoveryCoordinator {
         sourceRef: String,
         creatorAffinity: Int,
         reasonHint: String?,
+        topicalEvidenceBonus: Int,
         existingVideoIds: Set<String>,
         aggregate: inout [String: AggregatedCandidate]
     ) {
@@ -709,7 +754,7 @@ enum CandidateDiscoveryCoordinator {
             reason = "Recent candidate from a related creator"
         }
 
-        let score = Double(sourceScore.freshness + recencyBonus * 4 + creatorBonus * sourceScore.creatorWeight + qualityBonus + sourceScore.bonus)
+        let score = Double(sourceScore.freshness + recencyBonus * 4 + creatorBonus * sourceScore.creatorWeight + qualityBonus + sourceScore.bonus + topicalEvidenceBonus)
 
         if var existing = aggregate[videoId] {
             existing.score += score + 3
@@ -949,6 +994,106 @@ enum CandidateDiscoveryCoordinator {
         }
         return Date().timeIntervalSince(scannedDate) >= (12 * 60 * 60)
     }
+
+    static func watchTopicAdmission(
+        forTopic topicId: Int64,
+        title: String,
+        sourceKind: String,
+        sourceRef: String,
+        store: OrganizerStore
+    ) -> WatchTopicAdmissionDecision {
+        guard let topic = store.topics.first(where: { $0.id == topicId }) else {
+            return .reject
+        }
+
+        let evidence = topicalEvidence(for: title, query: sourceRef, topic: topic)
+        switch sourceKind {
+        case "channel_archive_recent":
+            guard evidence.knownCreatorQualifies else { return .reject }
+            return WatchTopicAdmissionDecision(shouldAdmit: true, scoreBonus: evidence.scoreBonus)
+        case "playlist_adjacent_recent", "search_query_recent":
+            guard evidence.exploratoryQualifies else { return .reject }
+            return WatchTopicAdmissionDecision(shouldAdmit: true, scoreBonus: evidence.scoreBonus)
+        default:
+            guard evidence.knownCreatorQualifies else { return .reject }
+            return WatchTopicAdmissionDecision(shouldAdmit: true, scoreBonus: evidence.scoreBonus)
+        }
+    }
+
+    static func topicalEvidence(for title: String, query: String, topic: TopicViewModel) -> WatchTopicalEvidence {
+        let normalizedTitle = normalizeWatchText(title)
+        let titleTokens = Set(normalizedTitle.split(separator: " ").map(String.init))
+        let topicPhrase = normalizeWatchText(topic.name)
+        let subtopicPhrases = topic.subtopics.map(\.name).map(normalizeWatchText)
+        let topicTokens = significantTokens(in: topic.name)
+        let subtopicTokens = Set(topic.subtopics.flatMap { significantTokens(in: $0.name) })
+        let aliasPhrases = topicAliases[topic.name.lowercased(), default: []].map(normalizeWatchText)
+        let aliasTokens = Set(aliasPhrases.flatMap { significantTokens(in: $0) })
+        let normalizedQuery = normalizeWatchText(query)
+
+        let topicPhraseMatched = !topicPhrase.isEmpty && normalizedTitle.contains(topicPhrase)
+        let subtopicPhraseMatches = subtopicPhrases.filter { !$0.isEmpty && normalizedTitle.contains($0) }.count
+        let aliasPhraseMatches = aliasPhrases.filter { !$0.isEmpty && normalizedTitle.contains($0) }.count
+        let topicTokenMatches = titleTokens.intersection(topicTokens).count
+        let subtopicTokenMatches = titleTokens.intersection(subtopicTokens).count
+        let aliasTokenMatches = titleTokens.intersection(aliasTokens).count
+        let queryTokenMatches = titleTokens.intersection(significantTokens(in: normalizedQuery)).count
+
+        let score =
+            (topicPhraseMatched ? 3 : 0) +
+            subtopicPhraseMatches * 4 +
+            aliasPhraseMatches * 3 +
+            topicTokenMatches +
+            subtopicTokenMatches * 2 +
+            aliasTokenMatches * 2 +
+            min(queryTokenMatches, 2)
+
+        return WatchTopicalEvidence(
+            score: score,
+            topicPhraseMatched: topicPhraseMatched,
+            subtopicPhraseMatches: subtopicPhraseMatches,
+            aliasPhraseMatches: aliasPhraseMatches,
+            topicTokenMatches: topicTokenMatches,
+            subtopicTokenMatches: subtopicTokenMatches,
+            aliasTokenMatches: aliasTokenMatches,
+            queryTokenMatches: queryTokenMatches
+        )
+    }
+
+    private static func normalizeWatchText(_ value: String) -> String {
+        value
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func significantTokens(in value: String) -> Set<String> {
+        Set(
+            normalizeWatchText(value)
+                .split(separator: " ")
+                .map(String.init)
+                .filter { token in
+                    token.count >= 3 && !watchTopicStopwords.contains(token)
+                }
+        )
+    }
+
+    private static let watchTopicStopwords: Set<String> = [
+        "and", "the", "for", "with", "from", "into", "your", "this", "that",
+        "topic", "topics", "video", "videos", "review", "reviews", "update",
+        "updates", "news", "guide", "guides", "tips", "best", "new", "systems",
+        "tools", "digital", "history", "culture", "layouts", "techniques",
+        "research", "industry", "current", "events", "learning", "interest",
+        "personal", "growth", "life", "philosophy", "comparisons", "models"
+    ]
+
+    private static let topicAliases: [String: [String]] = [
+        "mechanical keyboards": ["qmk", "via", "vial", "choc", "keycap", "switch", "handwired"],
+        "macos & apple": ["macos", "mac", "apple", "macbook", "raycast", "alfred", "spotlight", "launchd"],
+        "embedded systems": ["firmware", "esp32", "stm32", "arduino", "microcontroller", "gpio", "breadboard", "jtag", "pcb", "logic analyzer", "oscilloscope", "solder", "enclosure"],
+        "vim & terminal": ["vim", "neovim", "nvim", "kitty", "ghostty", "tmux", "wezterm", "shell", "terminal"]
+    ]
 }
 
 private struct CandidateSource: Hashable {
@@ -973,6 +1118,36 @@ private struct ExploratoryChannelCandidate {
 
 private struct CandidateSearchPlan {
     let query: String
+}
+
+struct WatchTopicAdmissionDecision: Equatable {
+    let shouldAdmit: Bool
+    let scoreBonus: Int
+
+    static let reject = WatchTopicAdmissionDecision(shouldAdmit: false, scoreBonus: 0)
+}
+
+struct WatchTopicalEvidence: Equatable {
+    let score: Int
+    let topicPhraseMatched: Bool
+    let subtopicPhraseMatches: Int
+    let aliasPhraseMatches: Int
+    let topicTokenMatches: Int
+    let subtopicTokenMatches: Int
+    let aliasTokenMatches: Int
+    let queryTokenMatches: Int
+
+    var knownCreatorQualifies: Bool {
+        topicPhraseMatched || subtopicPhraseMatches > 0 || aliasPhraseMatches > 0 || score >= 1
+    }
+
+    var exploratoryQualifies: Bool {
+        topicPhraseMatched || subtopicPhraseMatches > 0 || aliasPhraseMatches > 0 || score >= 3
+    }
+
+    var scoreBonus: Int {
+        min(score * 3, 18)
+    }
 }
 
 private struct AggregatedCandidate {

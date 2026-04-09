@@ -56,16 +56,22 @@ struct CollectionGridView: View {
         .onChange(of: store.selectedPlaylistId) { _, _ in loadAndFilter() }
         .onChange(of: store.pageDisplayMode) { _, _ in loadAndFilter() }
         .onChange(of: store.watchPresentationMode) { _, _ in loadAndFilter() }
-        .onChange(of: store.candidateRefreshToken) { _, _ in loadAndFilter() }
+        .onChange(of: store.candidateRefreshToken) { _, _ in
+            if store.pageDisplayMode != .watchCandidates {
+                loadAndFilter()
+            }
+        }
         .onChange(of: store.watchPoolVersion) { _, _ in loadAndFilter() }
     }
 
     private func loadAndFilter() {
+        let startedAt = ContinuousClock.now
         let result = GridSectionBuilder.build(
             context: GridSectionBuilder.Context(
                 topics: store.topics,
                 parsedQuery: store.parsedQuery,
                 selectedSubtopicId: store.selectedSubtopicId,
+                selectedTopicId: store.selectedTopicId,
                 selectedChannelId: store.selectedChannelId,
                 selectedPlaylistId: store.selectedPlaylistId,
                 sortOrder: displaySettings.sortOrder,
@@ -84,6 +90,7 @@ struct CollectionGridView: View {
                     store.candidateVideosForAllTopics().map { candidate in
                         VideoGridItemModel(
                             id: candidate.videoId,
+                            topicId: candidate.topicId,
                             title: candidate.title,
                             channelName: candidate.channelName,
                             topicName: store.topics.first(where: { $0.id == candidate.topicId })?.name,
@@ -112,12 +119,16 @@ struct CollectionGridView: View {
         store.searchResultCount = result.searchResultCount
         sections = result.sections
         sectionGeneration += 1
+        let duration = startedAt.duration(to: .now)
+        AppLogger.discovery.debug(
+            "loadAndFilter mode=\(self.store.pageDisplayMode.rawValue, privacy: .public) watchMode=\(self.store.watchPresentationMode.rawValue, privacy: .public) sections=\(result.sections.count, privacy: .public) results=\(result.searchResultCount, privacy: .public) in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public)"
+        )
     }
 
     private func mapVideos(_ viewModels: [VideoViewModel]) -> [VideoGridItemModel] {
         viewModels.map { v in
             VideoGridItemModel(
-                id: v.videoId, title: v.title, channelName: v.channelName,
+                id: v.videoId, topicId: v.topicId, title: v.title, channelName: v.channelName,
                 topicName: store.topicNameForVideo(v.videoId),
                 thumbnailUrl: v.thumbnailUrl, viewCount: v.viewCount,
                 publishedAt: v.publishedAt, duration: v.duration,
@@ -139,6 +150,7 @@ struct CollectionGridView: View {
             return store.candidateVideosForTopic(topicId).map {
                 VideoGridItemModel(
                     id: $0.videoId,
+                    topicId: $0.topicId,
                     title: $0.title,
                     channelName: $0.channelName,
                     topicName: store.topics.first(where: { $0.id == topicId })?.name,
@@ -346,6 +358,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
         func flushIfReady() {
             guard let container, let collectionView, container.isReadyForCollectionWork else { return }
+            let startedAt = ContinuousClock.now
 
             let shouldReload = renderedGeneration != pendingGeneration
             let currentContentWidth = container.scrollView.contentView.bounds.width
@@ -385,8 +398,20 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 refreshVisibleItems()
             }
 
+            if shouldReload || shouldInvalidateLayout || didApplyScroll {
+                refreshVisibleHeaders()
+            }
+
             refreshTopicScrollProgress()
             refreshViewportContext()
+
+            let duration = startedAt.duration(to: .now)
+            let millis = Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+            if millis >= 20 {
+                AppLogger.discovery.debug(
+                    "flushIfReady reload=\(shouldReload, privacy: .public) invalidate=\(shouldInvalidateLayout, privacy: .public) scroll=\(didApplyScroll, privacy: .public) sections=\(self.renderedSections.count, privacy: .public) took \(Int(millis), privacy: .public)ms"
+                )
+            }
         }
 
         // MARK: Data Source
@@ -684,7 +709,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             let watchCandidatesForSection = section.displayMode == .watchCandidates
                 ? (section.topicId == -1
                     ? store?.recentCandidateVideosForAllTopics() ?? []
-                    : store?.recentCandidateVideosForTopic(section.topicId) ?? [])
+                    : store?.recentStoredCandidateVideosForTopic(section.topicId) ?? [])
                 : []
 
             return .topic(
@@ -759,7 +784,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             if section.topicId == -1 {
                 sourceVideos = store.recentCandidateVideosForAllTopics()
             } else {
-                sourceVideos = store.recentCandidateVideosForTopic(section.topicId)
+                sourceVideos = store.recentStoredCandidateVideosForTopic(section.topicId)
             }
 
             var bestByChannelId: [String: ChannelRecord] = [:]
@@ -882,7 +907,9 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
         private func refreshVisibleHeaders() {
             guard let collectionView else { return }
+            let startedAt = ContinuousClock.now
             let visibleRect = collectionView.visibleRect
+            var refreshedCount = 0
             for sectionIndex in renderedSections.indices {
                 let headerIndexPath = IndexPath(item: 0, section: sectionIndex)
                 guard let attributes = collectionView.collectionViewLayout?.layoutAttributesForSupplementaryView(
@@ -895,6 +922,14 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                         at: headerIndexPath
                       ) as? CollectionSectionHeaderView else { continue }
                 header.configure(model: headerModel(for: renderedSections[sectionIndex], at: sectionIndex))
+                refreshedCount += 1
+            }
+            let duration = startedAt.duration(to: .now)
+            let millis = Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+            if millis >= 12 {
+                AppLogger.discovery.debug(
+                    "refreshVisibleHeaders count=\(refreshedCount, privacy: .public) took \(Int(millis), privacy: .public)ms"
+                )
             }
         }
 
@@ -919,11 +954,43 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func refreshViewportContext() {
+            let startedAt = ContinuousClock.now
             guard let store,
-                  store.pageDisplayMode == .saved,
                   let collectionView,
                   let scrollView = collectionView.enclosingScrollView else {
                 store?.updateViewportContext(topicId: nil, subtopicId: nil, creatorSectionId: nil)
+                return
+            }
+
+            if store.pageDisplayMode == .watchCandidates {
+                guard store.watchPresentationMode == .byTopic else {
+                    store.updateVisibleWatchTopics([])
+                    store.updateViewportContext(topicId: nil, subtopicId: nil, creatorSectionId: nil)
+                    return
+                }
+
+                let visibleBounds = scrollView.contentView.bounds
+                store.updateVisibleWatchTopics(visibleTopicIds(in: visibleBounds))
+                guard let sectionIndex = primaryVisibleSectionIndex(in: visibleBounds) else {
+                    store.updateViewportContext(topicId: nil, subtopicId: nil, creatorSectionId: nil)
+                    return
+                }
+
+                let section = renderedSections[sectionIndex]
+                let isCreatorMode = renderedSections.contains(where: { $0.creatorName != nil })
+
+                if isCreatorMode {
+                    let creatorSectionId = currentVisibleCreatorSectionId(in: visibleBounds, topicId: section.topicId)
+                    store.updateViewportContext(topicId: section.topicId, subtopicId: nil, creatorSectionId: creatorSectionId)
+                } else {
+                    store.updateViewportContext(topicId: section.topicId, subtopicId: nil, creatorSectionId: nil)
+                }
+                return
+            }
+
+            guard store.pageDisplayMode == .saved else {
+                store.updateVisibleWatchTopics([])
+                store.updateViewportContext(topicId: nil, subtopicId: nil, creatorSectionId: nil)
                 return
             }
 
@@ -944,6 +1011,14 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
             let subtopicId = currentVisibleSubtopicId(inSectionAt: sectionIndex, visibleBounds: visibleBounds)
             store.updateViewportContext(topicId: section.topicId, subtopicId: subtopicId, creatorSectionId: nil)
+
+            let duration = startedAt.duration(to: .now)
+            let millis = Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+            if millis >= 8 {
+                AppLogger.discovery.debug(
+                    "refreshViewportContext mode=\(store.pageDisplayMode.rawValue, privacy: .public) watchMode=\(store.watchPresentationMode.rawValue, privacy: .public) took \(Int(millis), privacy: .public)ms"
+                )
+            }
         }
 
         private func scheduleScrollFeedbackUpdate() {
@@ -952,7 +1027,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.scrollFeedbackUpdateScheduled = false
-                self.refreshVisibleHeaders()
                 self.refreshTopicScrollProgress()
                 self.refreshViewportContext()
             }
@@ -987,6 +1061,25 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
 
             return bestIndex
+        }
+
+        private func visibleTopicIds(in visibleBounds: CGRect) -> [Int64] {
+            var orderedTopicIds: [Int64] = []
+
+            for sectionIndex in renderedSections.indices {
+                guard let frame = frameForSection(at: sectionIndex),
+                      frame.maxY >= visibleBounds.minY,
+                      frame.minY <= visibleBounds.maxY else {
+                    continue
+                }
+
+                let topicId = renderedSections[sectionIndex].topicId
+                if !orderedTopicIds.contains(topicId) {
+                    orderedTopicIds.append(topicId)
+                }
+            }
+
+            return orderedTopicIds
         }
 
         private func currentVisibleCreatorSectionId(in visibleBounds: CGRect, topicId: Int64) -> String? {

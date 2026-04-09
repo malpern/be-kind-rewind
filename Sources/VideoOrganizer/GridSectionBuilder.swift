@@ -5,6 +5,7 @@ struct GridSectionBuilder {
         let topics: [TopicViewModel]
         let parsedQuery: SearchQuery
         let selectedSubtopicId: Int64?
+        let selectedTopicId: Int64?
         let selectedChannelId: String?
         let selectedPlaylistId: String?
         let sortOrder: SortOrder?
@@ -29,7 +30,10 @@ struct GridSectionBuilder {
 
         if context.pageDisplayMode == .watchCandidates,
            context.watchPresentationMode == .allTogether {
-            let allWatchVideos = context.allWatchVideos()
+            let allWatchVideos = context.allWatchVideos().filter { video in
+                guard let selectedTopicId = context.selectedTopicId else { return true }
+                return video.topicId == selectedTopicId
+            }
             if !allWatchVideos.isEmpty {
                 baseSections = [
                     TopicSection(

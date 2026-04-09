@@ -14,6 +14,7 @@ private func makeGridVideo(
 ) -> VideoGridItemModel {
     VideoGridItemModel(
         id: id,
+        topicId: nil,
         title: title,
         channelName: channelName,
         topicName: nil,
