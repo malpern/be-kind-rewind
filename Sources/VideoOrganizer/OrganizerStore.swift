@@ -389,6 +389,7 @@ final class OrganizerStore {
 
     // Cached channels per topic — rebuilt on loadTopics()
     private(set) var topicChannels: [Int64: [ChannelRecord]] = [:]
+    private(set) var knownChannelsById: [String: ChannelRecord] = [:]
 
     // Cached per-topic channel video counts: [topicId: [channelId: count]]
     var topicChannelCounts: [Int64: [String: Int]] = [:]
@@ -399,6 +400,36 @@ final class OrganizerStore {
     /// Returns channels with videos in the given topic (including subtopics), sorted by video count desc.
     func channelsForTopic(_ topicId: Int64) -> [ChannelRecord] {
         topicChannels[topicId] ?? []
+    }
+
+    func resolvedChannelRecord(
+        channelId: String?,
+        fallbackName: String?,
+        fallbackIconURL: String?
+    ) -> ChannelRecord? {
+        if let channelId, !channelId.isEmpty {
+            if let cached = knownChannelsById[channelId] {
+                return cached
+            }
+            if let fromStore = ((try? store.channelById(channelId)) ?? nil) {
+                knownChannelsById[channelId] = fromStore
+                return fromStore
+            }
+            return ChannelRecord(
+                channelId: channelId,
+                name: fallbackName ?? "Unknown Creator",
+                channelUrl: "https://www.youtube.com/channel/\(channelId)",
+                iconUrl: fallbackIconURL
+            )
+        }
+
+        guard let fallbackName, !fallbackName.isEmpty else { return nil }
+        return ChannelRecord(
+            channelId: "watch-\(fallbackName)",
+            name: fallbackName,
+            channelUrl: nil,
+            iconUrl: fallbackIconURL
+        )
     }
 
     /// Video count for a channel within a topic. O(1) from cache.
@@ -771,6 +802,7 @@ final class OrganizerStore {
         var tMap: [String: Int64] = [:]
         var cCounts: [String: Int] = [:]
         var tChannels: [Int64: [ChannelRecord]] = [:]
+        var knownChannels: [String: ChannelRecord] = [:]
         var tChannelCounts: [Int64: [String: Int]] = [:]
         var tChannelRecent: [Int64: Set<String>] = [:]
         var tSearchFields: [Int64: [String]] = [:]
@@ -804,7 +836,11 @@ final class OrganizerStore {
             tSearchFields[topic.id] = searchFields
 
             do {
-                tChannels[topic.id] = try store.channelsForTopicIncludingSubtopics(id: topic.id)
+                let channels = try store.channelsForTopicIncludingSubtopics(id: topic.id)
+                tChannels[topic.id] = channels
+                for channel in channels {
+                    knownChannels[channel.channelId] = channel
+                }
             } catch {
                 AppLogger.app.error("Failed to load channels for topic \(topic.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -813,6 +849,7 @@ final class OrganizerStore {
         videoTopicMap = tMap
         channelCounts = cCounts
         topicChannels = tChannels
+        knownChannelsById = knownChannels
         topicChannelCounts = tChannelCounts
         topicChannelRecent = tChannelRecent
         topicSearchFields = tSearchFields

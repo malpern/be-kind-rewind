@@ -749,6 +749,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 scrollProgress: scrollProgress,
                 highlightTerms: highlightTerms,
                 displayMode: section.displayMode,
+                isRefreshing: store?.candidateLoadingTopics.contains(section.topicId) ?? false,
                 channels: channels,
                 selectedChannelId: selectedChannelId,
                 videoCountForChannel: { [weak store] channelId in
@@ -811,9 +812,9 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard let store else { return [] }
             let sourceVideos: [CandidateVideoViewModel]
             if section.topicId == -1 {
-                sourceVideos = store.recentCandidateVideosForAllTopics()
+                sourceVideos = store.watchPoolForAllTopics(applyingChannelFilter: false)
             } else {
-                sourceVideos = store.recentStoredCandidateVideosForTopic(section.topicId)
+                sourceVideos = store.watchPoolForTopic(section.topicId, applyingChannelFilter: false)
             }
 
             var bestByChannelId: [String: ChannelRecord] = [:]
@@ -823,24 +824,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 } else {
                     "watch-\(video.channelName ?? "unknown")"
                 }
-                if let known = store.channelsForTopic(section.topicId).first(where: { $0.channelId == video.channelId }) {
-                    bestByChannelId[channelId] = known
-                    continue
-                }
-
-                if bestByChannelId[channelId] == nil {
-                    bestByChannelId[channelId] = ChannelRecord(
-                        channelId: channelId,
-                        name: video.channelName ?? "Unknown Creator",
-                        handle: nil,
-                        channelUrl: video.channelId.flatMap { "https://www.youtube.com/channel/\($0)" },
-                        iconUrl: video.channelIconUrl,
-                        iconData: nil,
-                        subscriberCount: nil,
-                        description: nil,
-                        videoCountTotal: nil,
-                        fetchedAt: nil
-                    )
+                guard bestByChannelId[channelId] == nil else { continue }
+                if let resolved = store.resolvedChannelRecord(
+                    channelId: video.channelId,
+                    fallbackName: video.channelName ?? "Unknown Creator",
+                    fallbackIconURL: video.channelIconUrl
+                ) {
+                    bestByChannelId[channelId] = resolved
                 }
             }
 
@@ -1838,6 +1828,7 @@ enum CollectionSectionHeaderModel {
         scrollProgress: Double,
         highlightTerms: [String],
         displayMode: TopicDisplayMode,
+        isRefreshing: Bool,
         channels: [ChannelRecord],
         selectedChannelId: String?,
         videoCountForChannel: (String) -> Int,
@@ -1860,7 +1851,7 @@ enum CollectionSectionHeaderModel {
 
     var height: CGFloat {
         switch self {
-        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, latestPublishedAtForChannel: _, onSelectChannel: _):
+        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, isRefreshing: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, latestPublishedAtForChannel: _, onSelectChannel: _):
             return channels.isEmpty ? 48 : 112
         case .creator:
             return 56

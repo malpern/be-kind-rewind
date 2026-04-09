@@ -252,6 +252,9 @@ extension OrganizerStore {
                                 AppLogger.discovery.error("Failed to get channel video count: \(error.localizedDescription, privacy: .public)")
                                 creatorAffinity = 0
                             }
+                            let resolvedIconUrl = video.channelId.flatMap { cid in
+                                resolvedChannelRecord(channelId: cid, fallbackName: nil, fallbackIconURL: nil)?.iconUrl
+                            }
                             CandidateDiscoveryCoordinator.accumulateCandidate(
                                 video: video,
                                 sourceKind: "search_query_recent",
@@ -260,7 +263,8 @@ extension OrganizerStore {
                                 reasonHint: plan.query,
                                 topicalEvidenceBonus: admission.scoreBonus,
                                 existingVideoIds: existingVideoIds,
-                                aggregate: &aggregate
+                                aggregate: &aggregate,
+                                channelIconUrl: resolvedIconUrl
                             )
                         }
                     } catch {
@@ -682,7 +686,8 @@ enum CandidateDiscoveryCoordinator {
         reasonHint: String?,
         topicalEvidenceBonus: Int,
         existingVideoIds: Set<String>,
-        aggregate: inout [String: AggregatedCandidate]
+        aggregate: inout [String: AggregatedCandidate],
+        channelIconUrl: String? = nil
     ) {
         accumulateCandidate(
             videoId: video.videoId,
@@ -692,7 +697,7 @@ enum CandidateDiscoveryCoordinator {
             viewCount: video.viewCount,
             publishedAt: video.publishedAt,
             duration: video.duration,
-            channelIconUrl: nil,
+            channelIconUrl: channelIconUrl,
             sourceKind: sourceKind,
             sourceRef: sourceRef,
             creatorAffinity: creatorAffinity,

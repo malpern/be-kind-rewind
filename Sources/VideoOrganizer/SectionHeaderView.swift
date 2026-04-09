@@ -9,6 +9,7 @@ struct SectionHeaderView: View {
     let progress: Double
     var showProgress: Bool = true
     var highlightTerms: [String] = []
+    var isRefreshing: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -33,6 +34,12 @@ struct SectionHeaderView: View {
             .background(.quaternary, in: Capsule())
 
             Spacer()
+
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Refreshing candidates for this topic")
+            }
         }
         .padding(.horizontal, GridConstants.horizontalPadding)
         .padding(.vertical, 10)

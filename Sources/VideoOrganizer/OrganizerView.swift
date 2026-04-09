@@ -20,13 +20,6 @@ struct OrganizerView: View {
                         TopicScrollProgressBar(progress: store.topicScrollProgress)
                     }
                 }
-                .overlay(alignment: .top) {
-                    if let overlay = store.candidateProgressOverlay {
-                        CandidateProgressOverlayView(state: overlay)
-                            .padding(.top, 20)
-                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-                    }
-                }
                 .inspector(isPresented: $displaySettings.showInspector) {
                     VideoInspector(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                         .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
@@ -179,6 +172,16 @@ struct OrganizerView: View {
                 .accessibilityLabel("Loading")
         }
 
+        if store.watchRefreshTotalTopics > 0 {
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.small)
+                Text("Refreshing Watch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("Refreshing Watch candidates: \(store.watchRefreshCompletedTopics) of \(store.watchRefreshTotalTopics) topics")
+        }
+
         if thumbnailCache.isDownloading {
             HStack(spacing: 4) {
                 ProgressView().controlSize(.small)
@@ -254,35 +257,3 @@ private struct TopicScrollProgressBar: View {
     }
 }
 
-private struct CandidateProgressOverlayView: View {
-    let state: CandidateProgressOverlayState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(hudTitle)
-                .font(.headline.weight(.semibold))
-                .lineLimit(1)
-
-            ProgressView(value: min(max(state.progress, 0), 1), total: 1)
-                .progressViewStyle(.linear)
-                .controlSize(.small)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: 320)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08))
-        }
-        .shadow(color: .black.opacity(0.14), radius: 14, y: 8)
-        .allowsHitTesting(false)
-    }
-
-    private var hudTitle: String {
-        if state.topicName == "All Topics" {
-            return "Refreshing Watch"
-        }
-        return "Refreshing \(state.topicName)"
-    }
-}
