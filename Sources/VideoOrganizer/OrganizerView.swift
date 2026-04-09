@@ -81,11 +81,18 @@ struct OrganizerView: View {
         .task(id: watchThumbnailPrefetchKey) {
             await prefetchWatchThumbnailsIfNeeded()
         }
+        .task(id: savedThumbnailPrefetchKey) {
+            await prefetchSelectedSavedTopicThumbnailsIfNeeded()
+        }
         .accessibilityIdentifier("mainWindow")
     }
 
     private var watchThumbnailPrefetchKey: String {
         "\(store.pageDisplayMode.rawValue)-\(store.watchPoolVersion)"
+    }
+
+    private var savedThumbnailPrefetchKey: String {
+        "\(store.pageDisplayMode.rawValue)-\(store.selectedTopicId ?? -1)"
     }
 
     @ViewBuilder
@@ -185,6 +192,17 @@ struct OrganizerView: View {
     private func prefetchWatchThumbnailsIfNeeded() async {
         guard store.pageDisplayMode == .watchCandidates else { return }
         let videoIds = Array(Set(store.candidateVideosForAllTopics().map(\.videoId)))
+        guard !videoIds.isEmpty else { return }
+        await thumbnailCache.prefetch(videoIds: videoIds)
+    }
+
+    private func prefetchSelectedSavedTopicThumbnailsIfNeeded() async {
+        guard store.pageDisplayMode == .saved,
+              let topicId = store.selectedTopicId else { return }
+        let videoIds = Array(Set(
+            store.videosForTopicIncludingSubtopics(topicId)
+                .compactMap { $0.videoId.isEmpty ? nil : $0.videoId }
+        ))
         guard !videoIds.isEmpty else { return }
         await thumbnailCache.prefetch(videoIds: videoIds)
     }

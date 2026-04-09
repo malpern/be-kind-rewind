@@ -134,11 +134,6 @@ struct VideoOrganizerApp: App {
             let newStore = try OrganizerStore(dbPath: dbPath, claudeClient: client)
             store = newStore
             evaluateCredentialOnboardingEligibility()
-
-            let allVideoIds = newStore.topics.flatMap { topic in
-                newStore.videosForTopic(topic.id).compactMap { $0.videoId.isEmpty ? nil : $0.videoId }
-            }
-            await thumbnailCache.prefetch(videoIds: allVideoIds)
         } catch {
             loadError = error.localizedDescription
         }
