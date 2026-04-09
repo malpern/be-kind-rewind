@@ -223,52 +223,86 @@ extension OrganizerStore {
                 candidateProgressByTopic[topicId] = Double(completedChannels) / Double(totalChannels)
             }
 
-            if let youtubeClient {
-                let searchPlans = CandidateDiscoveryCoordinator.searchPlans(for: topicId, store: self)
-                for plan in searchPlans {
-                    do {
-                        let results = try await youtubeClient.searchVideos(
-                            query: plan.query,
-                            maxResults: 5,
-                            publishedAfterDays: 30
-                        )
+            // Scraper-first search: try scraping YouTube search (no quota), fall back to API
+            let searchPlans = CandidateDiscoveryCoordinator.searchPlans(for: topicId, store: self)
+            for plan in searchPlans {
+                do {
+                    let fallbackService = DiscoveryFallbackService(environment: runtimeEnvironment)
+                    let results = try await fallbackService.searchVideos(query: plan.query, maxResults: 5)
 
-                        for video in results {
-                            if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
-                                continue
-                            }
-                            let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
-                                forTopic: topicId,
-                                title: video.title,
-                                sourceKind: "search_query_recent",
-                                sourceRef: plan.query,
-                                store: self
-                            )
-                            guard admission.shouldAdmit else { continue }
-                            let creatorAffinity: Int
-                            do {
-                                creatorAffinity = try store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)
-                            } catch {
-                                AppLogger.discovery.error("Failed to get channel video count: \(error.localizedDescription, privacy: .public)")
-                                creatorAffinity = 0
-                            }
-                            let resolvedIconUrl = video.channelId.flatMap { cid in
-                                resolvedChannelRecord(channelId: cid, fallbackName: nil, fallbackIconURL: nil)?.iconUrl
-                            }
-                            CandidateDiscoveryCoordinator.accumulateCandidate(
-                                video: video,
-                                sourceKind: "search_query_recent",
-                                sourceRef: plan.query,
-                                creatorAffinity: creatorAffinity,
-                                reasonHint: plan.query,
-                                topicalEvidenceBonus: admission.scoreBonus,
-                                existingVideoIds: existingVideoIds,
-                                aggregate: &aggregate,
-                                channelIconUrl: resolvedIconUrl
-                            )
+                    for video in results {
+                        if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
+                            continue
                         }
-                    } catch {
-                        AppLogger.discovery.error("Search discovery failed for topic \(topicId, privacy: .public), query \(plan.query, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                            forTopic: topicId,
+                            title: video.title,
+                            sourceKind: "search_query_recent",
+                            sourceRef: plan.query,
+                            store: self
+                        )
+                        guard admission.shouldAdmit else { continue }
+                        let creatorAffinity: Int
+                        do {
+                            creatorAffinity = try store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)
+                        } catch {
+                            creatorAffinity = 0
+                        }
+                        let resolvedIconUrl = video.channelId.flatMap { cid in
+                            resolvedChannelRecord(channelId: cid, fallbackName: nil, fallbackIconURL: nil)?.iconUrl
+                        }
+                        // Convert fallback video to DiscoveredVideo-compatible accumulation
+                        CandidateDiscoveryCoordinator.accumulateCandidate(
+                            videoId: video.videoId,
+                            title: video.title,
+                            channelId: video.channelId,
+                            channelName: video.channelTitle,
+                            viewCount: video.viewCount,
+                            publishedAt: video.publishedAt,
+                            duration: video.duration,
+                            channelIconUrl: resolvedIconUrl,
+                            sourceKind: "search_query_recent",
+                            sourceRef: plan.query,
+                            creatorAffinity: creatorAffinity,
+                            reasonHint: plan.query,
+                            topicalEvidenceBonus: admission.scoreBonus,
+                            existingVideoIds: existingVideoIds,
+                            aggregate: &aggregate
+                        )
+                    }
+                } catch {
+                    // Scraper failed — try API if available
+                    if let youtubeClient {
+                        do {
+                            let results = try await youtubeClient.searchVideos(
+                                query: plan.query, maxResults: 5, publishedAfterDays: 30
+                            )
+                            for video in results {
+                                if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
+                                    continue
+                                }
+                                let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                                    forTopic: topicId, title: video.title,
+                                    sourceKind: "search_query_recent", sourceRef: plan.query, store: self
+                                )
+                                guard admission.shouldAdmit else { continue }
+                                let creatorAffinity = (try? store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)) ?? 0
+                                let resolvedIconUrl = video.channelId.flatMap { cid in
+                                    resolvedChannelRecord(channelId: cid, fallbackName: nil, fallbackIconURL: nil)?.iconUrl
+                                }
+                                CandidateDiscoveryCoordinator.accumulateCandidate(
+                                    video: video, sourceKind: "search_query_recent", sourceRef: plan.query,
+                                    creatorAffinity: creatorAffinity, reasonHint: plan.query,
+                                    topicalEvidenceBonus: admission.scoreBonus,
+                                    existingVideoIds: existingVideoIds, aggregate: &aggregate,
+                                    channelIconUrl: resolvedIconUrl
+                                )
+                            }
+                        } catch {
+                            AppLogger.file.log("Search failed for '\(plan.query)': scraper + API both failed", category: "discovery")
+                        }
+                    } else {
+                        AppLogger.file.log("Search scraper failed for '\(plan.query)': \(error.localizedDescription)", category: "discovery")
                     }
                 }
             }
@@ -324,7 +358,8 @@ extension OrganizerStore {
     }
 
     /// Fetches and caches channel icons for candidate creators missing face pile images.
-    /// Phase 1: Use YouTube API to resolve icon URLs for unknown channels (1 quota unit per 50).
+    /// Phase 1a: Scrape channel pages for icon URLs (no quota needed).
+    /// Phase 1b: Fall back to YouTube API for any the scraper missed.
     /// Phase 2: Download icon images from CDN (free, no quota).
     private func fetchMissingChannelIcons(from candidates: [TopicCandidate]) async {
         func log(_ msg: String) {
@@ -357,29 +392,7 @@ extension OrganizerStore {
 
         log("Icon check: \(channelsWithUrl.count) with URL, \(channelsWithoutUrl.count) without URL")
 
-        // Phase 1a: Try YouTube API first (1 quota unit per 50 channels)
-        if !channelsWithoutUrl.isEmpty, let youtubeClient {
-            let ids = channelsWithoutUrl.map(\.channelId)
-            do {
-                let thumbnailMap = try await youtubeClient.fetchChannelThumbnails(channelIds: ids)
-                var resolved = Set<String>()
-                for entry in channelsWithoutUrl {
-                    if let urlString = thumbnailMap[entry.channelId], let url = URL(string: urlString) {
-                        channelsWithUrl.append((entry.channelId, url, entry.name))
-                        resolved.insert(entry.channelId)
-                    }
-                }
-                channelsWithoutUrl.removeAll { resolved.contains($0.channelId) }
-                log("API resolved \(thumbnailMap.count) of \(ids.count) channel icons")
-            } catch {
-                log("API failed (likely quota): \(error.localizedDescription)")
-                if let ytError = error as? YouTubeError, ytError.isQuotaExceeded {
-                    youtubeQuotaExhausted = true
-                }
-            }
-        }
-
-        // Phase 1b: Scrape fallback for channels the API couldn't resolve (no quota needed)
+        // Phase 1a: Scrape channel pages for icon URLs (no quota needed)
         if !channelsWithoutUrl.isEmpty {
             let scraped = await scrapeChannelIconURLs(channelIds: channelsWithoutUrl.map(\.channelId))
             for entry in channelsWithoutUrl {
@@ -387,7 +400,28 @@ extension OrganizerStore {
                     channelsWithUrl.append((entry.channelId, url, entry.name))
                 }
             }
-            log("Scrape resolved \(scraped.count) of \(channelsWithoutUrl.count) channel icons")
+            let scraperResolved = Set(scraped.keys)
+            channelsWithoutUrl.removeAll { scraperResolved.contains($0.channelId) }
+            log("Scrape resolved \(scraped.count) of \(channelsWithoutUrl.count + scraped.count) channel icons")
+        }
+
+        // Phase 1b: API fallback for channels scraper couldn't resolve
+        if !channelsWithoutUrl.isEmpty, let youtubeClient {
+            let ids = channelsWithoutUrl.map(\.channelId)
+            do {
+                let thumbnailMap = try await youtubeClient.fetchChannelThumbnails(channelIds: ids)
+                for entry in channelsWithoutUrl {
+                    if let urlString = thumbnailMap[entry.channelId], let url = URL(string: urlString) {
+                        channelsWithUrl.append((entry.channelId, url, entry.name))
+                    }
+                }
+                log("API resolved \(thumbnailMap.count) of \(ids.count) remaining channel icons")
+            } catch {
+                log("API fallback failed: \(error.localizedDescription)")
+                if let ytError = error as? YouTubeError, ytError.isQuotaExceeded {
+                    youtubeQuotaExhausted = true
+                }
+            }
         }
 
         guard !channelsWithUrl.isEmpty else { return }
@@ -772,19 +806,13 @@ enum CandidateDiscoveryCoordinator {
             return existingArchive
         }
 
+        // Scraper-first: try scraping channel uploads (no quota), fall back to API
         do {
-            guard let youtubeClient else {
-                throw DiscoveryFallbackError.executionFailed("YouTube API key unavailable; using public discovery fallback.")
-            }
-
-            let incremental = try await youtubeClient.fetchIncrementalChannelUploads(
-                channelId: channel.channelId,
-                knownVideoIDs: knownVideoIDs,
-                maxNewResults: 24,
-                maxPages: 4
-            )
+            let recent = try await DiscoveryFallbackService(environment: store.runtimeEnvironment)
+                .fetchRecentChannelUploads(channelId: channel.channelId, maxResults: 16)
+                .filter { !knownVideoIDs.contains($0.videoId) }
             let scannedAt = ISO8601DateFormatter().string(from: Date())
-            let archived = incremental.videos.map { video in
+            let archived = recent.map { video in
                 ArchivedChannelVideo(
                     channelId: channel.channelId,
                     videoId: video.videoId,
@@ -800,11 +828,17 @@ enum CandidateDiscoveryCoordinator {
             try store.store.upsertChannelDiscoveryArchive(channelId: channel.channelId, videos: archived, scannedAt: scannedAt)
             return try store.store.archivedVideosForChannels([channel.channelId], perChannelLimit: 24)
         } catch {
-            let recent = try await DiscoveryFallbackService(environment: store.runtimeEnvironment)
-                .fetchRecentChannelUploads(channelId: channel.channelId, maxResults: 16)
-                .filter { !knownVideoIDs.contains($0.videoId) }
+            // Scraper failed — fall back to YouTube API if available
+            guard let youtubeClient else { throw error }
+
+            let incremental = try await youtubeClient.fetchIncrementalChannelUploads(
+                channelId: channel.channelId,
+                knownVideoIDs: knownVideoIDs,
+                maxNewResults: 24,
+                maxPages: 4
+            )
             let scannedAt = ISO8601DateFormatter().string(from: Date())
-            let archived = recent.map { video in
+            let archived = incremental.videos.map { video in
                 ArchivedChannelVideo(
                     channelId: channel.channelId,
                     videoId: video.videoId,
@@ -882,7 +916,7 @@ enum CandidateDiscoveryCoordinator {
         )
     }
 
-    private static func accumulateCandidate(
+    fileprivate static func accumulateCandidate(
         videoId: String,
         title: String,
         channelId: String?,

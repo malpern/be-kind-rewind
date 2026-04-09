@@ -8,6 +8,19 @@ public struct DiscoveryFallbackVideo: Sendable {
     public let duration: String?
     public let viewCount: String?
     public let source: String
+    public let channelId: String?
+
+    public init(videoId: String, title: String, channelTitle: String?, publishedAt: String?,
+                duration: String?, viewCount: String?, source: String, channelId: String? = nil) {
+        self.videoId = videoId
+        self.title = title
+        self.channelTitle = channelTitle
+        self.publishedAt = publishedAt
+        self.duration = duration
+        self.viewCount = viewCount
+        self.source = source
+        self.channelId = channelId
+    }
 }
 
 public struct DiscoveryFallbackService: Sendable {
@@ -59,6 +72,37 @@ public struct DiscoveryFallbackService: Sendable {
         }
     }
 
+    public func searchVideos(query: String, maxResults: Int = 5) async throws -> [DiscoveryFallbackVideo] {
+        let scriptURL = environment.scriptURL(named: "youtube_search_fallback.py")
+        let arguments = [
+            pythonExecutable.path,
+            scriptURL.path,
+            "--query", query,
+            "--max-results", String(max(1, min(maxResults, 20)))
+        ]
+        let execution = try await runProcess(arguments: arguments)
+
+        guard execution.terminationStatus == 0 else {
+            let stderrText = String(data: execution.stderr, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw DiscoveryFallbackError.executionFailed(stderrText.isEmpty ? "Search fallback failed." : stderrText)
+        }
+
+        let response = try JSONDecoder().decode(SearchFallbackResponse.self, from: execution.stdout)
+        return response.videos.map {
+            DiscoveryFallbackVideo(
+                videoId: $0.videoId,
+                title: $0.title,
+                channelTitle: $0.channelTitle,
+                publishedAt: $0.publishedAt,
+                duration: $0.duration,
+                viewCount: $0.viewCount,
+                source: response.source,
+                channelId: $0.channelId
+            )
+        }
+    }
+
     private func runProcess(arguments: [String]) async throws -> ProcessExecutionResult {
         let process = Process()
         process.currentDirectoryURL = environment.repoRoot()
@@ -103,6 +147,21 @@ private struct DiscoveryFallbackResponse: Decodable {
     struct Video: Decodable {
         let videoId: String
         let title: String
+        let channelTitle: String?
+        let publishedAt: String?
+        let duration: String?
+        let viewCount: String?
+    }
+}
+
+private struct SearchFallbackResponse: Decodable {
+    let source: String
+    let videos: [Video]
+
+    struct Video: Decodable {
+        let videoId: String
+        let title: String
+        let channelId: String?
         let channelTitle: String?
         let publishedAt: String?
         let duration: String?
