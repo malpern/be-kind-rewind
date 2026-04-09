@@ -137,12 +137,20 @@ struct CollectionGridView: View {
             )
         )
 
-        store.searchResultCount = result.searchResultCount
-        sections = result.sections
-        sectionGeneration += 1
+        let sectionsChanged = result.sections != sections
+        let searchCountChanged = result.searchResultCount != store.searchResultCount
+
+        if searchCountChanged {
+            store.searchResultCount = result.searchResultCount
+        }
+
+        if sectionsChanged {
+            sections = result.sections
+            sectionGeneration += 1
+        }
         let duration = startedAt.duration(to: .now)
         AppLogger.discovery.debug(
-            "loadAndFilter mode=\(self.store.pageDisplayMode.rawValue, privacy: .public) watchMode=\(self.store.watchPresentationMode.rawValue, privacy: .public) sections=\(result.sections.count, privacy: .public) results=\(result.searchResultCount, privacy: .public) in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public)"
+            "loadAndFilter mode=\(self.store.pageDisplayMode.rawValue, privacy: .public) watchMode=\(self.store.watchPresentationMode.rawValue, privacy: .public) sections=\(result.sections.count, privacy: .public) results=\(result.searchResultCount, privacy: .public) changed=\(sectionsChanged, privacy: .public) in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public)"
         )
     }
 
