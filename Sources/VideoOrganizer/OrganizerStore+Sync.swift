@@ -128,7 +128,12 @@ extension OrganizerStore {
     }
 
     func refreshSyncQueueSummary() {
-        syncQueueSummary = (try? store.syncQueueSummary()) ?? SyncQueueSummary(queued: 0, retrying: 0, deferred: 0, inProgress: 0, browserDeferred: 0)
+        do {
+            syncQueueSummary = try store.syncQueueSummary()
+        } catch {
+            AppLogger.sync.error("Failed to refresh sync queue summary: \(error.localizedDescription, privacy: .public)")
+            syncQueueSummary = SyncQueueSummary(queued: 0, retrying: 0, deferred: 0, inProgress: 0, browserDeferred: 0)
+        }
     }
 
     func refreshBrowserExecutorStatus() {

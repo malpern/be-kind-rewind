@@ -245,7 +245,13 @@ extension OrganizerStore {
                                 store: self
                             )
                             guard admission.shouldAdmit else { continue }
-                            let creatorAffinity = (try? store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)) ?? 0
+                            let creatorAffinity: Int
+                            do {
+                                creatorAffinity = try store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)
+                            } catch {
+                                AppLogger.discovery.error("Failed to get channel video count: \(error.localizedDescription, privacy: .public)")
+                                creatorAffinity = 0
+                            }
                             CandidateDiscoveryCoordinator.accumulateCandidate(
                                 video: video,
                                 sourceKind: "search_query_recent",

@@ -3,6 +3,7 @@ import SwiftUI
 import TaggingKit
 import UniformTypeIdentifiers
 
+/// Settings window with tabs for API keys, YouTube auth, Watch history import, and excluded creators.
 struct AppSettingsView: View {
     @Bindable var store: OrganizerStore
     @Bindable var displaySettings: DisplaySettings

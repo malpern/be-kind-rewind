@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Header row for a creator group in the grid, showing channel icon, name, and video count.
 struct CreatorSectionHeaderView: View {
     let channelName: String
     let channelIconUrl: URL?

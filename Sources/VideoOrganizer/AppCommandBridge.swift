@@ -1,5 +1,6 @@
 import Foundation
 
+/// Notification names used to forward menu-bar commands into the active SwiftUI view hierarchy.
 enum AppCommandBridge {
     static let saveToWatchLater = Notification.Name("videoOrganizer.saveToWatchLater")
     static let saveToPlaylist = Notification.Name("videoOrganizer.saveToPlaylist")

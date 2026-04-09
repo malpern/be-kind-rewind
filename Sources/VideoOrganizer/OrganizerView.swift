@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Root three-column layout: topic sidebar, collection grid, and optional inspector.
 struct OrganizerView: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache

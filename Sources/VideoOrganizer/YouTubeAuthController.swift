@@ -140,6 +140,12 @@ private actor OAuthLoopbackReceiverState {
     }
 }
 
+/// Loopback HTTP server that receives the OAuth redirect.
+///
+/// Marked `@unchecked Sendable` because `NWListener` and `DispatchQueue` are not Sendable.
+/// Safety: `listener` is only created and torn down inside `start()`/`stop()` which run
+/// sequentially on the same call site. Shared state is funnelled through the
+/// actor-isolated `OAuthLoopbackReceiverState`, so no concurrent mutation occurs.
 private final class OAuthLoopbackReceiver: @unchecked Sendable {
     private let port: UInt16
     private let path = "/oauth/callback"

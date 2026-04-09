@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Header row for a topic section in the grid, showing name and video count.
 struct SectionHeaderView: View {
     let name: String
     let count: Int

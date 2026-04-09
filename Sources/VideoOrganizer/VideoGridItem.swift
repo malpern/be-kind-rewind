@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Video card displaying thumbnail, title, channel, and metadata badges.
 struct VideoGridItem: View {
     let video: VideoGridItemModel
     let isSelected: Bool

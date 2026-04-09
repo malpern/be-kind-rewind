@@ -1,6 +1,7 @@
 import SwiftUI
 import TaggingKit
 
+/// Right-hand detail panel showing metadata, playlists, and actions for the selected video.
 struct VideoInspector: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache

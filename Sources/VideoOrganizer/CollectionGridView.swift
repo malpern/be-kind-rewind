@@ -1,9 +1,30 @@
+// CollectionGridView.swift
+//
+// High-performance video grid built on NSCollectionView, bridged into SwiftUI.
+//
+// Architecture:
+//   CollectionGridView (SwiftUI)
+//     └─ CollectionGridNSViewRepresentable (NSViewRepresentable)
+//          └─ Coordinator (NSCollectionViewDataSource & Delegate)
+//               └─ GridContainerView (NSView — owns scroll view + collection view)
+//                    ├─ GridCell (NSCollectionViewItem, hosts SwiftUI GridCellContent)
+//                    ├─ GridHeaderView (NSView, hosts SwiftUI GridHeaderContent)
+//                    └─ FocusableCollectionView (NSCollectionView subclass — keyboard nav)
+//
+// Data flow:
+//   1. Store state changes trigger .onChange → loadAndFilter()
+//   2. GridSectionBuilder produces [TopicSection] from the store
+//   3. Sections are passed to the Coordinator via representable update
+//   4. Coordinator diffs and applies animated batch updates to NSCollectionView
+//   5. Each cell hosts a lightweight SwiftUI view via NSHostingView
+
 import SwiftUI
 import AppKit
 import TaggingKit
 
 // MARK: - SwiftUI Wrapper
 
+/// Top-level SwiftUI view wrapping the AppKit-backed collection grid.
 struct CollectionGridView: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache
@@ -1640,6 +1661,10 @@ private final class CollectionGridContainerView: NSView {
 
     private var flushScheduled = false
     private var lastContentWidth: CGFloat = 0
+    /// Registered `NSView.boundsDidChangeNotification` observer token.
+    /// Marked `nonisolated(unsafe)` because it is only set/read on the main thread
+    /// (in `viewDidMoveToWindow` → `installBoundsObserverIfNeeded` / `removeBoundsObserver`
+    /// and cleaned up in `deinit`), but the compiler cannot verify that statically.
     nonisolated(unsafe) private var boundsObserver: NSObjectProtocol?
     private var initialLayoutTask: Task<Void, Never>?
 

@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Initial splash screen shown while the database loads on first launch.
 struct SplashView: View {
     @State private var appeared = false
 

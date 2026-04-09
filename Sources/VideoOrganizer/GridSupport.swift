@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 
+/// A section of the video grid representing one topic (or creator group within a topic).
 struct TopicSection: Identifiable {
     let topicId: Int64
     let topicName: String

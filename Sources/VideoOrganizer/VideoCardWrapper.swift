@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// SwiftUI content hosted inside each NSCollectionView cell, handling hover debounce and thumbnail display.
 struct VideoCardWrapper: View {
     let video: VideoGridItemModel
     let isSelected: Bool

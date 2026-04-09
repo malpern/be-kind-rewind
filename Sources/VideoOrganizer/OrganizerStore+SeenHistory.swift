@@ -8,7 +8,12 @@ extension OrganizerStore {
     }
 
     func refreshSeenHistoryCount() {
-        seenHistoryCount = (try? store.seenVideoCount()) ?? 0
+        do {
+            seenHistoryCount = try store.seenVideoCount()
+        } catch {
+            AppLogger.app.error("Failed to refresh seen history count: \(error.localizedDescription, privacy: .public)")
+            seenHistoryCount = 0
+        }
     }
 }
 

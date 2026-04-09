@@ -170,6 +170,15 @@ public struct YouTubeOAuthTokenStore: Sendable {
     }
 }
 
+/// Handles the YouTube OAuth 2.0 Authorization Code flow with PKCE.
+///
+/// Flow:
+/// 1. `authorizationRequest()` builds a URL with a random `state` and SHA-256 `code_challenge`
+/// 2. The user authorizes in a browser; YouTube redirects to the loopback URI with a `code`
+/// 3. `exchangeCode()` trades the code + PKCE verifier for access + refresh tokens
+/// 4. `validAccessToken()` transparently refreshes expired tokens using the stored refresh token
+///
+/// Tokens are persisted via ``YouTubeOAuthTokenStore`` (Keychain).
 public struct YouTubeOAuthService: Sendable {
     private let config: YouTubeOAuthClientConfig
     private let tokenStore: YouTubeOAuthTokenStore

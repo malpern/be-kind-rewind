@@ -2,6 +2,7 @@ import SwiftUI
 
 @MainActor
 @Observable
+/// Observable state for the brief toast banner shown after actions like "Saved to Watch Later".
 final class ActionToastState {
     var message: String = ""
     var icon: String = ""

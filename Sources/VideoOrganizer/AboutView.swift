@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 
+/// About window showing the app icon, version, and credits.
 struct AboutView: View {
     var body: some View {
         VStack(spacing: 24) {

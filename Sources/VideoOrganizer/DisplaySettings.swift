@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 
+/// Sort order options for the video grid.
 enum SortOrder: String, CaseIterable {
     case views
     case date

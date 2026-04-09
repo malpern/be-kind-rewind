@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Decorative YouTube logo mark (red rounded rectangle with play triangle).
 struct YouTubeLogoMarkView: View {
     var body: some View {
         ZStack {

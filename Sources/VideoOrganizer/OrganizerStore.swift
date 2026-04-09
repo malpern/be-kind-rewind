@@ -3,17 +3,31 @@ import Foundation
 import Observation
 import TaggingKit
 
-/// Main data store bridging TaggingKit's SQLite backend to SwiftUI's Observation.
+/// Central application state bridging TaggingKit's SQLite backend to SwiftUI via Observation.
+///
+/// Owns the ``TopicStore`` database connection and exposes materialized caches
+/// (video maps, channel data, watch pools) that views bind to. Mutations flow
+/// through store methods which update the database, rebuild caches, and let
+/// SwiftUI pick up changes automatically via `@Observable`.
+///
+/// Extended by:
+/// - `OrganizerStore+CandidateDiscovery` — Watch candidate fetching and ranking
+/// - `OrganizerStore+Sync` — YouTube playlist sync queue
+/// - `OrganizerStore+CreatorAnalytics` — Channel-level aggregation
+/// - `OrganizerStore+SeenHistory` — Watch history import
 @MainActor
 @Observable
 final class OrganizerStore {
+    /// All top-level topics with their subtopics. Rebuilt on every `loadTopics()` call.
     private(set) var topics: [TopicViewModel] = []
     private(set) var totalVideoCount: Int = 0
     private(set) var unassignedCount: Int = 0
     private(set) var isLoading = false
     var errorMessage: String?
     var alert: AppAlertState?
+    /// Incremented to signal views that candidate data has changed externally.
     var candidateRefreshToken = 0
+    /// Incremented when the ranked watch pool is rebuilt; used as a `.task(id:)` key.
     var watchPoolVersion = 0
     var syncQueueSummary = SyncQueueSummary(queued: 0, retrying: 0, deferred: 0, inProgress: 0, browserDeferred: 0)
     var lastSyncErrorMessage: String?
@@ -128,16 +142,29 @@ final class OrganizerStore {
     }
 
     func refreshExcludedCreators() {
-        excludedCreators = (try? store.excludedChannelsList()) ?? []
+        do {
+            excludedCreators = try store.excludedChannelsList()
+        } catch {
+            AppLogger.app.error("Failed to load excluded creators: \(error.localizedDescription, privacy: .public)")
+            excludedCreators = []
+        }
     }
 
     // MARK: - Loading
 
+    /// Reloads all topics from the database and rebuilds every derived cache
+    /// (video maps, playlist maps, candidate caches, watch pools, sync summary).
     func loadTopics() {
         do {
             let summaries = try store.listTopics()
             topics = summaries.map { summary in
-                let subtopicSummaries = (try? store.subtopicsForTopic(id: summary.id)) ?? []
+                let subtopicSummaries: [TopicSummary]
+                do {
+                    subtopicSummaries = try store.subtopicsForTopic(id: summary.id)
+                } catch {
+                    AppLogger.app.error("Failed to load subtopics for topic \(summary.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    subtopicSummaries = []
+                }
                 let subtopics = subtopicSummaries.map {
                     TopicViewModel(id: $0.id, name: $0.name, videoCount: $0.videoCount, parentId: summary.id)
                 }
@@ -622,6 +649,9 @@ final class OrganizerStore {
         candidateRefreshToken += 1
     }
 
+    /// Rebuilds the materialized watch pool from stored candidates.
+    /// Filters by recency and excluded creators, deduplicates across topics,
+    /// and reranks the combined pool. Increments `watchPoolVersion` to signal views.
     func rebuildWatchPools() {
         let startedAt = ContinuousClock.now
         let perTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
@@ -651,15 +681,26 @@ final class OrganizerStore {
 
     func reloadStoredCandidateCaches() {
         storedCandidateVideosByTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
-            (
-                topic.id,
-                ((try? store.candidatesForTopic(id: topic.id, limit: 36)) ?? []).map(CandidateVideoViewModel.init(from:))
-            )
+            let candidates: [TopicCandidate]
+            do {
+                candidates = try store.candidatesForTopic(id: topic.id, limit: 36)
+            } catch {
+                AppLogger.discovery.error("Failed to load candidates for topic \(topic.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                candidates = []
+            }
+            return (topic.id, candidates.map(CandidateVideoViewModel.init(from:)))
         })
     }
 
     func reloadStoredCandidateCache(for topicId: Int64) {
-        storedCandidateVideosByTopic[topicId] = ((try? store.candidatesForTopic(id: topicId, limit: 36)) ?? []).map(CandidateVideoViewModel.init(from:))
+        let candidates: [TopicCandidate]
+        do {
+            candidates = try store.candidatesForTopic(id: topicId, limit: 36)
+        } catch {
+            AppLogger.discovery.error("Failed to reload candidates for topic \(topicId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            candidates = []
+        }
+        storedCandidateVideosByTopic[topicId] = candidates.map(CandidateVideoViewModel.init(from:))
     }
 
     func updateViewportContext(topicId: Int64?, subtopicId: Int64?, creatorSectionId: String?) {
@@ -699,7 +740,12 @@ final class OrganizerStore {
     }
 
     func knownPlaylists() -> [PlaylistRecord] {
-        (try? store.knownPlaylists()) ?? []
+        do {
+            return try store.knownPlaylists()
+        } catch {
+            AppLogger.app.error("Failed to load playlists: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
     }
 
     func dismissCandidate(topicId: Int64, videoId: String) {
@@ -955,8 +1001,10 @@ final class OrganizerStore {
             tChannelCounts[topic.id] = perTopicCounts
             tChannelRecent[topic.id] = perTopicRecent
 
-            if let channels = try? store.channelsForTopicIncludingSubtopics(id: topic.id) {
-                tChannels[topic.id] = channels
+            do {
+                tChannels[topic.id] = try store.channelsForTopicIncludingSubtopics(id: topic.id)
+            } catch {
+                AppLogger.app.error("Failed to load channels for topic \(topic.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
         videoMap = vMap
@@ -968,7 +1016,12 @@ final class OrganizerStore {
     }
 
     private func rebuildPlaylistMaps() {
-        playlistsByVideoId = (try? store.allPlaylistsByVideo()) ?? [:]
+        do {
+            playlistsByVideoId = try store.allPlaylistsByVideo()
+        } catch {
+            AppLogger.app.error("Failed to rebuild playlist maps: \(error.localizedDescription, privacy: .public)")
+            playlistsByVideoId = [:]
+        }
     }
 
     /// Typeahead suggestions matching the current search text.
@@ -1016,7 +1069,7 @@ final class OrganizerStore {
         return Array(results.prefix(limit))
     }
 
-    // MARK: - Topic Operations
+    // MARK: - Topic CRUD
 
     func renameTopic(_ topicId: Int64, to newName: String) {
         do {

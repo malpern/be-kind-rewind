@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Left sidebar listing topics with video counts, subtopic expansion, and Saved/Watch mode toggle.
 struct TopicSidebar: View {
     @Bindable var store: OrganizerStore
     @Bindable var displaySettings: DisplaySettings

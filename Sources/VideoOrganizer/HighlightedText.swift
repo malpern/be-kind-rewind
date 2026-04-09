@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Text view that bolds substrings matching the current search terms.
 struct HighlightedText: View {
     let text: String
     let terms: [String]
