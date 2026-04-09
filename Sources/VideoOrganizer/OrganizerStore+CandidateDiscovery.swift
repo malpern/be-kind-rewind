@@ -446,6 +446,9 @@ extension OrganizerStore {
                 if !CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: topic.id, store: self) {
                     await self.ensureCandidates(for: topic.id)
                 } else {
+                    // Even with cached candidates, fetch icons for channels that are missing them
+                    let cached = (try? self.store.candidatesForTopic(id: topic.id, limit: 36)) ?? []
+                    await self.fetchMissingChannelIcons(from: cached)
                     self.rebuildWatchPools()
                 }
 
