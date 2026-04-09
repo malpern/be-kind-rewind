@@ -108,6 +108,7 @@ final class OrganizerStore {
     var syncLoopTask: Task<Void, Never>?
     var browserStatusTask: Task<Void, Never>?
     var watchRefreshTask: Task<Void, Never>?
+    private var watchPoolVersionSignalTask: Task<Void, Never>?
     private var isUpdatingSelectionFromGrid = false
 
     let store: TopicStore
@@ -678,7 +679,7 @@ final class OrganizerStore {
             topics.flatMap { assigned[$0.id] ?? [] },
             store: self
         )
-        watchPoolVersion &+= 1
+        scheduleWatchPoolVersionSignal()
         let duration = startedAt.duration(to: .now)
         AppLogger.discovery.info(
             "Rebuilt Watch pools for \(self.topics.count, privacy: .public) topics in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public); ranked candidates: \(self.rankedWatchPool.count, privacy: .public)"
@@ -751,6 +752,15 @@ final class OrganizerStore {
         } catch {
             AppLogger.app.error("Failed to load playlists: \(error.localizedDescription, privacy: .public)")
             return []
+        }
+    }
+
+    private func scheduleWatchPoolVersionSignal() {
+        watchPoolVersionSignalTask?.cancel()
+        watchPoolVersionSignalTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard let self, !Task.isCancelled else { return }
+            self.watchPoolVersion &+= 1
         }
     }
 

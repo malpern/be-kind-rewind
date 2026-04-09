@@ -88,7 +88,8 @@ struct OrganizerView: View {
     }
 
     private var watchThumbnailPrefetchKey: String {
-        "\(store.pageDisplayMode.rawValue)-\(store.watchPoolVersion)"
+        let visibleTopics = store.visibleWatchTopicIds.map(String.init).joined(separator: ",")
+        return "\(store.pageDisplayMode.rawValue)-\(store.watchPresentationMode.rawValue)-\(store.selectedTopicId ?? -1)-\(visibleTopics)-\(store.watchPoolVersion)"
     }
 
     private var savedThumbnailPrefetchKey: String {
@@ -191,7 +192,30 @@ struct OrganizerView: View {
 
     private func prefetchWatchThumbnailsIfNeeded() async {
         guard store.pageDisplayMode == .watchCandidates else { return }
-        let videoIds = Array(Set(store.candidateVideosForAllTopics().map(\.videoId)))
+        let videoIds: [String]
+        switch store.watchPresentationMode {
+        case .byTopic:
+            let topicIds = store.visibleWatchTopicIds.isEmpty
+                ? [store.selectedTopicId].compactMap { $0 }
+                : store.visibleWatchTopicIds
+            let visibleCandidates = topicIds.flatMap { store.candidateVideosForTopic($0) }
+            videoIds = Array(
+                Set(
+                    visibleCandidates
+                        .filter { !$0.isPlaceholder }
+                        .map(\.videoId)
+                )
+            )
+        case .allTogether:
+            videoIds = Array(
+                Set(
+                    store.candidateVideosForAllTopics()
+                        .filter { !$0.isPlaceholder }
+                        .prefix(72)
+                        .map(\.videoId)
+                )
+            )
+        }
         guard !videoIds.isEmpty else { return }
         await thumbnailCache.prefetch(videoIds: videoIds)
     }
