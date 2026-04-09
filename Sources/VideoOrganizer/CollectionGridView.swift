@@ -57,6 +57,7 @@ struct CollectionGridView: View {
         .onChange(of: store.pageDisplayMode) { _, _ in loadAndFilter() }
         .onChange(of: store.watchPresentationMode) { _, _ in loadAndFilter() }
         .onChange(of: store.candidateRefreshToken) { _, _ in loadAndFilter() }
+        .onChange(of: store.watchPoolVersion) { _, _ in loadAndFilter() }
     }
 
     private func loadAndFilter() {
@@ -244,6 +245,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private var renderedContentWidth: CGFloat = 0
         private var isApplyingSelectionToCollectionView = false
         private var actionObservers: [NSObjectProtocol] = []
+        private var scrollFeedbackUpdateScheduled = false
 
         var cacheDir: URL = URL(fileURLWithPath: "/tmp")
         var thumbnailSize: Double = 220
@@ -299,9 +301,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 self?.flushIfReady()
             }
             container.onBoundsChanged = { [weak self] in
-                self?.refreshVisibleHeaders()
-                self?.refreshTopicScrollProgress()
-                self?.refreshViewportContext()
+                self?.scheduleScrollFeedbackUpdate()
             }
             installActionObserversIfNeeded()
         }
@@ -944,6 +944,18 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
             let subtopicId = currentVisibleSubtopicId(inSectionAt: sectionIndex, visibleBounds: visibleBounds)
             store.updateViewportContext(topicId: section.topicId, subtopicId: subtopicId, creatorSectionId: nil)
+        }
+
+        private func scheduleScrollFeedbackUpdate() {
+            guard !scrollFeedbackUpdateScheduled else { return }
+            scrollFeedbackUpdateScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.scrollFeedbackUpdateScheduled = false
+                self.refreshVisibleHeaders()
+                self.refreshTopicScrollProgress()
+                self.refreshViewportContext()
+            }
         }
 
         private func primaryVisibleSectionIndex(in visibleBounds: CGRect) -> Int? {

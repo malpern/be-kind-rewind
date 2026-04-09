@@ -14,6 +14,7 @@ final class OrganizerStore {
     var errorMessage: String?
     var alert: AppAlertState?
     var candidateRefreshToken = 0
+    var watchPoolVersion = 0
     var syncQueueSummary = SyncQueueSummary(queued: 0, retrying: 0, deferred: 0, inProgress: 0, browserDeferred: 0)
     var lastSyncErrorMessage: String?
     var lastSyncErrorIsBrowser = false
@@ -79,6 +80,8 @@ final class OrganizerStore {
     var watchRefreshCompletedTopics = 0
     var watchRefreshTotalTopics = 0
     var watchRefreshCurrentTopicName: String?
+    private(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
+    private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
 
     // Cached flat video map — rebuilt on loadTopics()
     var videoMap: [String: VideoViewModel] = [:]
@@ -145,6 +148,7 @@ final class OrganizerStore {
             }
             rebuildVideoMaps()
             rebuildPlaylistMaps()
+            rebuildWatchPools()
             refreshSyncQueueSummary()
             refreshSeenHistoryCount()
             errorMessage = nil
@@ -605,6 +609,28 @@ final class OrganizerStore {
         candidateRefreshToken += 1
     }
 
+    func rebuildWatchPools() {
+        let perTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
+            (
+                topic.id,
+                CandidateDiscoveryCoordinator.recentEligibleWatchVideos(
+                    storedCandidateVideosForTopic(topic.id),
+                    store: self
+                ).filter { candidate in
+                    !isExcludedCreator(candidate.channelId)
+                }
+            )
+        })
+
+        let assigned = CandidateDiscoveryCoordinator.assignWatchVideosToTopics(perTopic)
+        watchPoolByTopic = assigned
+        rankedWatchPool = CandidateDiscoveryCoordinator.rerankWatchVideos(
+            topics.flatMap { assigned[$0.id] ?? [] },
+            store: self
+        )
+        watchPoolVersion &+= 1
+    }
+
     func updateViewportContext(topicId: Int64?, subtopicId: Int64?, creatorSectionId: String?) {
         viewportTopicId = topicId
         viewportSubtopicId = subtopicId
@@ -615,7 +641,7 @@ final class OrganizerStore {
         guard watchPresentationMode != mode else { return }
         watchPresentationMode = mode
         AppLogger.discovery.info("Set watch presentation mode to \(mode.rawValue, privacy: .public)")
-        candidateRefreshToken += 1
+        watchPoolVersion &+= 1
     }
 
     func knownPlaylists() -> [PlaylistRecord] {
@@ -660,6 +686,7 @@ final class OrganizerStore {
 
             selectedVideoId = nil
             hoveredVideoId = nil
+            rebuildWatchPools()
             candidateRefreshToken += 1
             AppLogger.discovery.info("Excluded creator from watch: \(channelId, privacy: .public)")
             alert = AppAlertState(
@@ -676,6 +703,7 @@ final class OrganizerStore {
         do {
             try store.restoreExcludedChannel(channelId: channelId)
             refreshExcludedCreators()
+            rebuildWatchPools()
             candidateRefreshToken += 1
             AppLogger.discovery.info("Restored excluded creator \(channelId, privacy: .public)")
         } catch {
@@ -736,6 +764,7 @@ final class OrganizerStore {
             try store.setCandidateState(topicId: topicId, videoId: videoId, state: .saved)
 
             rebuildPlaylistMaps()
+            rebuildWatchPools()
             candidateRefreshToken += 1
             AppLogger.discovery.info("Queued add_to_playlist for candidate \(videoId, privacy: .public) -> \(playlist.playlistId, privacy: .public)")
             if playlist.playlistId == "WL" {
@@ -819,6 +848,7 @@ final class OrganizerStore {
         do {
             try store.queueCommit(action: "not_interested", videoId: videoId, playlist: "__youtube__")
             try store.setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
+            rebuildWatchPools()
             candidateRefreshToken += 1
             AppLogger.discovery.info("Queued not_interested for candidate \(videoId, privacy: .public)")
             alert = AppAlertState(

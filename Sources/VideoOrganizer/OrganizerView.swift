@@ -78,7 +78,7 @@ struct OrganizerView: View {
     }
 
     private var watchThumbnailPrefetchKey: String {
-        "\(store.pageDisplayMode.rawValue)-\(store.candidateRefreshToken)"
+        "\(store.pageDisplayMode.rawValue)-\(store.watchPoolVersion)"
     }
 
     @ViewBuilder

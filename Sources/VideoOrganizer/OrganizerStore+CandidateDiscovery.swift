@@ -3,19 +3,7 @@ import TaggingKit
 
 extension OrganizerStore {
     private func assignedWatchPools(applyingChannelFilter: Bool = true) -> [Int64: [CandidateVideoViewModel]] {
-        let perTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
-            (
-                topic.id,
-                CandidateDiscoveryCoordinator.recentEligibleWatchVideos(
-                    storedCandidateVideosForTopic(topic.id),
-                    store: self
-                ).filter { candidate in
-                    !isExcludedCreator(candidate.channelId)
-                }
-            )
-        })
-
-        let assignment = CandidateDiscoveryCoordinator.assignWatchVideosToTopics(perTopic)
+        let assignment = watchPoolByTopic
         guard applyingChannelFilter, let selectedChannelId else {
             return assignment
         }
@@ -34,9 +22,7 @@ extension OrganizerStore {
     }
 
     func watchPoolForAllTopics(applyingChannelFilter: Bool = true) -> [CandidateVideoViewModel] {
-        let assigned = assignedWatchPools(applyingChannelFilter: false)
-        let deduped = topics.flatMap { assigned[$0.id] ?? [] }
-        let reranked = CandidateDiscoveryCoordinator.rerankWatchVideos(deduped, store: self)
+        let reranked = rankedWatchPool
 
         guard applyingChannelFilter, let selectedChannelId else {
             return reranked
@@ -50,10 +36,10 @@ extension OrganizerStore {
     func activatePageDisplayMode(_ mode: TopicDisplayMode) async {
         setPageDisplayMode(mode)
         guard mode == .watchCandidates else {
-            candidateRefreshToken += 1
             return
         }
-        await ensureCandidatesForWatchPage()
+        rebuildWatchPools()
+        ensureCandidatesForWatchPage()
     }
 
     func candidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
@@ -154,6 +140,7 @@ extension OrganizerStore {
     func setCandidateState(topicId: Int64, videoId: String, state: CandidateState) {
         do {
             try store.setCandidateState(topicId: topicId, videoId: videoId, state: state)
+            rebuildWatchPools()
             AppLogger.discovery.info("Set candidate state for topic \(topicId, privacy: .public), video \(videoId, privacy: .public) to \(state.rawValue, privacy: .public)")
             candidateRefreshToken += 1
         } catch {
@@ -293,6 +280,7 @@ extension OrganizerStore {
             }
 
             try store.replaceCandidates(forTopic: topicId, candidates: candidates, sources: sources)
+            rebuildWatchPools()
         } catch {
             candidateErrors[topicId] = CandidateDiscoveryCoordinator.friendlyCandidateErrorMessage(for: error)
             CandidateDiscoveryCoordinator.presentQuotaAlertIfNeeded(for: error, store: self)
@@ -300,7 +288,7 @@ extension OrganizerStore {
         }
     }
 
-    func ensureCandidatesForWatchPage() async {
+    func ensureCandidatesForWatchPage() {
         guard watchRefreshTask == nil else { return }
 
         let topicsToRefresh = topics
@@ -322,6 +310,8 @@ extension OrganizerStore {
 
                 if !CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: topic.id, store: self) {
                     await self.ensureCandidates(for: topic.id)
+                } else {
+                    self.rebuildWatchPools()
                 }
 
                 self.watchRefreshCompletedTopics += 1
@@ -329,7 +319,6 @@ extension OrganizerStore {
         }
 
         watchRefreshTask = task
-        await task.value
     }
 }
 
