@@ -366,7 +366,8 @@ extension OrganizerStore {
                 }
                 log("Resolved \(thumbnailMap.count) of \(ids.count) channel icon URLs from API")
             } catch {
-                log("Failed to fetch channel thumbnails: \(error.localizedDescription)")
+                log("Channel thumbnail API failed (likely quota): \(error.localizedDescription)")
+                // Quota exhausted — can't resolve icon URLs for unknown channels this session
             }
         }
 
