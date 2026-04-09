@@ -95,6 +95,7 @@ final class OrganizerStore {
     var watchRefreshCompletedTopics = 0
     var watchRefreshTotalTopics = 0
     var watchRefreshCurrentTopicName: String?
+    var youtubeQuotaExhausted = false
     private(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
     private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
     private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]

@@ -190,6 +190,12 @@ struct OrganizerView: View {
                 .accessibilityLabel("Loading")
         }
 
+        if store.youtubeQuotaExhausted {
+            Label("API Quota Exhausted", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .help("YouTube API daily quota exceeded. Some features are limited until midnight Pacific time.")
+        }
 
         if thumbnailCache.isDownloading {
             HStack(spacing: 4) {

@@ -96,6 +96,7 @@ struct VideoOrganizerApp: App {
     }
 
     private func initializeStore() async {
+        AppLogger.file.log("App initializing, log file: \(AppLogger.file.logFileURL.path)", category: "app")
         do {
             let client = try? ClaudeClient()
             let dbPath = resolveDbPath()

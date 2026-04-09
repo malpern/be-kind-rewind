@@ -327,9 +327,12 @@ extension OrganizerStore {
     /// Phase 1: Use YouTube API to resolve icon URLs for unknown channels (1 quota unit per 50).
     /// Phase 2: Download icon images from CDN (free, no quota).
     private func fetchMissingChannelIcons(from candidates: [TopicCandidate]) async {
-        func log(_ msg: String) { AppLogger.discovery.info("\(msg, privacy: .public)") }
+        func log(_ msg: String) {
+            AppLogger.discovery.info("\(msg, privacy: .public)")
+            AppLogger.file.log(msg, category: "icons")
+        }
 
-        log("=== fetchMissingChannelIcons called with \(candidates.count) candidates ===")
+        log("fetchMissingChannelIcons: \(candidates.count) candidates")
 
         var channelsWithUrl: [(channelId: String, iconUrl: URL, name: String)] = []
         var channelsWithoutUrl: [(channelId: String, name: String)] = []
@@ -354,21 +357,37 @@ extension OrganizerStore {
 
         log("Icon check: \(channelsWithUrl.count) with URL, \(channelsWithoutUrl.count) without URL")
 
-        // Phase 1: Resolve icon URLs for channels that don't have one (uses YouTube API)
+        // Phase 1a: Try YouTube API first (1 quota unit per 50 channels)
         if !channelsWithoutUrl.isEmpty, let youtubeClient {
             let ids = channelsWithoutUrl.map(\.channelId)
             do {
                 let thumbnailMap = try await youtubeClient.fetchChannelThumbnails(channelIds: ids)
+                var resolved = Set<String>()
                 for entry in channelsWithoutUrl {
                     if let urlString = thumbnailMap[entry.channelId], let url = URL(string: urlString) {
                         channelsWithUrl.append((entry.channelId, url, entry.name))
+                        resolved.insert(entry.channelId)
                     }
                 }
-                log("Resolved \(thumbnailMap.count) of \(ids.count) channel icon URLs from API")
+                channelsWithoutUrl.removeAll { resolved.contains($0.channelId) }
+                log("API resolved \(thumbnailMap.count) of \(ids.count) channel icons")
             } catch {
-                log("Channel thumbnail API failed (likely quota): \(error.localizedDescription)")
-                // Quota exhausted — can't resolve icon URLs for unknown channels this session
+                log("API failed (likely quota): \(error.localizedDescription)")
+                if let ytError = error as? YouTubeError, ytError.isQuotaExceeded {
+                    youtubeQuotaExhausted = true
+                }
             }
+        }
+
+        // Phase 1b: Scrape fallback for channels the API couldn't resolve (no quota needed)
+        if !channelsWithoutUrl.isEmpty {
+            let scraped = await scrapeChannelIconURLs(channelIds: channelsWithoutUrl.map(\.channelId))
+            for entry in channelsWithoutUrl {
+                if let urlString = scraped[entry.channelId], let url = URL(string: urlString) {
+                    channelsWithUrl.append((entry.channelId, url, entry.name))
+                }
+            }
+            log("Scrape resolved \(scraped.count) of \(channelsWithoutUrl.count) channel icons")
         }
 
         guard !channelsWithUrl.isEmpty else { return }
@@ -419,7 +438,55 @@ extension OrganizerStore {
         }
     }
 
+    /// Scrapes YouTube channel pages for avatar URLs — no API quota needed.
+    private func scrapeChannelIconURLs(channelIds: [String]) async -> [String: String] {
+        guard !channelIds.isEmpty else { return [:] }
+        let scriptURL = runtimeEnvironment.scriptURL(named: "youtube_channel_icons.py")
+        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
+            AppLogger.file.log("Channel icon scraper not found at \(scriptURL.path)", category: "icons")
+            return [:]
+        }
+
+        let bundledPython = runtimeEnvironment.repoRoot()
+            .appendingPathComponent(".runtime/discovery-venv/bin/python3")
+        let pythonPath = FileManager.default.isExecutableFile(atPath: bundledPython.path)
+            ? bundledPython.path
+            : "/usr/bin/python3"
+
+        let process = Process()
+        process.currentDirectoryURL = runtimeEnvironment.repoRoot()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            pythonPath,
+            scriptURL.path,
+            "--channel-ids", channelIds.joined(separator: ",")
+        ]
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        do {
+            try process.run()
+            let data = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                process.terminationHandler = { _ in
+                    continuation.resume(returning: stdout.fileHandleForReading.readDataToEndOfFile())
+                }
+            }
+            guard process.terminationStatus == 0 else { return [:] }
+
+            struct Response: Decodable { let icons: [String: String] }
+            let response = try JSONDecoder().decode(Response.self, from: data)
+            return response.icons
+        } catch {
+            AppLogger.file.log("Channel icon scraper failed: \(error.localizedDescription)", category: "icons")
+            return [:]
+        }
+    }
+
     func ensureCandidatesForWatchPage() {
+        AppLogger.file.log("ensureCandidatesForWatchPage called, task=\(watchRefreshTask == nil ? "nil" : "exists")", category: "discovery")
         guard watchRefreshTask == nil else { return }
 
         let topicsToRefresh = topics
@@ -447,9 +514,7 @@ extension OrganizerStore {
                     break
                 }
                 remainingTopicIds.remove(nextTopicId)
-                AppLogger.discovery.debug(
-                    "Watch refresh prioritizing topic \(topic.name, privacy: .public); remaining topics: \(remainingTopicIds.count, privacy: .public)"
-                )
+                AppLogger.file.log("Watch refresh: \(topic.name) (\(self.watchRefreshCompletedTopics)/\(topicsToRefresh.count)), remaining=\(remainingTopicIds.count)", category: "discovery")
                 self.watchRefreshCurrentTopicName = topic.name
 
                 if !CandidateDiscoveryCoordinator.shouldUseCachedCandidates(for: topic.id, store: self) {
@@ -914,6 +979,7 @@ enum CandidateDiscoveryCoordinator {
 
     static func presentQuotaAlertIfNeeded(for error: Error, store: OrganizerStore) {
         guard let youtubeError = error as? YouTubeError, youtubeError.isQuotaExceeded else { return }
+        store.youtubeQuotaExhausted = true
         store.alert = AppAlertState(
             title: "YouTube Quota Exhausted",
             message: "The app has used today’s YouTube Data API quota for discovery. Candidate generation is paused until quota resets at midnight Pacific. Saved videos, playlists, and existing cached candidates are still available."
