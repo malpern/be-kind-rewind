@@ -245,7 +245,7 @@ final class OrganizerStore {
         playlistsByVideoId[videoId] ?? []
     }
 
-    func badgeTagForVideo(_ videoId: String, candidateState: String? = nil) -> String? {
+    func badgeTagForVideo(_ videoId: String, candidateState: String? = nil, topicId: Int64? = nil, channelId: String? = nil) -> String? {
         let playlists = playlistsByVideoId[videoId] ?? []
         if playlists.contains(where: { $0.playlistId == "WL" }) {
             return "Watch Later"
@@ -253,7 +253,14 @@ final class OrganizerStore {
         if candidateState == CandidateState.saved.rawValue {
             return "Saved"
         }
+        if let topicId, let channelId, !channelId.isEmpty, isNewCreatorInTopic(channelId, topicId: topicId) {
+            return "New Creator"
+        }
         return nil
+    }
+
+    func isNewCreatorInTopic(_ channelId: String, topicId: Int64) -> Bool {
+        !channelsForTopic(topicId).contains(where: { $0.channelId == channelId })
     }
 
     func seenSummary(for videoId: String) -> SeenVideoSummary? {

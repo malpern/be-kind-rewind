@@ -2,31 +2,40 @@ import Foundation
 import TaggingKit
 
 extension OrganizerStore {
+    private func assignedWatchPools(applyingChannelFilter: Bool = true) -> [Int64: [CandidateVideoViewModel]] {
+        let perTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
+            (
+                topic.id,
+                CandidateDiscoveryCoordinator.recentEligibleWatchVideos(
+                    storedCandidateVideosForTopic(topic.id),
+                    store: self
+                ).filter { candidate in
+                    !isExcludedCreator(candidate.channelId)
+                }
+            )
+        })
+
+        let assignment = CandidateDiscoveryCoordinator.assignWatchVideosToTopics(perTopic)
+        guard applyingChannelFilter, let selectedChannelId else {
+            return assignment
+        }
+
+        return assignment.mapValues { candidates in
+            candidates.filter { $0.channelId == selectedChannelId }
+        }
+    }
+
     func storedCandidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
         ((try? store.candidatesForTopic(id: topicId, limit: 36)) ?? []).map(CandidateVideoViewModel.init(from:))
     }
 
     func watchPoolForTopic(_ topicId: Int64, applyingChannelFilter: Bool = true) -> [CandidateVideoViewModel] {
-        let base = CandidateDiscoveryCoordinator.recentEligibleWatchVideos(
-            storedCandidateVideosForTopic(topicId),
-            store: self
-        ).filter { candidate in
-            !isExcludedCreator(candidate.channelId)
-        }
-
-        guard applyingChannelFilter, let selectedChannelId else {
-            return base
-        }
-
-        return base.filter { candidate in
-            candidate.channelId == selectedChannelId
-        }
+        assignedWatchPools(applyingChannelFilter: applyingChannelFilter)[topicId] ?? []
     }
 
     func watchPoolForAllTopics(applyingChannelFilter: Bool = true) -> [CandidateVideoViewModel] {
-        let deduped = CandidateDiscoveryCoordinator.deduplicateWatchVideos(
-            topics.flatMap { watchPoolForTopic($0.id, applyingChannelFilter: false) }
-        )
+        let assigned = assignedWatchPools(applyingChannelFilter: false)
+        let deduped = topics.flatMap { assigned[$0.id] ?? [] }
         let reranked = CandidateDiscoveryCoordinator.rerankWatchVideos(deduped, store: self)
 
         guard applyingChannelFilter, let selectedChannelId else {
@@ -347,6 +356,54 @@ enum CandidateDiscoveryCoordinator {
         }
 
         return Array(bestByVideoId.values)
+    }
+
+    static func assignWatchVideosToTopics(_ perTopic: [Int64: [CandidateVideoViewModel]]) -> [Int64: [CandidateVideoViewModel]] {
+        var bestByVideoId: [String: CandidateVideoViewModel] = [:]
+
+        for (_, videos) in perTopic {
+            for video in videos {
+                guard let existing = bestByVideoId[video.videoId] else {
+                    bestByVideoId[video.videoId] = video
+                    continue
+                }
+
+                if prefers(video, over: existing) {
+                    bestByVideoId[video.videoId] = video
+                }
+            }
+        }
+
+        var assigned: [Int64: [CandidateVideoViewModel]] = [:]
+        for topicId in perTopic.keys {
+            assigned[topicId] = []
+        }
+
+        for video in bestByVideoId.values {
+            assigned[video.topicId, default: []].append(video)
+        }
+
+        for (topicId, videos) in assigned {
+            assigned[topicId] = videos.sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.publishedAt ?? "")
+                    let rhsDate = CreatorAnalytics.parseISO8601Date(rhs.publishedAt ?? "")
+                    switch (lhsDate, rhsDate) {
+                    case let (l?, r?) where l != r:
+                        return l > r
+                    case (_?, nil):
+                        return true
+                    case (nil, _?):
+                        return false
+                    default:
+                        return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+                    }
+                }
+                return lhs.score > rhs.score
+            }
+        }
+
+        return assigned
     }
 
     static func rerankWatchVideos(_ videos: [CandidateVideoViewModel], store: OrganizerStore) -> [CandidateVideoViewModel] {

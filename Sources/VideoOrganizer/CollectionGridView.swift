@@ -93,7 +93,12 @@ struct CollectionGridView: View {
                             channelIconUrl: candidate.channelIconUrl.flatMap(URL.init(string:)),
                             channelId: candidate.channelId,
                             candidateScore: candidate.score,
-                            stateTag: store.badgeTagForVideo(candidate.videoId, candidateState: candidate.state),
+                            stateTag: store.badgeTagForVideo(
+                                candidate.videoId,
+                                candidateState: candidate.state,
+                                topicId: candidate.topicId,
+                                channelId: candidate.channelId
+                            ),
                             isPlaceholder: false,
                             placeholderMessage: candidate.secondaryText
                         )
@@ -143,7 +148,12 @@ struct CollectionGridView: View {
                     channelIconUrl: $0.channelIconUrl.flatMap(URL.init(string:)),
                     channelId: $0.channelId,
                     candidateScore: $0.score,
-                    stateTag: store.badgeTagForVideo($0.videoId, candidateState: $0.state),
+                    stateTag: store.badgeTagForVideo(
+                        $0.videoId,
+                        candidateState: $0.state,
+                        topicId: $0.topicId,
+                        channelId: $0.channelId
+                    ),
                     isPlaceholder: $0.isPlaceholder,
                     placeholderMessage: $0.secondaryText
                 )
@@ -890,7 +900,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
         private func refreshTopicScrollProgress() {
             guard let store else { return }
-            guard store.pageDisplayMode == .saved,
+            let supportsTopicProgress =
+                store.pageDisplayMode == .saved ||
+                (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)
+
+            guard supportsTopicProgress,
                   let topicId = store.selectedTopicId else {
                 if store.topicScrollProgress != 0 {
                     store.topicScrollProgress = 0
@@ -2043,6 +2057,7 @@ private struct SectionHeaderContent: View {
                         selectedChannelId: selectedChannelId,
                         topicId: topicId,
                         collapseLowCountCreators: displayMode != .watchCandidates,
+                        prioritizeRecency: displayMode == .watchCandidates,
                         videoCountForChannel: videoCountForChannel,
                         hasRecentContent: hasRecentContent,
                         latestPublishedAtForChannel: latestPublishedAtForChannel,

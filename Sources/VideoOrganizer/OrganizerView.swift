@@ -13,7 +13,9 @@ struct OrganizerView: View {
             CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                 .navigationTitle("")
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    if store.pageDisplayMode == .saved, store.selectedTopicId != nil {
+                    if store.selectedTopicId != nil,
+                       (store.pageDisplayMode == .saved
+                        || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
                         TopicScrollProgressBar(progress: store.topicScrollProgress)
                     }
                 }

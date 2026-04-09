@@ -224,6 +224,34 @@ struct OrganizerStoreTests {
         }
     }
 
+    @Test("watch candidates from creators new to the topic get a new creator badge")
+    @MainActor
+    func newCreatorBadgeForWatchCandidate() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "vid-new", title: "Fresh Gamma", channelId: "chan-gamma", channelName: "Gamma Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-07T00:00:00Z", duration: nil, channelIconUrl: nil, score: 10, reason: "search match", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+
+            #expect(
+                store.badgeTagForVideo(
+                    "vid-new",
+                    candidateState: CandidateState.candidate.rawValue,
+                    topicId: alphaTopic,
+                    channelId: "chan-gamma"
+                ) == "New Creator"
+            )
+        }
+    }
+
     @Test("watch show all reranking limits old backlog from a single creator")
     @MainActor
     func watchShowAllDiversifiesCreators() throws {
@@ -285,6 +313,37 @@ struct OrganizerStoreTests {
 
             #expect(ranked.filter { $0 == "shared-video" }.count == 1)
             #expect(Set(ranked) == Set(["shared-video", "unique-video"]))
+        }
+    }
+
+    @Test("watch by topic assigns shared videos to the strongest topic only")
+    @MainActor
+    func watchByTopicAssignsSharedVideosToSingleBestTopic() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+            let betaTopic = try #require(try fixtureStore.topicIdByName("Beta Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "shared-video", title: "Shared", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-06T00:00:00Z", duration: nil, channelIconUrl: nil, score: 90, reason: "alpha", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+            try fixtureStore.replaceCandidates(
+                forTopic: betaTopic,
+                candidates: [
+                    TopicCandidate(topicId: betaTopic, videoId: "shared-video", title: "Shared", channelId: "chan-alpha", channelName: "Alpha Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-06T00:00:00Z", duration: nil, channelIconUrl: nil, score: 88, reason: "beta", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                    TopicCandidate(topicId: betaTopic, videoId: "unique-video", title: "Unique", channelId: "chan-beta", channelName: "Beta Channel", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-07T00:00:00Z", duration: nil, channelIconUrl: nil, score: 70, reason: "unique", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+
+            #expect(store.candidateVideosForTopic(alphaTopic).map(\.videoId) == ["shared-video"])
+            #expect(store.candidateVideosForTopic(betaTopic).map(\.videoId) == ["unique-video"])
         }
     }
 

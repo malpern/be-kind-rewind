@@ -7,6 +7,7 @@ struct CreatorCirclesBar: View {
     let selectedChannelId: String?
     let topicId: Int64
     let collapseLowCountCreators: Bool
+    let prioritizeRecency: Bool
     let videoCountForChannel: (String) -> Int
     let hasRecentContent: (String) -> Bool  // true if creator has video from last 7 days
     let latestPublishedAtForChannel: (String) -> Date?
@@ -19,9 +20,7 @@ struct CreatorCirclesBar: View {
     private let spacing: CGFloat = 12
 
     private var allSortedChannels: [ChannelRecord] {
-        channels.sorted { a, b in
-            sortScore(a) > sortScore(b)
-        }
+        channels.sorted(by: compareChannels)
     }
 
     /// Channels with >2 videos shown prominently; ≤2 collapsed behind "+N more"
@@ -94,28 +93,42 @@ struct CreatorCirclesBar: View {
 
     /// Sort by recency-weighted score: recent content floats left, then by video count
     private var sortedProminent: [ChannelRecord] {
-        prominentChannels.sorted { a, b in sortScore(a) > sortScore(b) }
+        prominentChannels.sorted(by: compareChannels)
     }
 
     private var sortedCollapsed: [ChannelRecord] {
-        collapsedChannels.sorted { a, b in
-            sortScore(a) > sortScore(b)
-        }
+        collapsedChannels.sorted(by: compareChannels)
     }
 
-    private func sortScore(_ channel: ChannelRecord) -> Int {
-        let freshnessBucket: Int
-        if let latest = latestPublishedAtForChannel(channel.channelId) {
-            freshnessBucket = max(Int(latest.timeIntervalSince1970 / 86_400), 0)
-        } else if hasRecentContent(channel.channelId) {
-            freshnessBucket = 1
-        } else {
-            freshnessBucket = 0
+    private func compareChannels(_ a: ChannelRecord, _ b: ChannelRecord) -> Bool {
+        if prioritizeRecency {
+            let aLatest = latestPublishedAtForChannel(a.channelId)
+            let bLatest = latestPublishedAtForChannel(b.channelId)
+            switch (aLatest, bLatest) {
+            case let (left?, right?) where left != right:
+                return left > right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                break
+            }
         }
 
-        var score = videoCountForChannel(channel.channelId) * 10
-        score += freshnessBucket * 1000 // freshest creators float to front first
-        return score
+        let aRecent = hasRecentContent(a.channelId)
+        let bRecent = hasRecentContent(b.channelId)
+        if aRecent != bRecent {
+            return aRecent && !bRecent
+        }
+
+        let aCount = videoCountForChannel(a.channelId)
+        let bCount = videoCountForChannel(b.channelId)
+        if aCount != bCount {
+            return aCount > bCount
+        }
+
+        return a.name.localizedStandardCompare(b.name) == .orderedAscending
     }
 
     // MARK: - Expand Button
