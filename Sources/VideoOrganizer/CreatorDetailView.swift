@@ -551,7 +551,7 @@ struct CreatorDetailView: View {
             Image(systemName: "magnifyingglass")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
-            TextField("Search this creator's videos", text: $creatorSearchText)
+            TextField("Search videos", text: $creatorSearchText)
                 .textFieldStyle(.plain)
                 .font(.body)
                 .frame(minWidth: 160, idealWidth: 200, maxWidth: 240)
