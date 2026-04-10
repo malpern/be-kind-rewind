@@ -34,6 +34,12 @@ struct CreatorPageViewModel {
     // Outlier baseline used by the page; surfaced for tooltips/debugging.
     let channelMedianViews: Int
 
+    // Phase 3: Their hits — top videos by raw outlier score, no recency tilt.
+    // Distinct from Essentials, which IS recency-weighted. The hits view answers
+    // "what's their best work regardless of when it dropped" — useful when
+    // researching a creator's catalog historically.
+    let theirHits: [CreatorVideoCard]
+
     // What's new
     let latestVideo: CreatorVideoCard?
 
@@ -104,6 +110,7 @@ struct CreatorPageViewModel {
         lastUploadAge: String?,
         totalViewsFormatted: String,
         channelMedianViews: Int,
+        theirHits: [CreatorVideoCard],
         latestVideo: CreatorVideoCard?,
         recentVideos: [CreatorVideoCard],
         recentVideosTotalInWindow: Int,
@@ -140,6 +147,7 @@ struct CreatorPageViewModel {
         self.lastUploadAge = lastUploadAge
         self.totalViewsFormatted = totalViewsFormatted
         self.channelMedianViews = channelMedianViews
+        self.theirHits = theirHits
         self.latestVideo = latestVideo
         self.recentVideos = recentVideos
         self.recentVideosTotalInWindow = recentVideosTotalInWindow
@@ -178,6 +186,7 @@ struct CreatorPageViewModel {
         lastUploadAge: nil,
         totalViewsFormatted: "0 views",
         channelMedianViews: 0,
+        theirHits: [],
         latestVideo: nil,
         recentVideos: [],
         recentVideosTotalInWindow: 0,
@@ -374,6 +383,21 @@ enum CreatorPageBuilder {
         // 9. Essentials = top outliers (Phase 1 algorithm in OutlierAnalytics).
         let essentials = OutlierAnalytics.topOutliers(scoredCards, limit: 8)
 
+        // 9b. Phase 3: "Their hits" — pure outlier ranking, no recency weighting.
+        // Distinct from Essentials which favors recent work. Hits answers
+        // "what's their best work, ever". Sort by raw outlierScore descending,
+        // tiebreaker by raw view count.
+        let theirHits = scoredCards
+            .filter { $0.outlierScore > 0 }
+            .sorted { lhs, rhs in
+                if lhs.outlierScore != rhs.outlierScore {
+                    return lhs.outlierScore > rhs.outlierScore
+                }
+                return lhs.viewCountParsed > rhs.viewCountParsed
+            }
+            .prefix(8)
+            .map { $0 }
+
         // 10. Latest video = most recent by publishedAt.
         let latestVideo = allVideos.first
 
@@ -439,6 +463,7 @@ enum CreatorPageBuilder {
             lastUploadAge: lastUploadAge,
             totalViewsFormatted: formatViewTotal(totalViews),
             channelMedianViews: medianViews,
+            theirHits: Array(theirHits),
             latestVideo: latestVideo,
             recentVideos: recentVideos,
             recentVideosTotalInWindow: recentVideosTotalInWindow,

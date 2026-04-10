@@ -50,6 +50,7 @@ struct CreatorDetailView: View {
                 identityCard
                 whatsNewSection
                 essentialsSection
+                theirHitsSection
                 themeCapsulesSection
                 allVideosSection
                 byThemeSection
@@ -618,6 +619,36 @@ struct CreatorDetailView: View {
             return String(format: "%.0fK", Double(value) / 1_000)
         }
         return "\(value)"
+    }
+
+    // MARK: - Their hits (raw outlier ranking, no recency tilt)
+
+    @ViewBuilder
+    private var theirHitsSection: some View {
+        // Only show when at least one video meaningfully outperformed (>= 1.5× median)
+        // AND at least 2 outliers exist — a single hit is just luck, two is a pattern.
+        let outliers = page.theirHits.filter { $0.outlierScore >= 1.5 }
+        if outliers.count >= 2 {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Their hits")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
+                    Text("ranked by outlier score · all-time")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHGrid(rows: [GridItem(.fixed(180))], spacing: 14) {
+                        ForEach(outliers) { card in
+                            essentialsCard(card)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
     }
 
     // MARK: - Theme capsules (LLM-driven)
