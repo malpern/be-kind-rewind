@@ -62,12 +62,15 @@ struct CandidateProgressOverlayState: Equatable {
 // MARK: - Typeahead
 
 struct TypeaheadSuggestion: Identifiable {
-    enum Kind { case topic, subtopic, channel }
+    enum Kind { case topic, subtopic, channel, fromCreator }
     let kind: Kind
     let text: String
     let count: Int
     let topicId: Int64?
     var parentName: String? = nil
+    /// YouTube handle (e.g. "@hipyotech") for the .fromCreator case. nil otherwise.
+    /// Used as the canonical identifier inserted back into the search field on selection.
+    var handle: String? = nil
     var id: String { "\(kind)-\(text)" }
 
     var icon: String {
@@ -75,6 +78,7 @@ struct TypeaheadSuggestion: Identifiable {
         case .topic: return TopicTheme.iconName(for: text)
         case .subtopic: return "arrow.turn.down.right"
         case .channel: return "person.circle.fill"
+        case .fromCreator: return "at"
         }
     }
 

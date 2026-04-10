@@ -364,7 +364,8 @@ struct TopicSidebar: View {
         }
     }
 
-    /// Navigates to the selected typeahead suggestion (topic, subtopic, or channel filter).
+    /// Navigates to the selected typeahead suggestion (topic, subtopic, channel filter,
+    /// or `from:` creator-handle insertion).
     private func selectSuggestion(_ suggestion: TypeaheadSuggestion) {
         switch suggestion.kind {
         case .topic, .subtopic:
@@ -376,7 +377,43 @@ struct TopicSidebar: View {
         case .channel:
             store.searchText = suggestion.text
             searchFocused = false
+        case .fromCreator:
+            // Replace the trailing `from:partial` (or `from:`) token with the
+            // canonical form. Prefer @handle when available, fall back to the
+            // display name (quoted if it contains a space).
+            let resolvedToken = makeFromToken(for: suggestion)
+            store.searchText = replaceTrailingFromToken(in: store.searchText, with: resolvedToken)
+            // Keep focus so the user can continue typing other terms (e.g. text after the from:).
         }
+    }
+
+    /// Builds the canonical `from:...` token for a creator suggestion. Prefers the
+    /// stable @handle when present; falls back to the display name (quoted if it
+    /// contains a space so the parser preserves it as one token).
+    private func makeFromToken(for suggestion: TypeaheadSuggestion) -> String {
+        if let handle = suggestion.handle, !handle.isEmpty {
+            // Ensure single leading @
+            let normalized = handle.hasPrefix("@") ? handle : "@\(handle)"
+            return "from:\(normalized)"
+        }
+        if suggestion.text.contains(" ") {
+            return "from:\"\(suggestion.text)\""
+        }
+        return "from:\(suggestion.text)"
+    }
+
+    /// Replaces the trailing whitespace-separated token starting with `from:` in the
+    /// given search text with `replacement`. Preserves any other terms before it.
+    private func replaceTrailingFromToken(in text: String, with replacement: String) -> String {
+        let parts = text.split(separator: " ", omittingEmptySubsequences: false)
+        guard let last = parts.last, last.hasPrefix("from:") else {
+            return text + " " + replacement
+        }
+        let prefixParts = parts.dropLast()
+        if prefixParts.isEmpty {
+            return replacement + " "
+        }
+        return prefixParts.joined(separator: " ") + " " + replacement + " "
     }
 
     private func applySidebarSelection(topicId: Int64, subtopicId: Int64?) {

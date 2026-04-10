@@ -134,4 +134,55 @@ struct SearchQueryTests {
         // Topic name match (no channelName) should ignore from: rather than reject.
         #expect(query.matches(fields: ["Mechanical Keyboards"]) == true)
     }
+
+    // MARK: - from: handle matching
+
+    @Test("from: matches against the channel handle in addition to the channel name")
+    func fromOperatorMatchesHandle() {
+        let query = SearchQuery("from:hipyotech")
+        // Channel name doesn't contain "hipyotech" but the handle does.
+        #expect(
+            query.matches(
+                fields: ["My new build"],
+                channelName: "Hipyo Tech",
+                channelHandle: "@hipyotech"
+            ) == true
+        )
+    }
+
+    @Test("from:@handle form strips the @ prefix before matching")
+    func fromOperatorAtPrefixStripped() {
+        let query = SearchQuery("from:@hipyotech")
+        #expect(
+            query.matches(
+                fields: ["My new build"],
+                channelName: "Hipyo Tech",
+                channelHandle: "@hipyotech"
+            ) == true
+        )
+    }
+
+    @Test("from: rejects when neither name nor handle matches")
+    func fromOperatorRejectsBothMissing() {
+        let query = SearchQuery("from:hipyo")
+        #expect(
+            query.matches(
+                fields: ["title"],
+                channelName: "Switch & Click",
+                channelHandle: "@switchclick"
+            ) == false
+        )
+    }
+
+    @Test("from: matches when only the handle is provided (no name)")
+    func fromOperatorMatchesHandleOnly() {
+        let query = SearchQuery("from:hipyo")
+        #expect(
+            query.matches(
+                fields: ["title"],
+                channelName: nil,
+                channelHandle: "@hipyotech"
+            ) == true
+        )
+    }
 }

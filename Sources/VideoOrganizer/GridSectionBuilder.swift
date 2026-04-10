@@ -18,6 +18,9 @@ struct GridSectionBuilder {
         let videosForSubtopic: (Int64) -> [VideoGridItemModel]
         let allWatchVideos: () -> [VideoGridItemModel]
         let videoIsInSelectedPlaylist: (String) -> Bool
+        /// Lookup of channelId → handle for `from:` operator handle-aware matching.
+        /// Built once per search-text change in the consuming view.
+        var handleForChannelId: (String) -> String? = { _ in nil }
     }
 
     struct Result {
@@ -88,7 +91,11 @@ struct GridSectionBuilder {
             }
         }
 
-        let filteredResult = filterBySearch(query: context.parsedQuery, sections: baseSections)
+        let filteredResult = filterBySearch(
+            query: context.parsedQuery,
+            sections: baseSections,
+            handleForChannelId: context.handleForChannelId
+        )
         var result = filteredResult.sections
 
         if let subtopicId = context.selectedSubtopicId {
@@ -184,7 +191,11 @@ struct GridSectionBuilder {
         return Result(sections: result, searchResultCount: filteredResult.searchResultCount)
     }
 
-    private static func filterBySearch(query: SearchQuery, sections: [TopicSection]) -> Result {
+    private static func filterBySearch(
+        query: SearchQuery,
+        sections: [TopicSection],
+        handleForChannelId: (String) -> String?
+    ) -> Result {
         guard !query.isEmpty else {
             return Result(sections: sections, searchResultCount: 0)
         }
@@ -209,9 +220,11 @@ struct GridSectionBuilder {
             }
 
             let matchingVideos = section.videos.filter { video in
-                query.matches(
+                let handle: String? = video.channelId.flatMap { handleForChannelId($0) }
+                return query.matches(
                     fields: [video.title, video.channelName ?? "", video.topicName ?? section.topicName],
-                    channelName: video.channelName
+                    channelName: video.channelName,
+                    channelHandle: handle
                 )
             }
             if !matchingVideos.isEmpty {

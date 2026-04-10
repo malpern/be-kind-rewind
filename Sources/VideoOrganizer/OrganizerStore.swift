@@ -1063,16 +1063,27 @@ final class OrganizerStore {
 
     /// Typeahead suggestions matching the current search text.
     func typeaheadSuggestions(limit: Int = 8) -> [TypeaheadSuggestion] {
-        let text = searchText.trimmingCharacters(in: .whitespaces)
-        guard text.count >= 2 else { return [] }
+        let text = searchText
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+
+        // If the LAST token in the search text starts with `from:`, dispatch to the
+        // creator-aware typeahead instead of the general one. The user is filling in
+        // a creator name/handle and shouldn't see topic/channel suggestions for the
+        // unrelated terms before it.
+        if let partial = currentFromCreatorPartial(in: text) {
+            return fromCreatorSuggestions(partial: partial, limit: limit)
+        }
+
         // Don't show suggestions for exclude terms
-        guard !text.hasPrefix("-") else { return [] }
+        guard !trimmed.hasPrefix("-") else { return [] }
+        guard trimmed.count >= 2 else { return [] }
 
         var results: [TypeaheadSuggestion] = []
 
         // Match topics and subtopics
         for topic in topics {
-            if topic.name.localizedStandardContains(text) {
+            if topic.name.localizedStandardContains(trimmed) {
                 results.append(TypeaheadSuggestion(
                     kind: .topic,
                     text: topic.name,
@@ -1080,7 +1091,7 @@ final class OrganizerStore {
                     topicId: topic.id
                 ))
             }
-            for sub in topic.subtopics where sub.name.localizedStandardContains(text) {
+            for sub in topic.subtopics where sub.name.localizedStandardContains(trimmed) {
                 results.append(TypeaheadSuggestion(
                     kind: .subtopic,
                     text: sub.name,
@@ -1092,7 +1103,7 @@ final class OrganizerStore {
         }
 
         // Match channels
-        for (channel, count) in channelCounts where channel.localizedStandardContains(text) {
+        for (channel, count) in channelCounts where channel.localizedStandardContains(trimmed) {
             results.append(TypeaheadSuggestion(
                 kind: .channel,
                 text: channel,
@@ -1104,6 +1115,64 @@ final class OrganizerStore {
         // Sort by count descending, take limit
         results.sort { $0.count > $1.count }
         return Array(results.prefix(limit))
+    }
+
+    /// Extracts the partial text after a `from:` operator at the end of the search
+    /// input. Returns nil if no such token exists. Activates immediately on `from:`
+    /// (empty partial) so the user sees a list of all known creators ranked by
+    /// video count, then narrows as they type.
+    func currentFromCreatorPartial(in text: String) -> String? {
+        let lastToken = text.split(separator: " ", omittingEmptySubsequences: false).last ?? ""
+        guard lastToken.hasPrefix("from:") else { return nil }
+        var partial = String(lastToken.dropFirst("from:".count))
+        // Strip optional opening quote so `from:"par` becomes `par`.
+        if partial.hasPrefix("\"") {
+            partial.removeFirst()
+        }
+        return partial
+    }
+
+    /// Returns creator suggestions matching the partial after a `from:` token.
+    /// Substring matches against both the channel display name AND the YouTube
+    /// handle, ranked by saved video count. The handle is preserved on the
+    /// suggestion so the selection handler can insert the canonical `from:@handle`
+    /// form back into the search box.
+    private func fromCreatorSuggestions(partial: String, limit: Int) -> [TypeaheadSuggestion] {
+        // Build a deduped channel list from the topicChannels cache.
+        var seen = Set<String>()
+        var channels: [(record: ChannelRecord, count: Int)] = []
+        for channelList in topicChannels.values {
+            for record in channelList where seen.insert(record.channelId).inserted {
+                let count = channelCounts[record.name] ?? 0
+                channels.append((record, count))
+            }
+        }
+
+        // Empty partial → show top creators by saved count.
+        let needle = partial.trimmingCharacters(in: .whitespaces)
+        let matched: [(record: ChannelRecord, count: Int)]
+        if needle.isEmpty {
+            matched = channels
+        } else {
+            let lowered = needle.lowercased()
+            matched = channels.filter { entry in
+                let nameMatch = entry.record.name.lowercased().contains(lowered)
+                let handleMatch = entry.record.handle?.lowercased().contains(lowered) ?? false
+                return nameMatch || handleMatch
+            }
+        }
+
+        let sorted = matched.sorted { $0.count > $1.count }
+        return sorted.prefix(limit).map { entry in
+            TypeaheadSuggestion(
+                kind: .fromCreator,
+                text: entry.record.name,
+                count: entry.count,
+                topicId: nil,
+                parentName: nil,
+                handle: entry.record.handle
+            )
+        }
     }
 
     // MARK: - Topic CRUD

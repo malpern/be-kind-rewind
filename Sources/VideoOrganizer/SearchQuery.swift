@@ -66,14 +66,32 @@ struct SearchQuery: Equatable {
 
     /// ALL include terms must appear in at least one field.
     /// NO exclude terms may appear in any field.
-    /// IF a `from:` filter is set AND the caller passes a channel name, the channel
-    /// must contain the filter substring. When the caller does NOT pass a channel
-    /// name, the `from:` filter is ignored — useful for filtering non-video entities
-    /// like topic names in the sidebar, where the creator concept doesn't apply.
-    func matches(fields: [String], channelName: String? = nil) -> Bool {
-        if let fromCreator, !fromCreator.isEmpty, let channelName {
-            guard channelName.localizedStandardContains(fromCreator) else {
-                return false
+    /// IF a `from:` filter is set AND the caller passes a channel name OR handle,
+    /// at least one of those identifiers must contain the filter substring. The
+    /// `@` prefix on the filter is stripped before matching so users can type either
+    /// `from:hipyo` or `from:@hipyo` and both work. When the caller passes neither
+    /// channel name nor handle, the `from:` filter is ignored — useful for non-video
+    /// entities like topic names in the sidebar.
+    func matches(
+        fields: [String],
+        channelName: String? = nil,
+        channelHandle: String? = nil
+    ) -> Bool {
+        if let fromCreator, !fromCreator.isEmpty {
+            // Strip optional @ prefix so users can type either form.
+            var needle = fromCreator
+            if needle.hasPrefix("@") {
+                needle.removeFirst()
+            }
+            // Both name and handle are eligible match targets. Pass at least one.
+            if channelName == nil && channelHandle == nil {
+                // Caller doesn't have a creator concept — skip the filter.
+            } else {
+                let nameMatch = channelName?.localizedStandardContains(needle) ?? false
+                let handleMatch = channelHandle?.localizedStandardContains(needle) ?? false
+                guard nameMatch || handleMatch else {
+                    return false
+                }
             }
         }
         for term in excludeTerms {

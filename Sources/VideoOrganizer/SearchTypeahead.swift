@@ -6,6 +6,20 @@ struct SearchTypeahead: View {
     let searchText: String
     let onSelect: (TypeaheadSuggestion) -> Void
 
+    /// The token shown highlighted as the user's "typed" text. For `from:` suggestions
+    /// the highlight should match against the partial after `from:`, not the literal
+    /// search text including the operator.
+    private var highlightToken: String {
+        if let last = searchText.split(separator: " ", omittingEmptySubsequences: false).last,
+           last.hasPrefix("from:") {
+            var partial = String(last.dropFirst("from:".count))
+            if partial.hasPrefix("@") { partial.removeFirst() }
+            if partial.hasPrefix("\"") { partial.removeFirst() }
+            return partial
+        }
+        return searchText
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(suggestions) { suggestion in
@@ -18,7 +32,14 @@ struct SearchTypeahead: View {
                             .foregroundStyle(suggestion.kind == .topic ? TopicTheme.iconColor(for: suggestion.text) : .secondary)
                             .frame(width: 20)
 
-                        TypeaheadText(text: suggestion.text, typed: searchText)
+                        VStack(alignment: .leading, spacing: 1) {
+                            TypeaheadText(text: suggestion.text, typed: highlightToken)
+                            if suggestion.kind == .fromCreator, let handle = suggestion.handle, !handle.isEmpty {
+                                Text(handle.hasPrefix("@") ? handle : "@\(handle)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
 
                         Spacer()
 
