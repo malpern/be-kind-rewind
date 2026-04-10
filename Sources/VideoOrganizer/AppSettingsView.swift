@@ -185,6 +185,31 @@ struct AppSettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 12) {
+                    Text("Claude")
+                        .font(.title3.weight(.semibold))
+
+                    Toggle(isOn: Bindable(store).claudeThemeClassificationEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Enable Claude theme classification")
+                                .font(.body.weight(.medium))
+                            Text("When you visit a creator detail page, classify their videos into themed clusters using Claude Haiku. Costs roughly $0.001-0.005 per creator on first visit, then cached forever. Off by default — flip this on if you want richer creator pages with theme tags, series detection, and AI-generated about paragraphs.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .accessibilityIdentifier("claudeThemeClassificationToggle")
+
+                    Text("Cached results live in the local SQLite database. Re-runs only when a creator gains many new videos or when you manually clear the cache.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
                     Text("YouTube")
                         .font(.title3.weight(.semibold))
 

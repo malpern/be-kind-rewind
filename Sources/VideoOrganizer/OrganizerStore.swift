@@ -119,6 +119,14 @@ final class OrganizerStore {
         didSet { UserDefaults.standard.set(apiSearchFallbackEnabled, forKey: "apiSearchFallbackEnabled") }
     }
 
+    /// User opt-in for the Phase 2 Claude theme classifier on the creator detail page.
+    /// Default off — running classification on every creator costs ~$0.001-0.005 per
+    /// creator (cached forever), and we want the user to make an explicit decision
+    /// before any LLM cost is incurred. Mirrors the apiSearchFallbackEnabled gate.
+    var claudeThemeClassificationEnabled: Bool = UserDefaults.standard.bool(forKey: "claudeThemeClassificationEnabled") {
+        didSet { UserDefaults.standard.set(claudeThemeClassificationEnabled, forKey: "claudeThemeClassificationEnabled") }
+    }
+
     /// Maximum estimated YouTube units a single Watch refresh pass is allowed to spend on API
     /// fallbacks. Acts as a hard ceiling on top of any user approvals.
     var apiFallbackPassBudgetUnits: Int = {
