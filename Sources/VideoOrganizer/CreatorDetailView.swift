@@ -1145,11 +1145,19 @@ struct CreatorDetailView: View {
                         x: .value("Share", share.percentage),
                         y: .value("Topic", share.topicName)
                     )
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color.accentColor.opacity(0.85), Color.accentColor],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .cornerRadius(3)
                     .annotation(position: .trailing, alignment: .leading) {
                         Text(percentageString(share.percentage))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
+                            .padding(.leading, 4)
                     }
                 }
                 .chartXScale(domain: 0...max(1.0, page.topicShare.map(\.percentage).max() ?? 1.0))
@@ -1157,9 +1165,18 @@ struct CreatorDetailView: View {
                 .chartYAxis {
                     AxisMarks(position: .leading) { _ in
                         AxisValueLabel()
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .frame(height: max(60, CGFloat(page.topicShare.count) * 24))
+                .chartPlotStyle { plotArea in
+                    plotArea
+                        .background(Color.gray.opacity(0.04))
+                        .border(Color.gray.opacity(0.1), width: 0.5)
+                }
+                .frame(height: max(60, CGFloat(page.topicShare.count) * 26))
+                .animation(.easeInOut(duration: 0.35), value: page.topicShare.map(\.percentage))
+                .accessibilityLabel("Topic share for \(page.channelName)")
             }
         }
         .frame(minWidth: 200, idealWidth: 280, alignment: .leading)
@@ -1173,6 +1190,7 @@ struct CreatorDetailView: View {
                 .foregroundStyle(.secondary)
 
             let totalDated = page.monthlyVideoCounts.reduce(0) { $0 + $1.count }
+            let maxCount = page.monthlyVideoCounts.map(\.count).max() ?? 0
             if totalDated == 0 {
                 Text("No dated videos available")
                     .font(.caption)
@@ -1181,21 +1199,46 @@ struct CreatorDetailView: View {
                 Chart(page.monthlyVideoCounts) { bucket in
                     BarMark(
                         x: .value("Month", bucket.month, unit: .month),
-                        y: .value("Videos", bucket.count)
+                        y: .value("Videos", bucket.count),
+                        width: .fixed(8)
                     )
-                    .foregroundStyle(.tint.opacity(bucket.count == 0 ? 0.15 : 0.8))
+                    .foregroundStyle(
+                        bucket.count == 0
+                        ? Color.accentColor.opacity(0.15)
+                        : Color.accentColor.opacity(0.85)
+                    )
+                    .cornerRadius(2)
                 }
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .month, count: 6)) { value in
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2]))
+                            .foregroundStyle(.gray.opacity(0.2))
+                        AxisTick(length: 4)
+                            .foregroundStyle(.gray.opacity(0.4))
                         if value.as(Date.self) != nil {
                             AxisValueLabel(format: .dateTime.month(.abbreviated).year(.twoDigits))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
                 .chartYAxis {
-                    AxisMarks(position: .leading)
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2]))
+                            .foregroundStyle(.gray.opacity(0.2))
+                        AxisValueLabel()
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .chartPlotStyle { plotArea in
+                    plotArea
+                        .background(Color.gray.opacity(0.04))
+                        .border(Color.gray.opacity(0.1), width: 0.5)
                 }
                 .frame(height: 100)
+                .animation(.easeInOut(duration: 0.35), value: page.monthlyVideoCounts.map(\.count))
+                .accessibilityLabel("Monthly upload cadence for \(page.channelName), peak \(maxCount) in a single month")
             }
         }
         .frame(minWidth: 240, idealWidth: 320, alignment: .leading)
