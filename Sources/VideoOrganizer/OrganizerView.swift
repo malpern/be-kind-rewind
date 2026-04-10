@@ -1,4 +1,5 @@
 import SwiftUI
+import TaggingKit
 
 /// Root three-column layout: topic sidebar, collection grid, and optional inspector.
 struct OrganizerView: View {
@@ -11,6 +12,7 @@ struct OrganizerView: View {
     /// restores to `.all` when the user navigates back. The toolbar's standard sidebar
     /// toggle (⌘0) lets the user override this at any time.
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -113,18 +115,13 @@ struct OrganizerView: View {
             ),
             presenting: store.pendingAPIFallbackApproval
         ) { request in
-            Button("Use API once") {
+            // Simplified to two buttons. The previous "Use for whole refresh /
+            // Don't ask again this refresh" actions belonged in Settings, not
+            // in a yes/no decision dialog the user has to read every time.
+            Button("Use API") {
                 store.approvePendingAPIFallback(rememberForPass: false)
             }
-            if store.apiFallbackPassActive {
-                Button("Use API for the rest of this refresh") {
-                    store.approvePendingAPIFallback(rememberForPass: true)
-                }
-                Button("Don’t ask again this refresh", role: .destructive) {
-                    store.denyPendingAPIFallback(rememberForPass: true)
-                }
-            }
-            Button("Not Now", role: .cancel) {
+            Button("Skip", role: .cancel) {
                 store.denyPendingAPIFallback(rememberForPass: false)
             }
         } message: { request in
@@ -250,6 +247,8 @@ struct OrganizerView: View {
                 .help("YouTube API daily quota exceeded. Some features are limited until midnight Pacific time.")
         }
 
+        scrapeHealthIndicator
+
         if thumbnailCache.isDownloading {
             HStack(spacing: 4) {
                 ProgressView().controlSize(.small)
@@ -259,6 +258,42 @@ struct OrganizerView: View {
             }
             .accessibilityLabel("Downloading thumbnails: \(thumbnailCache.downloadedCount) of \(thumbnailCache.totalCount)")
         }
+    }
+
+    /// Phase 3: scrape health pill in the toolbar. Hidden when state is healthy
+    /// or unknown (no recent attempts) — only surfaces when there's something
+    /// to flag. Click to open Settings (where the discovery section can show
+    /// recent failures and let the user clear/retry). Tooltip shows the actual
+    /// failure reason and how many of the recent N attempts failed.
+    @ViewBuilder
+    private var scrapeHealthIndicator: some View {
+        if let health = store.scrapeHealth, health.state == .degraded || health.state == .blocked {
+            let icon = health.state == .blocked ? "wifi.exclamationmark" : "exclamationmark.triangle"
+            let color: Color = health.state == .blocked ? .red : .orange
+            let label = health.state == .blocked ? "Scrape Blocked" : "Scrape Degraded"
+            Button {
+                openSettings()
+            } label: {
+                Label(label, systemImage: icon)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(color)
+            }
+            .buttonStyle(.borderless)
+            .help(scrapeHealthTooltip(health))
+            .accessibilityIdentifier("scrapeHealthIndicator")
+        }
+    }
+
+    private func scrapeHealthTooltip(_ health: ScrapeHealthSnapshot) -> String {
+        var parts: [String] = []
+        parts.append("\(health.recentFailures) of \(health.recentAttempts) recent scrape\(health.recentAttempts == 1 ? "" : "s") failed (\(Int(health.failureRate * 100))%).")
+        if let reason = health.suspectedReason {
+            parts.append("Likely cause: \(reason).")
+        }
+        if let lastFailure = health.lastFailureMessage {
+            parts.append("Most recent error: \(lastFailure)")
+        }
+        return parts.joined(separator: " ")
     }
 
     private func prefetchWatchThumbnailsIfNeeded() async {

@@ -302,7 +302,7 @@ extension OrganizerStore {
 
                     let approved = await requestAPIFallbackApproval(
                         kind: .search,
-                        reason: "Search scraping failed for “\(plan.query)”. Use the YouTube API to retry this search-based discovery lane.",
+                        reason: "Search scraping failed for “\(plan.query)”.",
                         operation: .searchList
                     )
                     guard approved else {
@@ -443,7 +443,7 @@ extension OrganizerStore {
         if !channelsWithoutUrl.isEmpty, let youtubeClient {
             let approved = await requestAPIFallbackApproval(
                 kind: .channelIcons,
-                reason: "Channel icon scraping missed \(channelsWithoutUrl.count) creator avatar\(channelsWithoutUrl.count == 1 ? "" : "s"). Use the YouTube API to fetch the missing icons.",
+                reason: "Missing \(channelsWithoutUrl.count) creator avatar\(channelsWithoutUrl.count == 1 ? "" : "s") after scraping.",
                 operation: .channelsListSnippet
             )
             if approved {
@@ -973,14 +973,21 @@ enum CandidateDiscoveryCoordinator {
             )
 
             let scannedAt = ISO8601DateFormatter().string(from: Date())
+            let now = Date()
             let archived = recent.map { video -> ArchivedChannelVideo in
                 let metadata = metadataMap[video.videoId]
+                // Phase 3 fix: scrapetube returns relative-date strings ("5 years
+                // ago") which break date parsing downstream. Normalize via the
+                // shared helper. API metadata wins when present (it's already
+                // ISO 8601), then scrapetube relative date, then nil.
+                let publishedRaw = metadata?.formattedDate ?? video.publishedAt
+                let publishedNormalized = OrganizerStore.normalizePublishedAt(publishedRaw, now: now)
                 return ArchivedChannelVideo(
                     channelId: channel.channelId,
                     videoId: video.videoId,
                     title: video.title,
                     channelName: video.channelTitle ?? channel.name,
-                    publishedAt: metadata?.formattedDate ?? video.publishedAt,
+                    publishedAt: publishedNormalized,
                     duration: metadata?.formattedDuration ?? video.duration,
                     viewCount: metadata?.formattedViewCount ?? video.viewCount,
                     channelIconUrl: channel.iconUrl,
@@ -988,14 +995,14 @@ enum CandidateDiscoveryCoordinator {
                 )
             }
             try store.store.upsertChannelDiscoveryArchive(channelId: channel.channelId, videos: archived, scannedAt: scannedAt)
-            return try store.store.archivedVideosForChannels([channel.channelId], perChannelLimit: 24)
+            return try store.store.archivedVideosForChannels([channel.channelId], perChannelLimit: 200)
         } catch {
             // Scraper failed — fall back to YouTube API if available
             guard let youtubeClient else { throw error }
 
             let approved = await store.requestAPIFallbackApproval(
                 kind: .channelArchive,
-                reason: "Archive scraping failed for \(channel.name). Use the YouTube API to check this creator for fresh uploads.",
+                reason: "Scraping failed for \(channel.name).",
                 operation: .channelArchiveRefresh
             )
             guard approved else { return existingArchive }

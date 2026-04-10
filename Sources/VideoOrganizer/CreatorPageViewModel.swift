@@ -398,7 +398,14 @@ enum CreatorPageBuilder {
         // 3. Pull the channel discovery archive (most recent ~24 uploads we know about).
         let archive: [ArchivedChannelVideo]
         do {
-            archive = try store.store.archivedVideosForChannels([channelId], perChannelLimit: 32)
+            // perChannelLimit was 32 in early Phase 1 because the archive was
+            // assumed to hold ~16 recent uploads per channel. Phase 3 raised
+            // the cap to match the scraper's per-call limit of 400 so deeper
+            // catalogs (Ben Frain, etc.) surface fully on the page. Reading
+            // 400 rows is sub-millisecond — the cost is dominated by the
+            // downstream helpers, all of which scale linearly and have
+            // sub-microsecond per-row constants after the Phase 3 perf fixes.
+            archive = try store.store.archivedVideosForChannels([channelId], perChannelLimit: 400)
         } catch {
             AppLogger.app.error("CreatorPageBuilder failed to fetch archive for \(channelId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             archive = []
@@ -888,14 +895,65 @@ enum CreatorPageBuilder {
             .map { $0.key }
         guard !scopeTopicIds.isEmpty else { return [:] }
 
-        // Pre-compute each candidate creator's channel median, cached so we don't
-        // walk their full video list repeatedly. Built lazily as we encounter
-        // creators across the scope topics.
+        // Phase 3 perf fix (was 27 SECONDS for creators with ~7 scope topics):
+        //
+        // Pre-aggregate everything we need in a SINGLE pass over store.topics
+        // before entering the per-scope loop. The old version called
+        // `store.videosForTopicIncludingSubtopics` (a SQLite query, no cache)
+        // for every (creator, topic) pair while computing medians, which scales
+        // O(scopes × creators × topics) and dominated the entire page build.
+        //
+        // The new version walks each topic ONCE, builds:
+        //   - videosByTopic: cached list of videos per scope topic
+        //   - parsedViewsCache: parsed Int view counts per video so we never
+        //     parse the same string twice
+        //   - allVideosByCreator: every video grouped by channelId, used for
+        //     channel-median computation
+        // Then the inner loop is pure dictionary lookups — O(1) per creator.
+        let aggregateStart = CFAbsoluteTimeGetCurrent()
+        var videosByTopic: [Int64: [VideoViewModel]] = [:]
+        var allVideosByCreator: [String: [VideoViewModel]] = [:]
+        for topic in store.topics {
+            let topicVideos = store.videosForTopicIncludingSubtopics(topic.id)
+            if scopeTopicIds.contains(topic.id) {
+                videosByTopic[topic.id] = topicVideos
+            }
+            for video in topicVideos {
+                guard let cid = video.channelId, !cid.isEmpty else { continue }
+                allVideosByCreator[cid, default: []].append(video)
+            }
+        }
+        AppLogger.file.log("    leaderboard.aggregate=\(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - aggregateStart) * 1_000))ms topics=\(store.topics.count) creators=\(allVideosByCreator.count)", category: "perf")
+
+        // Parse view counts once per video. Many videos appear in multiple
+        // topics (rollups, subtopic membership) so a per-videoId cache pays off.
+        var parsedViewsCache: [String: Int] = [:]
+        func parsedViews(_ video: VideoViewModel) -> Int {
+            if let cached = parsedViewsCache[video.videoId] {
+                return cached
+            }
+            let parsed = video.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
+            parsedViewsCache[video.videoId] = parsed
+            return parsed
+        }
+
+        // Channel median cache: built lazily on demand, but each lookup is now
+        // O(videos_for_one_creator) instead of O(all_videos_in_library).
         var medianCache: [String: Int] = [:]
+        func channelMedian(forCreator creatorId: String) -> Int {
+            if let cached = medianCache[creatorId] { return cached }
+            let videos = allVideosByCreator[creatorId] ?? []
+            // Build proxies that read from the parsed-views cache so we don't
+            // re-parse the same strings inside OutlierAnalytics.
+            let proxies = videos.map { LeaderboardOutlierProxy(parsedViewCount: parsedViews($0)) }
+            let median = OutlierAnalytics.channelMedianViews(proxies)
+            medianCache[creatorId] = median
+            return median
+        }
 
         var result: [Int64: [CreatorLeaderboardEntry]] = [:]
         for topicId in scopeTopicIds {
-            let topicVideos = store.videosForTopicIncludingSubtopics(topicId)
+            guard let topicVideos = videosByTopic[topicId] else { continue }
 
             // Group this topic's videos by channelId so we have one bucket per creator.
             var byCreator: [String: [VideoViewModel]] = [:]
@@ -910,42 +968,27 @@ enum CreatorPageBuilder {
                     continue
                 }
 
-                // Lazily compute the channel median across ALL their known videos
-                // (across every topic the user has saved them in).
-                let channelMedian: Int
-                if let cached = medianCache[creatorId] {
-                    channelMedian = cached
-                } else {
-                    let allVideos = store.topics
-                        .flatMap { store.videosForTopicIncludingSubtopics($0.id) }
-                        .filter { $0.channelId == creatorId }
-                    let proxies = allVideos.map { LeaderboardOutlierProxy(video: $0) }
-                    channelMedian = OutlierAnalytics.channelMedianViews(proxies)
-                    medianCache[creatorId] = channelMedian
-                }
+                let median = channelMedian(forCreator: creatorId)
 
-                // Three metrics for THIS topic only.
+                // Three metrics for THIS topic only — all using the parsed-views
+                // cache so we never touch parseViewCount more than once per video.
                 let savedCount = videosInTopic.count
-
                 let outlierCount: Int
                 let totalViewsInTopic: Int
-                if channelMedian > 0 {
+                if median > 0 {
                     var outlierTally = 0
                     var viewSum = 0
+                    let outlierFloor = median * Int(OutlierAnalytics.defaultOutlierThreshold)
                     for video in videosInTopic {
-                        let parsedViews = video.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
-                        viewSum += parsedViews
-                        if parsedViews >= channelMedian * Int(OutlierAnalytics.defaultOutlierThreshold) {
-                            outlierTally += 1
-                        }
+                        let views = parsedViews(video)
+                        viewSum += views
+                        if views >= outlierFloor { outlierTally += 1 }
                     }
                     outlierCount = outlierTally
                     totalViewsInTopic = viewSum
                 } else {
                     outlierCount = 0
-                    totalViewsInTopic = videosInTopic.reduce(0) { acc, v in
-                        acc + (v.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0)
-                    }
+                    totalViewsInTopic = videosInTopic.reduce(0) { $0 + parsedViews($1) }
                 }
 
                 entries.append(CreatorLeaderboardEntry(
@@ -977,16 +1020,17 @@ enum CreatorPageBuilder {
     }
 }
 
-/// Tiny adapter so OutlierAnalytics.channelMedianViews can consume VideoViewModel.
+/// Tiny adapter so OutlierAnalytics.channelMedianViews can consume an
+/// already-parsed view count without re-running the string parser. Phase 3
+/// perf fix: the leaderboard builder now parses each video's view count
+/// exactly once and feeds the integer here, instead of having the proxy
+/// re-parse the original string field every time it's accessed.
 private struct LeaderboardOutlierProxy: OutlierAnalyzable {
-    let video: VideoViewModel
+    let parsedViewCount: Int
     var outlierViewCount: Int? {
-        let parsed = video.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
-        return parsed > 0 ? parsed : nil
+        parsedViewCount > 0 ? parsedViewCount : nil
     }
-    var outlierAgeDays: Int? {
-        video.publishedAt.map { CreatorAnalytics.parseAge($0) }
-    }
+    var outlierAgeDays: Int? { nil } // recency weighting unused for median computation
 }
 
 /// Continuation of CreatorPageBuilder helpers. The leaderboard helpers above

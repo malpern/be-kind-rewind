@@ -107,6 +107,12 @@ struct CreatorDetailView: View {
     /// from a view body slows the page noticeably.
     @State private var hasClaudeKeyCached: Bool = false
 
+    /// Section anchor the body should scroll to next. Set by interactions
+    /// elsewhere on the page (e.g. clicking a theme capsule scrolls to All
+    /// Videos with that tag filtered). The body's ScrollViewReader observes
+    /// this via .onChange and clears the flag after performing the scroll.
+    @State private var pendingScrollAnchor: SectionAnchor?
+
     /// Phase 3: sort order for the All Videos GRID view. The table view has
     /// built-in sortable column headers, but the grid needs an explicit picker
     /// to match the main save window's sort menu. Sticky across launches.
@@ -174,10 +180,10 @@ struct CreatorDetailView: View {
 
     /// Section anchors for ⌘1–⌘0 jump shortcuts. The order matches the visual order
     /// of sections in the page body and the keyboard shortcuts in `sectionShortcuts`.
-    /// `notes` is the 10th section so it gets ⌘0 (matches the macOS convention of
-    /// ⌘0 = "tenth" in tab/window pickers).
+    /// `notes` is the 9th section so it gets ⌘9; ⌘0 is unused now that the standalone
+    /// themes section was folded into the identity card.
     enum SectionAnchor: Hashable {
-        case identity, whatsNew, hits, themes, allVideos, byTheme, playlists, niches, leaderboard, notes
+        case identity, whatsNew, hits, allVideos, byTheme, playlists, niches, leaderboard, notes
     }
 
     var body: some View {
@@ -187,7 +193,6 @@ struct CreatorDetailView: View {
                     identityCard.id(SectionAnchor.identity)
                     whatsNewSection.id(SectionAnchor.whatsNew)
                     hitsSection.id(SectionAnchor.hits)
-                    themeCapsulesSection.id(SectionAnchor.themes)
                     allVideosSection.id(SectionAnchor.allVideos)
                     byThemeSection.id(SectionAnchor.byTheme)
                     playlistsSection.id(SectionAnchor.playlists)
@@ -201,6 +206,17 @@ struct CreatorDetailView: View {
                 .padding(.bottom, 32)
             }
             .background(sectionShortcuts(scroller: scroller))
+            // Theme capsule click → set pendingScrollAnchor → this onChange
+            // performs the scroll inside the ScrollViewReader's closure where
+            // the proxy is in scope. Cleared after firing so re-clicking the
+            // same anchor still scrolls.
+            .onChange(of: pendingScrollAnchor) { _, new in
+                guard let new else { return }
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    scroller.scrollTo(new, anchor: .top)
+                }
+                pendingScrollAnchor = nil
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background)
@@ -222,6 +238,25 @@ struct CreatorDetailView: View {
             // (the builder reads the previous timestamp to compute "new since
             // last visit"). Bumping it before the build would always yield 0.
             store.markCreatorVisited(channelId: channelId)
+            // Phase 3: auto-trigger an archive scrape on first visit when the
+            // creator has zero archive entries. The Watch refresh pipeline only
+            // populates archives for channels in active candidate discovery, so
+            // any creator outside that path stays empty until manually loaded.
+            // We only fire when there's been NO previous load attempt this
+            // session (loadingFullHistoryChannels and lastFullHistoryLoadCount
+            // are both empty for this channelId) so navigating back to the
+            // page doesn't re-scrape.
+            if page.lastRefreshedAt == nil
+                && page.savedVideoCount > 0
+                && !store.loadingFullHistoryChannels.contains(channelId)
+                && store.lastFullHistoryLoadCount[channelId] == nil
+                && store.lastFullHistoryLoadError[channelId] == nil {
+                AppLogger.file.log("Auto-loading archive for empty-archive creator \(channelId)", category: "discovery")
+                store.loadFullChannelHistory(
+                    channelId: channelId,
+                    channelName: page.channelName
+                )
+            }
             // Reset leaderboard scope to the page creator's primary topic on every
             // navigation. The user can flip the picker to look at other topics, but
             // navigating to a new creator should always start at THEIR primary topic.
@@ -286,13 +321,12 @@ struct CreatorDetailView: View {
             ("1", .identity),
             ("2", .whatsNew),
             ("3", .hits),
-            ("4", .themes),
-            ("5", .allVideos),
-            ("6", .byTheme),
-            ("7", .playlists),
-            ("8", .niches),
-            ("9", .leaderboard),
-            ("0", .notes),
+            ("4", .allVideos),
+            ("5", .byTheme),
+            ("6", .playlists),
+            ("7", .niches),
+            ("8", .leaderboard),
+            ("9", .notes),
         ]
         ZStack {
             ForEach(bindings, id: \.1) { key, anchor in
@@ -319,11 +353,16 @@ struct CreatorDetailView: View {
     @ViewBuilder
     private var identityCard: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 20) {
+            HStack(alignment: .top, spacing: 24) {
                 avatar
                     .frame(width: 160, height: 160)
 
-                VStack(alignment: .leading, spacing: 6) {
+                // Middle column: name, subtitle, about, tier/stats, actions.
+                // The about paragraph reads at .body size with generous line
+                // spacing (was .callout with no lineSpacing — too dense). The
+                // column flexes via .frame(maxWidth: .infinity) so the right
+                // themes column can claim its share of the row.
+                VStack(alignment: .leading, spacing: 8) {
                     Text(page.channelName)
                         .font(.largeTitle.weight(.semibold))
                         .lineLimit(2)
@@ -342,22 +381,21 @@ struct CreatorDetailView: View {
 
                     if let about = page.aboutParagraph {
                         Text(about)
-                            .font(.callout)
+                            .font(.body)
                             .foregroundStyle(.secondary)
-                            .lineLimit(4)
-                            .truncationMode(.tail)
+                            .lineSpacing(7)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
-                            .padding(.top, 4)
+                            .padding(.top, 8)
                     } else if page.isClassifyingThemes {
                         HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
                             Text("Generating creator summary…")
-                                .font(.caption)
+                                .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(.top, 4)
+                        .padding(.top, 6)
                     }
 
                     tierLine
@@ -366,8 +404,16 @@ struct CreatorDetailView: View {
                         .padding(.top, 8)
                 }
                 .padding(.top, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
 
-                Spacer(minLength: 0)
+                // Right column: themes capsules. Moved up here from a separate
+                // mid-page section so the description column is naturally
+                // narrower (better legibility) and tags are visible at a glance
+                // alongside the channel description. Capped at 280pt wide so
+                // the description gets the lion's share of available space.
+                themesIdentityColumn
+                    .frame(width: 280, alignment: .topLeading)
             }
             .contentShape(Rectangle())
             .contextMenu {
@@ -378,14 +424,84 @@ struct CreatorDetailView: View {
         }
     }
 
-    /// Inline action buttons that live in the header next to the avatar/title, the
-    /// way Apple Music's artist hero (Play / Shuffle / ...) and the Mac App Store
-    /// product page (Get button) put primary actions adjacent to the entity. macOS
-    /// users grab these faster than reaching for the toolbar.
-    ///
-    /// The action set is deliberately small and meaningful for a *creator on this page*:
-    /// Open on YouTube (prominent primary), Pin (favorite), Copy Link, Share (system
-    /// share sheet), and Exclude (destructive).
+    /// Themes column rendered inline in the identity card. Hosts the same
+    /// content the standalone `themeCapsulesSection` used to render — the
+    /// FlowLayout-wrapped capsules, the staleness badge, the refresh button,
+    /// the classifying spinner, and the empty-state row — but laid out for a
+    /// fixed-width right column instead of a full-width section.
+    @ViewBuilder
+    private var themesIdentityColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Themes")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if selectedThemeLabel != nil {
+                    Button {
+                        selectedThemeLabel = nil
+                    } label: {
+                        Image(systemName: "xmark.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.tint)
+                    .help("Clear theme filter")
+                }
+                if !page.themes.isEmpty {
+                    Button {
+                        store.classifyCreatorThemesIfNeeded(
+                            channelId: channelId,
+                            channelName: page.channelName,
+                            force: true
+                        )
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Re-run theme classification with the latest video list")
+                    .disabled(page.isClassifyingThemes)
+                }
+            }
+
+            if !page.themes.isEmpty {
+                if let cachedCount = page.themes.first?.classifiedVideoCount,
+                   cachedCount > 0,
+                   page.totalUploadsKnown > cachedCount {
+                    Text("\(page.totalUploadsKnown - cachedCount) new since last classification")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                // One theme per row — gives each capsule a clean horizontal
+                // hit area and lets long labels truncate predictably without
+                // disrupting neighbor layout. Click jumps to All Videos and
+                // applies the theme as a filter (see themeCapsule action).
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(page.themes, id: \.label) { theme in
+                        themeCapsule(theme)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else if page.isClassifyingThemes {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Generating tags…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                themesEmptyStateRow
+            }
+        }
+    }
+
+    /// Inline action buttons that live in the header next to the avatar/title.
+    /// Slimmed down per user feedback: Pin, Copy Link, and Exclude were removed.
+    /// Pin lived next to Open and added clutter for a feature most users don't
+    /// touch from the page. Copy Link is redundant with the system Share sheet.
+    /// Exclude is a destructive action that's now docked in the bottom Channel
+    /// Information area where it can't be triggered accidentally.
     @ViewBuilder
     private var headerActionButtons: some View {
         HStack(spacing: 8) {
@@ -397,36 +513,6 @@ struct CreatorDetailView: View {
             .help("Open this channel on YouTube")
             .accessibilityIdentifier("creatorHeaderYouTubeButton")
 
-            Button {
-                store.toggleFavoriteCreator(
-                    channelId: channelId,
-                    channelName: page.channelName,
-                    iconUrl: page.avatarUrl?.absoluteString
-                )
-            } label: {
-                Label(
-                    page.isFavorite ? "Pinned" : "Pin",
-                    systemImage: page.isFavorite ? "pin.fill" : "pin"
-                )
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .help(page.isFavorite
-                  ? "Remove from pinned creators (their videos will no longer be boosted in Watch refresh)"
-                  : "Pin this creator (their videos will be prioritized in Watch refresh)")
-            .accessibilityIdentifier("creatorHeaderPinButton")
-
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(page.youtubeURL.absoluteString, forType: .string)
-            } label: {
-                Label("Copy Link", systemImage: "link")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .help("Copy this channel's YouTube URL to the clipboard")
-            .accessibilityIdentifier("creatorHeaderCopyLinkButton")
-
             ShareLink(item: page.youtubeURL, subject: Text(page.channelName)) {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
@@ -434,27 +520,6 @@ struct CreatorDetailView: View {
             .controlSize(.regular)
             .help("Share this channel via the system share sheet")
             .accessibilityIdentifier("creatorHeaderShareButton")
-
-            Button(role: page.isExcluded ? nil : .destructive) {
-                if page.isExcluded {
-                    store.restoreExcludedCreator(channelId: channelId)
-                } else {
-                    store.excludeCreatorFromWatch(
-                        channelId: channelId,
-                        channelName: page.channelName,
-                        channelIconUrl: page.avatarUrl?.absoluteString
-                    )
-                }
-            } label: {
-                Label(
-                    page.isExcluded ? "Excluded" : "Exclude",
-                    systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
-                )
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .help(page.isExcluded ? "Restore this creator to Watch discovery" : "Hide this creator from Watch discovery")
-            .accessibilityIdentifier("creatorHeaderExcludeButton")
         }
     }
 
@@ -560,10 +625,11 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private var whatsNewSection: some View {
-        if !page.recentVideos.isEmpty {
-            // Multiple videos in the last 14 days → grid layout, "Recent uploads" header.
-            VStack(alignment: .leading, spacing: 8) {
-                sinceLastVisitBanner
+        VStack(alignment: .leading, spacing: 8) {
+            emptyArchiveBanner
+            sinceLastVisitBanner
+            if !page.recentVideos.isEmpty {
+                // Multiple videos in the last 14 days → grid layout, "Recent uploads" header.
                 HStack(alignment: .firstTextBaseline) {
                     if page.recentVideos.count == 1 {
                         Text("What's new")
@@ -592,16 +658,87 @@ struct CreatorDetailView: View {
                     // so the visual treatment matches the rest of the app.
                     recentUploadsGrid
                 }
-            }
-        } else if let latest = page.latestVideo {
-            // Window was empty (creator hasn't posted in the last 14 days), but we
-            // still want to surface their most recent upload as a fallback.
-            VStack(alignment: .leading, spacing: 8) {
-                sinceLastVisitBanner
+            } else if let latest = page.latestVideo {
+                // Window was empty (creator hasn't posted in the last 14 days), but we
+                // still want to surface their most recent upload as a fallback.
                 Text("What's new")
                     .font(.title3.weight(.semibold))
-
                 whatsNewRow(latest)
+            }
+        }
+    }
+
+    /// Phase 3: banner shown when the creator's archive is empty (we have no
+    /// scraped uploads, only saved videos). Tells the user *why* the page only
+    /// shows N saved videos and offers a one-click action to scrape the
+    /// channel's recent uploads. Also surfaces the error reason if a previous
+    /// load attempt failed, instead of failing silently.
+    @ViewBuilder
+    private var emptyArchiveBanner: some View {
+        let archiveIsEmpty = page.lastRefreshedAt == nil && page.savedVideoCount > 0
+        let isLoading = store.loadingFullHistoryChannels.contains(channelId)
+        let errorMessage = store.lastFullHistoryLoadError[channelId]
+        if archiveIsEmpty || errorMessage != nil {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: errorMessage != nil ? "exclamationmark.triangle.fill" : "tray")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(errorMessage != nil ? Color.orange : Color.accentColor)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    if let errorMessage {
+                        Text("Couldn't load this creator's recent uploads")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Showing only your saved videos")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("This creator's recent uploads aren't in your library yet. Scrape them from YouTube — no API quota cost.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 12)
+                Button {
+                    store.loadFullChannelHistory(
+                        channelId: channelId,
+                        channelName: page.channelName
+                    )
+                } label: {
+                    if isLoading {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading…")
+                        }
+                    } else {
+                        Label(errorMessage != nil ? "Retry" : "Load uploads", systemImage: "arrow.down.circle")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(isLoading)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(errorMessage != nil ? Color.orange.opacity(0.08) : Color.accentColor.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(errorMessage != nil ? Color.orange.opacity(0.3) : Color.accentColor.opacity(0.25), lineWidth: 0.5)
+            )
+            // When the load completes (count appears, even if 0), force a
+            // page rebuild so the new archive videos flow into allVideos and
+            // monthlyCounts immediately.
+            .onChange(of: store.lastFullHistoryLoadCount[channelId]) { _, newCount in
+                guard newCount != nil, !store.loadingFullHistoryChannels.contains(channelId) else { return }
+                page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
             }
         }
     }
@@ -912,70 +1049,11 @@ struct CreatorDetailView: View {
     // page model — page.theirHits and page.essentials — so the toggle is instant.)
 
     // MARK: - Theme capsules (LLM-driven)
-
-    @ViewBuilder
-    private var themeCapsulesSection: some View {
-        if !page.themes.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("Themes")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    if let cachedCount = page.themes.first?.classifiedVideoCount,
-                       cachedCount > 0,
-                       page.totalUploadsKnown > cachedCount {
-                        Text("· \(page.totalUploadsKnown - cachedCount) new since last classification")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    if selectedThemeLabel != nil {
-                        Button {
-                            selectedThemeLabel = nil
-                        } label: {
-                            Label("Clear", systemImage: "xmark.circle")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.tint)
-                    }
-                    Button {
-                        store.classifyCreatorThemesIfNeeded(
-                            channelId: channelId,
-                            channelName: page.channelName,
-                            force: true
-                        )
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Re-run theme classification with the latest video list")
-                    .disabled(page.isClassifyingThemes)
-                }
-
-                // Phase 3: replaced the horizontal ScrollView with a wrapping
-                // FlowLayout so capsules fill multiple rows instead of being
-                // hidden behind horizontal scroll. The layout reflows naturally
-                // when the page width changes (split-view, window resize).
-                FlowLayout(spacing: 8, lineSpacing: 8) {
-                    ForEach(page.themes, id: \.label) { theme in
-                        themeCapsule(theme)
-                    }
-                }
-            }
-        } else if page.isClassifyingThemes {
-            // Classification is mid-flight — show a single inline progress row.
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Generating tags…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            themesEmptyStateRow
-        }
-    }
+    //
+    // The standalone themeCapsulesSection was folded into the identity card's
+    // right column (`themesIdentityColumn`). The empty-state row, capsule
+    // helper, and refresh logic still live below — they're consumed by the
+    // new identity column.
 
     /// Discoverability empty state for the themes section. Branches on three
     /// reasons the cache is empty: no Claude API key, classification disabled,
@@ -1040,6 +1118,10 @@ struct CreatorDetailView: View {
                 selectedThemeLabel = nil
             } else {
                 selectedThemeLabel = theme.label
+                // Jump to the All Videos section so the user can immediately
+                // see the videos in this theme — the filter is already applied
+                // by the selectedThemeLabel binding in `filteredAllVideos`.
+                pendingScrollAnchor = .allVideos
             }
         } label: {
             HStack(spacing: 6) {
@@ -2198,6 +2280,36 @@ struct CreatorDetailView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(.quaternary, lineWidth: 0.5)
             )
+
+            // Destructive Exclude action docked at the bottom of the page,
+            // out of the header where it could be misclicked. The button
+            // toggles between Exclude (orange) and Restore (green-tinted).
+            HStack {
+                Spacer()
+                Button(role: page.isExcluded ? nil : .destructive) {
+                    if page.isExcluded {
+                        store.restoreExcludedCreator(channelId: channelId)
+                    } else {
+                        store.excludeCreatorFromWatch(
+                            channelId: channelId,
+                            channelName: page.channelName,
+                            channelIconUrl: page.avatarUrl?.absoluteString
+                        )
+                    }
+                } label: {
+                    Label(
+                        page.isExcluded ? "Restore from Watch" : "Exclude from Watch",
+                        systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .help(page.isExcluded
+                      ? "Restore this creator to Watch discovery"
+                      : "Hide this creator from Watch discovery")
+                .accessibilityIdentifier("creatorBottomExcludeButton")
+            }
+            .padding(.top, 8)
         }
     }
 

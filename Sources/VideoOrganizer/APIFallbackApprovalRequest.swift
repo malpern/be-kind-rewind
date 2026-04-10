@@ -38,22 +38,12 @@ struct APIFallbackApprovalRequest: Identifiable, Equatable {
         self.passActive = passActive
     }
 
+    /// Single-sentence summary suitable for the simplified approval dialog.
+    /// Drops the per-pass budget accounting and the quota-reset timestamp —
+    /// both belonged in a Settings inspector, not in a yes/no decision dialog.
+    /// The user just needs to know what failed, what it costs, and how much
+    /// daily quota is left.
     var message: String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        formatter.dateStyle = .none
-        formatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
-        let resetString = formatter.string(from: resetAt)
-        let remainingAfterApproval = max(0, remainingUnitsToday - estimatedUnits)
-
-        var lines: [String] = [reason, ""]
-        lines.append("Estimated cost: \(estimatedUnits) units.")
-        if passActive && passBudgetUnits > 0 {
-            let passRemaining = max(0, passBudgetUnits - passUnitsSpent)
-            lines.append("This refresh has spent \(passUnitsSpent) of \(passBudgetUnits) budgeted units (\(passRemaining) remaining).")
-        }
-        lines.append("Remaining today: \(remainingUnitsToday) units (after approval: \(remainingAfterApproval)).")
-        lines.append("Quota resets at \(resetString) Pacific.")
-        return lines.joined(separator: "\n")
+        return "\(reason) This will use \(estimatedUnits) of \(remainingUnitsToday) units remaining today."
     }
 }

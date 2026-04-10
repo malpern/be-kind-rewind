@@ -134,6 +134,31 @@ public struct YouTubeQuotaSnapshot: Sendable {
     public let recentDiscoveryEvents: [DiscoveryTelemetryEvent]
 }
 
+/// Phase 3: aggregated health signal computed from recent discovery events.
+/// Surfaced in the UI so the user can see at a glance whether scraping is
+/// working, occasionally failing, or consistently blocked. Computed lazily on
+/// demand from the ledger's existing event log — no separate persistence.
+public struct ScrapeHealthSnapshot: Sendable, Equatable {
+    public enum State: String, Sendable, Equatable {
+        case healthy        // most recent attempts succeeded
+        case degraded       // some failures but not consistent
+        case blocked        // sustained failures, likely blocked or rate limited
+        case unknown        // no recent attempts on record
+    }
+
+    public let state: State
+    public let recentAttempts: Int
+    public let recentFailures: Int
+    public let lastFailureMessage: String?
+    public let lastFailureAt: Date?
+    public let lastSuccessAt: Date?
+    public let suspectedReason: String?
+
+    public var failureRate: Double {
+        recentAttempts > 0 ? Double(recentFailures) / Double(recentAttempts) : 0
+    }
+}
+
 private struct YouTubeQuotaLedgerStore: Codable {
     var apiEvents: [YouTubeQuotaEvent] = []
     var discoveryEvents: [DiscoveryTelemetryEvent] = []
@@ -225,6 +250,82 @@ public actor YouTubeQuotaLedger {
         )
         pruneOldEvents()
         persist()
+    }
+
+    /// Phase 3: derive a scrape health summary from the most recent discovery
+    /// events. Looks at attempts in the last `windowMinutes` (default 60) and
+    /// classifies the state by failure rate + pattern matching on the most
+    /// recent failure message:
+    ///
+    /// - **healthy**: no failures, or failure rate < 30%
+    /// - **degraded**: failure rate 30-70%, or sustained failures with mixed
+    ///   success
+    /// - **blocked**: failure rate ≥ 70% with at least 3 attempts, OR the most
+    ///   recent failure message matches a blocking pattern (HTTP 429, captcha,
+    ///   "Sign in to confirm")
+    ///
+    /// Only counts terminal outcomes (succeeded/failed). `started` events
+    /// without a follow-up are ignored. Returns `.unknown` when there are no
+    /// recent attempts at all.
+    public func scrapeHealth(now: Date = Date(), windowMinutes: Int = 60) -> ScrapeHealthSnapshot {
+        let cutoff = now.addingTimeInterval(-Double(windowMinutes) * 60)
+        let recent = store.discoveryEvents
+            .filter { $0.timestamp >= cutoff }
+            .filter { $0.outcome == .succeeded || $0.outcome == .failed }
+
+        guard !recent.isEmpty else {
+            return ScrapeHealthSnapshot(
+                state: .unknown,
+                recentAttempts: 0,
+                recentFailures: 0,
+                lastFailureMessage: nil,
+                lastFailureAt: nil,
+                lastSuccessAt: nil,
+                suspectedReason: nil
+            )
+        }
+
+        let failures = recent.filter { $0.outcome == .failed }
+        let lastFailure = failures.last
+        let lastSuccess = recent.last { $0.outcome == .succeeded }
+        let failureRate = Double(failures.count) / Double(recent.count)
+
+        // Pattern detection on the most recent failure message — these
+        // substrings indicate the scrape is being actively rejected by YouTube,
+        // not just an intermittent timeout.
+        let lastMessage = lastFailure?.detail ?? ""
+        let lower = lastMessage.lowercased()
+        let blockedPatterns: [(String, String)] = [
+            ("http 429", "Rate limited (HTTP 429)"),
+            ("too many requests", "Rate limited (too many requests)"),
+            ("captcha", "Captcha challenge"),
+            ("sign in to confirm", "YouTube sign-in challenge"),
+            ("err_blocked", "Network blocked"),
+            ("forbidden", "Forbidden by upstream"),
+            ("403", "HTTP 403"),
+        ]
+        let matchedReason = blockedPatterns.first(where: { lower.contains($0.0) })?.1
+
+        let state: ScrapeHealthSnapshot.State
+        if matchedReason != nil {
+            state = .blocked
+        } else if failureRate >= 0.7 && recent.count >= 3 {
+            state = .blocked
+        } else if failureRate >= 0.3 {
+            state = .degraded
+        } else {
+            state = .healthy
+        }
+
+        return ScrapeHealthSnapshot(
+            state: state,
+            recentAttempts: recent.count,
+            recentFailures: failures.count,
+            lastFailureMessage: lastFailure?.detail,
+            lastFailureAt: lastFailure?.timestamp,
+            lastSuccessAt: lastSuccess?.timestamp,
+            suspectedReason: matchedReason
+        )
     }
 
     public func snapshot(now: Date = Date(), recentLimit: Int = 25) -> YouTubeQuotaSnapshot {

@@ -1358,6 +1358,36 @@ public final class TopicStore: Sendable {
         return Set(try db.prepare(query).map { $0[archiveVideoId] })
     }
 
+    /// Phase 3 migration helper: rows where `published_at` looks like a relative
+    /// date string ("5 years ago" / "2 months ago" / "Just now") instead of an
+    /// ISO 8601 timestamp. The Phase 3 archive normalizer rewrites these on
+    /// next-write but historical rows need a one-shot backfill.
+    public func archiveRowsWithRelativePublishedAt() throws -> [(channelId: String, videoId: String, publishedAt: String)] {
+        let query = """
+            SELECT channel_id, video_id, published_at
+            FROM channel_discovery_archive
+            WHERE published_at IS NOT NULL
+              AND (published_at LIKE '% ago%' OR published_at LIKE '%y ago%' OR published_at LIKE '%mo ago%' OR published_at = 'Just now')
+        """
+        var results: [(String, String, String)] = []
+        for row in try db.prepare(query) {
+            guard let channelId = row[0] as? String,
+                  let videoId = row[1] as? String,
+                  let publishedAt = row[2] as? String else { continue }
+            results.append((channelId, videoId, publishedAt))
+        }
+        return results
+    }
+
+    /// Phase 3 migration helper: rewrite a single archive row's `published_at`
+    /// in place. Used by the relative-date backfill — the caller computes the
+    /// normalized ISO 8601 string in Swift and passes it here.
+    public func updateArchivePublishedAt(channelId: String, videoId: String, publishedAt: String) throws {
+        try db.run(channelDiscoveryArchive
+            .filter(archiveChannelId == channelId && archiveVideoId == videoId)
+            .update(archivePublishedAt <- publishedAt))
+    }
+
     public func channelDiscoveryLastScannedAt(channelId: String) throws -> String? {
         for row in try db.prepare(channelDiscoveryState.filter(archiveChannelId == channelId).select(discoveryStateLastScannedAt)) {
             return row[discoveryStateLastScannedAt]

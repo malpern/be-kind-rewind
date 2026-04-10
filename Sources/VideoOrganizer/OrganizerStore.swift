@@ -111,6 +111,11 @@ final class OrganizerStore {
     var watchRefreshCurrentTopicName: String?
     var youtubeQuotaExhausted = false
     var youtubeQuotaSnapshot: YouTubeQuotaSnapshot?
+    /// Phase 3: aggregated scrape health from the last hour of discovery
+    /// events. Surfaced as a status pill in the topic sidebar footer and as a
+    /// sticky banner in the main view when state == .blocked. Refreshed after
+    /// every scrape attempt by `refreshScrapeHealth` and on a periodic timer.
+    var scrapeHealth: ScrapeHealthSnapshot?
     var pendingAPIFallbackApproval: APIFallbackApprovalRequest?
 
     /// User opt-in for the very expensive search.list API fallback (100 units/call).
@@ -185,6 +190,12 @@ final class OrganizerStore {
     /// show "loaded N more videos" feedback after the spinner clears.
     var lastFullHistoryLoadCount: [String: Int] = [:]
 
+    /// Phase 3: error reason for the most recent failed full-history load.
+    /// Cleared when a load succeeds. Distinguishes "scraper found 0 new videos"
+    /// (count == 0, no error) from "scraper failed silently" (count == 0 AND
+    /// error is set). Surfaced inline in the empty-archive banner.
+    var lastFullHistoryLoadError: [String: String] = [:]
+
     init(dbPath: String, claudeClient: ClaudeClient? = nil, startBackgroundTasks: Bool = true) throws {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }
@@ -197,6 +208,10 @@ final class OrganizerStore {
         refreshSeenHistoryCount()
         refreshExcludedCreators()
         refreshFavoriteCreators()
+        // Phase 3 one-shot migration: rewrite historical archive rows where
+        // published_at is a relative-date string ("5 years ago") into ISO 8601.
+        // Gated by a UserDefaults flag so it only runs once per install.
+        backfillArchivePublishedAtIfNeeded()
         if startBackgroundTasks {
             refreshBrowserExecutorStatus()
             processPendingSync(reason: "startup")
@@ -245,6 +260,17 @@ final class OrganizerStore {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.youtubeQuotaSnapshot = await YouTubeQuotaLedger.shared.snapshot()
+            self.scrapeHealth = await YouTubeQuotaLedger.shared.scrapeHealth()
+        }
+    }
+
+    /// Phase 3: refresh just the scrape health pill, without re-fetching the
+    /// quota snapshot. Called inline after every scrape attempt completes so
+    /// the UI updates immediately. Cheap — pure in-memory event filter.
+    func refreshScrapeHealth() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.scrapeHealth = await YouTubeQuotaLedger.shared.scrapeHealth()
         }
     }
 

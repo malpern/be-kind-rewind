@@ -43,9 +43,19 @@ public struct DiscoveryFallbackService: Sendable {
     }
 
     public func fetchRecentChannelUploads(channelId: String, maxResults: Int = 16) async throws -> [DiscoveryFallbackVideo] {
-        // Cap raised from 50 to 200 in Phase 3 to support the "Load full upload
-        // history" button on the creator detail page. The default for incremental
-        // discovery (16) and the existing refresh callers are unchanged.
+        // Cap raised from 50 to 400 across Phase 3 to support deeper catalogs
+        // on the creator detail page. Most channels return well under 200
+        // results, so the cap mostly matters for prolific creators. The
+        // default for incremental discovery (16) and existing refresh callers
+        // are unchanged — only the explicit "Load full history" path uses the
+        // wide cap.
+        //
+        // Phase 3 politeness layer: every scrape goes through ScrapeRateLimiter
+        // first. It enforces a 2-second minimum interval between attempts, a
+        // 5-minute global cooldown after blocking-pattern failures, and a
+        // 10-minute per-channel cooldown after any failure on the same channel.
+        // This bounds our request rate so we don't get our scraping IP banned.
+        await ScrapeRateLimiter.shared.waitForSlot(channelId: channelId)
         await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
             kind: .channelArchive,
             backend: .scrape,
@@ -57,23 +67,40 @@ public struct DiscoveryFallbackService: Sendable {
             pythonExecutable.path,
             scriptURL.path,
             "--channel-id", channelId,
-            "--max-results", String(max(1, min(maxResults, 200)))
+            "--max-results", String(max(1, min(maxResults, 400)))
         ]
-        let execution = try await runProcess(arguments: arguments)
-
-        guard execution.terminationStatus == 0 else {
-            let stderrText = String(data: execution.stderr, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let execution: ProcessExecutionResult
+        do {
+            execution = try await runProcess(arguments: arguments)
+        } catch {
+            // Process-level failure (timeout, signal, executable missing).
+            // Tell the rate limiter and the ledger and propagate.
+            await ScrapeRateLimiter.shared.recordFailure(channelId: channelId, reason: error.localizedDescription)
             await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
                 kind: .channelArchive,
                 backend: .scrape,
                 outcome: .failed,
-                detail: stderrText.isEmpty ? "channel_id=\(channelId)" : stderrText
+                detail: "channel_id=\(channelId) process=\(error.localizedDescription)"
+            )
+            throw error
+        }
+
+        guard execution.terminationStatus == 0 else {
+            let stderrText = String(data: execution.stderr, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let reason = stderrText.isEmpty ? "channel_id=\(channelId)" : stderrText
+            await ScrapeRateLimiter.shared.recordFailure(channelId: channelId, reason: reason)
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelArchive,
+                backend: .scrape,
+                outcome: .failed,
+                detail: reason
             )
             throw DiscoveryFallbackError.executionFailed(stderrText.isEmpty ? "Channel fallback discovery failed." : stderrText)
         }
 
         let response = try JSONDecoder().decode(DiscoveryFallbackResponse.self, from: execution.stdout)
+        await ScrapeRateLimiter.shared.recordSuccess(channelId: channelId)
         await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
             kind: .channelArchive,
             backend: response.source == "rss" ? .rss : .scrape,
@@ -94,6 +121,11 @@ public struct DiscoveryFallbackService: Sendable {
     }
 
     public func searchVideos(query: String, maxResults: Int = 5) async throws -> [DiscoveryFallbackVideo] {
+        // Phase 3 politeness: search scraping goes through the same rate
+        // limiter as channel archive scraping. Per-channel cooldown doesn't
+        // apply (no channel id), but the global minimum interval and the
+        // global blocked cooldown both still gate this path.
+        await ScrapeRateLimiter.shared.waitForSlot(channelId: nil)
         await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
             kind: .search,
             backend: .scrape,
@@ -107,21 +139,36 @@ public struct DiscoveryFallbackService: Sendable {
             "--query", query,
             "--max-results", String(max(1, min(maxResults, 20)))
         ]
-        let execution = try await runProcess(arguments: arguments)
-
-        guard execution.terminationStatus == 0 else {
-            let stderrText = String(data: execution.stderr, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let execution: ProcessExecutionResult
+        do {
+            execution = try await runProcess(arguments: arguments)
+        } catch {
+            await ScrapeRateLimiter.shared.recordFailure(channelId: nil, reason: error.localizedDescription)
             await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
                 kind: .search,
                 backend: .scrape,
                 outcome: .failed,
-                detail: stderrText.isEmpty ? "query=\(query)" : stderrText
+                detail: "query=\(query) process=\(error.localizedDescription)"
+            )
+            throw error
+        }
+
+        guard execution.terminationStatus == 0 else {
+            let stderrText = String(data: execution.stderr, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let reason = stderrText.isEmpty ? "query=\(query)" : stderrText
+            await ScrapeRateLimiter.shared.recordFailure(channelId: nil, reason: reason)
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .search,
+                backend: .scrape,
+                outcome: .failed,
+                detail: reason
             )
             throw DiscoveryFallbackError.executionFailed(stderrText.isEmpty ? "Search fallback failed." : stderrText)
         }
 
         let response = try JSONDecoder().decode(SearchFallbackResponse.self, from: execution.stdout)
+        await ScrapeRateLimiter.shared.recordSuccess(channelId: nil)
         await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
             kind: .search,
             backend: .scrape,
