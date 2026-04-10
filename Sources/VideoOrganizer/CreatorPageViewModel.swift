@@ -1,0 +1,515 @@
+import Foundation
+import TaggingKit
+
+// MARK: - Page-level model
+
+/// Aggregate model for the creator detail page (Phase 1 sections only).
+///
+/// Built once per page open by `CreatorPageBuilder.makePage(for:in:)` from data already
+/// in memory in the `OrganizerStore`. No async, no LLM, no network — every field is a
+/// pure transform of saved videos, the channel discovery archive, the channel record
+/// cache, and the playlist memberships map.
+///
+/// The model is intentionally a value type with no `@Observable` machinery: the page
+/// re-builds the whole model on `.task(id: channelId)` and on action callbacks
+/// (favorite/exclude). Diffs are cheap and cache invalidation stays local.
+struct CreatorPageViewModel {
+    // Identity
+    let channelId: String
+    let channelName: String
+    let subtitle: String?              // first sentence of channel description
+    let creatorTier: String?           // small/growing/mid-tier/large/mega
+    let avatarData: Data?
+    let avatarUrl: URL?
+    let countryDisplayName: String?    // not yet sourced — placeholder for Phase 1
+    let foundingYear: Int?             // derived from oldest known publish date
+
+    // Header chips
+    let savedVideoCount: Int
+    let watchedVideoCount: Int
+    let subscriberCountFormatted: String?
+    let lastUploadAge: String?
+    let totalViewsFormatted: String
+
+    // Outlier baseline used by the page; surfaced for tooltips/debugging.
+    let channelMedianViews: Int
+
+    // What's new
+    let latestVideo: CreatorVideoCard?
+
+    // Essentials (curated 6-8 by outlier score with recency weighting)
+    let essentials: [CreatorVideoCard]
+
+    // All videos (saved + archive merged, sorted by date desc by default)
+    let allVideos: [CreatorVideoCard]
+
+    // Playlists this creator's videos appear in
+    let playlists: [CreatorPlaylistEntry]
+
+    // Niche fingerprint
+    let topicShare: [CreatorTopicShare]
+
+    // Cadence: videos per month for the last 24 months
+    let monthlyVideoCounts: [CreatorMonthlyCount]
+
+    // Channel information
+    let totalUploadsKnown: Int          // saved + archive count we know about
+    let totalUploadsReported: Int?      // from channel record (may exceed knownTotal)
+    let coveragePercent: Double?        // saved / totalUploadsReported
+    let channelCreatedDate: Date?       // best-effort; nil when unknown
+    let lastRefreshedAt: Date?
+    let youtubeURL: URL
+
+    // State
+    let isFavorite: Bool
+    let isExcluded: Bool
+
+    static let placeholderEmpty = CreatorPageViewModel(
+        channelId: "",
+        channelName: "Unknown",
+        subtitle: nil,
+        creatorTier: nil,
+        avatarData: nil,
+        avatarUrl: nil,
+        countryDisplayName: nil,
+        foundingYear: nil,
+        savedVideoCount: 0,
+        watchedVideoCount: 0,
+        subscriberCountFormatted: nil,
+        lastUploadAge: nil,
+        totalViewsFormatted: "0 views",
+        channelMedianViews: 0,
+        latestVideo: nil,
+        essentials: [],
+        allVideos: [],
+        playlists: [],
+        topicShare: [],
+        monthlyVideoCounts: [],
+        totalUploadsKnown: 0,
+        totalUploadsReported: nil,
+        coveragePercent: nil,
+        channelCreatedDate: nil,
+        lastRefreshedAt: nil,
+        youtubeURL: URL(string: "https://www.youtube.com")!,
+        isFavorite: false,
+        isExcluded: false
+    )
+}
+
+// MARK: - Cards
+
+struct CreatorVideoCard: Identifiable, Equatable {
+    let videoId: String
+    let title: String
+    let thumbnailUrl: URL?
+    let topicName: String?
+    let topicId: Int64?
+    let viewCountFormatted: String
+    let viewCountParsed: Int
+    let runtimeFormatted: String?
+    let publishedAt: String?
+    let ageDays: Int?
+    let ageFormatted: String?
+    let isSaved: Bool
+    let outlierScore: Double
+    let isOutlier: Bool
+
+    var id: String { videoId }
+
+    var youtubeUrl: URL? {
+        URL(string: "https://www.youtube.com/watch?v=\(videoId)")
+    }
+}
+
+extension CreatorVideoCard: OutlierAnalyzable {
+    var outlierViewCount: Int? {
+        viewCountParsed > 0 ? viewCountParsed : nil
+    }
+
+    var outlierAgeDays: Int? {
+        ageDays
+    }
+}
+
+struct CreatorPlaylistEntry: Identifiable, Equatable {
+    let playlist: PlaylistRecord
+    let creatorVideoCount: Int
+
+    var id: String { playlist.playlistId }
+
+    static func == (lhs: CreatorPlaylistEntry, rhs: CreatorPlaylistEntry) -> Bool {
+        lhs.playlist.playlistId == rhs.playlist.playlistId
+            && lhs.creatorVideoCount == rhs.creatorVideoCount
+    }
+}
+
+struct CreatorTopicShare: Identifiable, Equatable {
+    let topicId: Int64
+    let topicName: String
+    let videoCount: Int
+    let percentage: Double
+
+    var id: Int64 { topicId }
+}
+
+struct CreatorMonthlyCount: Identifiable, Equatable {
+    let month: Date
+    let count: Int
+
+    var id: Date { month }
+}
+
+// MARK: - Builder
+
+enum CreatorPageBuilder {
+    /// Builds a fully-populated creator page model from data already in memory.
+    /// All inputs come from the `OrganizerStore` cache — no async, no I/O.
+    @MainActor
+    static func makePage(forChannelId channelId: String, in store: OrganizerStore) -> CreatorPageViewModel {
+        // 1. Resolve channel record (used for subtitle, avatar, subscriber count, country, etc.)
+        let channelRecord = store.topicChannels.values
+            .flatMap { $0 }
+            .first(where: { $0.channelId == channelId })
+
+        // 2. Walk every topic and collect this creator's saved videos, indexed by topic.
+        var savedByTopic: [(topic: TopicViewModel, videos: [VideoViewModel])] = []
+        for topic in store.topics {
+            let videos = store.videosForTopicIncludingSubtopics(topic.id)
+                .filter { $0.channelId == channelId }
+            if !videos.isEmpty {
+                savedByTopic.append((topic, videos))
+            }
+        }
+        let savedVideosFlat = savedByTopic.flatMap { $0.videos }
+        let savedVideoIds = Set(savedVideosFlat.map(\.videoId))
+
+        // 3. Pull the channel discovery archive (most recent ~24 uploads we know about).
+        let archive: [ArchivedChannelVideo]
+        do {
+            archive = try store.store.archivedVideosForChannels([channelId], perChannelLimit: 32)
+        } catch {
+            AppLogger.app.error("CreatorPageBuilder failed to fetch archive for \(channelId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            archive = []
+        }
+
+        // 4. Resolve display name. Prefer the channel record, fall back to first saved
+        //    video, then to the archive, then to "Unknown".
+        let resolvedName = channelRecord?.name
+            ?? savedVideosFlat.first?.channelName
+            ?? archive.first?.channelName
+            ?? "Unknown"
+
+        // 5. Build the unified card list (saved + archive de-duped on videoId, saved wins).
+        let allCards = makeAllCards(
+            savedByTopic: savedByTopic,
+            savedVideoIds: savedVideoIds,
+            archive: archive
+        )
+
+        // 6. Per-creator outlier baseline.
+        let medianViews = OutlierAnalytics.channelMedianViews(allCards)
+
+        // 7. Re-derive cards with outlier scoring against the baseline.
+        let scoredCards = allCards.map { card -> CreatorVideoCard in
+            let score = OutlierAnalytics.outlierScore(views: card.viewCountParsed, channelMedian: medianViews)
+            return CreatorVideoCard(
+                videoId: card.videoId,
+                title: card.title,
+                thumbnailUrl: card.thumbnailUrl,
+                topicName: card.topicName,
+                topicId: card.topicId,
+                viewCountFormatted: card.viewCountFormatted,
+                viewCountParsed: card.viewCountParsed,
+                runtimeFormatted: card.runtimeFormatted,
+                publishedAt: card.publishedAt,
+                ageDays: card.ageDays,
+                ageFormatted: card.ageFormatted,
+                isSaved: card.isSaved,
+                outlierScore: score,
+                isOutlier: score >= OutlierAnalytics.defaultOutlierThreshold
+            )
+        }
+
+        // 8. Sort the canonical "all videos" list by recency (newest first).
+        let allVideos = scoredCards.sorted { lhs, rhs in
+            switch (lhs.ageDays, rhs.ageDays) {
+            case let (l?, r?):
+                return l < r
+            case (nil, _?):
+                return false
+            case (_?, nil):
+                return true
+            default:
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        }
+
+        // 9. Essentials = top outliers (Phase 1 algorithm in OutlierAnalytics).
+        let essentials = OutlierAnalytics.topOutliers(scoredCards, limit: 8)
+
+        // 10. Latest video = most recent by publishedAt.
+        let latestVideo = allVideos.first
+
+        // 11. Header counts and totals.
+        let totalViews = scoredCards.reduce(0) { $0 + $1.viewCountParsed }
+        let watchedCount = savedVideosFlat.compactMap { store.seenSummary(for: $0.videoId) }.count
+
+        // 12. Topic share (only counts saved videos by topic — archive isn't topic-tagged).
+        let topicShare = makeTopicShare(savedByTopic: savedByTopic)
+
+        // 13. Monthly cadence (last 24 months) — use parseISO8601 dates from publishedAt.
+        let monthlyCounts = makeMonthlyCounts(from: scoredCards)
+
+        // 14. Playlists this creator's videos appear in.
+        let playlists = makePlaylists(savedVideos: savedVideosFlat, store: store)
+
+        // 15. Channel info bottom section.
+        let totalUploadsReported = channelRecord?.videoCountTotal
+        let coverage: Double? = {
+            guard let total = totalUploadsReported, total > 0 else { return nil }
+            return Double(savedVideosFlat.count) / Double(total)
+        }()
+
+        let lastUploadAge = latestVideo?.ageFormatted
+        let foundingYear = computeFoundingYear(from: scoredCards)
+
+        let youtubeURL = URL(string: "https://www.youtube.com/channel/\(channelId)")
+            ?? URL(string: "https://www.youtube.com")!
+
+        return CreatorPageViewModel(
+            channelId: channelId,
+            channelName: resolvedName,
+            subtitle: makeSubtitle(from: channelRecord),
+            creatorTier: creatorTier(from: channelRecord?.subscriberCount),
+            avatarData: channelRecord?.iconData,
+            avatarUrl: channelRecord?.iconUrl.flatMap(URL.init(string:))
+                ?? scoredCards.first(where: { $0.thumbnailUrl != nil })?.thumbnailUrl,
+            countryDisplayName: nil, // not yet sourced
+            foundingYear: foundingYear,
+            savedVideoCount: savedVideosFlat.count,
+            watchedVideoCount: watchedCount,
+            subscriberCountFormatted: formatSubscriberCount(channelRecord?.subscriberCount),
+            lastUploadAge: lastUploadAge,
+            totalViewsFormatted: formatViewTotal(totalViews),
+            channelMedianViews: medianViews,
+            latestVideo: latestVideo,
+            essentials: essentials,
+            allVideos: allVideos,
+            playlists: playlists,
+            topicShare: topicShare,
+            monthlyVideoCounts: monthlyCounts,
+            totalUploadsKnown: scoredCards.count,
+            totalUploadsReported: totalUploadsReported,
+            coveragePercent: coverage,
+            channelCreatedDate: nil, // not yet sourced (Phase 3 channel-info enrichment)
+            lastRefreshedAt: archive.compactMap(\.fetchedAt).compactMap(CreatorAnalytics.parseISO8601Date).max(),
+            youtubeURL: youtubeURL,
+            isFavorite: store.isCreatorFavorited(channelId),
+            isExcluded: store.isExcludedCreator(channelId)
+        )
+    }
+
+    // MARK: - Card construction
+
+    private static func makeAllCards(
+        savedByTopic: [(topic: TopicViewModel, videos: [VideoViewModel])],
+        savedVideoIds: Set<String>,
+        archive: [ArchivedChannelVideo]
+    ) -> [CreatorVideoCard] {
+        var cards: [CreatorVideoCard] = []
+        cards.reserveCapacity(savedVideoIds.count + archive.count)
+
+        for (topic, videos) in savedByTopic {
+            for video in videos {
+                cards.append(card(from: video, topicName: topic.name, topicId: topic.id))
+            }
+        }
+
+        // Add archive videos that aren't already in the saved set.
+        for archived in archive where !savedVideoIds.contains(archived.videoId) {
+            cards.append(card(from: archived))
+        }
+
+        return cards
+    }
+
+    private static func card(from video: VideoViewModel, topicName: String?, topicId: Int64?) -> CreatorVideoCard {
+        let parsedViews = video.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
+        let ageDays = video.publishedAt.map { CreatorAnalytics.parseAge($0) }
+        let normalizedAge = (ageDays == .max) ? nil : ageDays
+        return CreatorVideoCard(
+            videoId: video.videoId,
+            title: video.title,
+            thumbnailUrl: video.thumbnailUrl,
+            topicName: topicName,
+            topicId: topicId,
+            viewCountFormatted: video.viewCount ?? "—",
+            viewCountParsed: parsedViews,
+            runtimeFormatted: video.duration,
+            publishedAt: video.publishedAt,
+            ageDays: normalizedAge,
+            ageFormatted: normalizedAge.map(CreatorAnalytics.formatAge),
+            isSaved: true,
+            outlierScore: 0,        // filled in by the outlier scoring pass
+            isOutlier: false
+        )
+    }
+
+    private static func card(from archived: ArchivedChannelVideo) -> CreatorVideoCard {
+        let parsedViews = archived.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
+        let ageDays = archived.publishedAt.map { CreatorAnalytics.parseAge($0) }
+        let normalizedAge = (ageDays == .max) ? nil : ageDays
+        let thumb = URL(string: "https://i.ytimg.com/vi/\(archived.videoId)/mqdefault.jpg")
+        return CreatorVideoCard(
+            videoId: archived.videoId,
+            title: archived.title,
+            thumbnailUrl: thumb,
+            topicName: nil,
+            topicId: nil,
+            viewCountFormatted: archived.viewCount ?? "—",
+            viewCountParsed: parsedViews,
+            runtimeFormatted: archived.duration,
+            publishedAt: archived.publishedAt,
+            ageDays: normalizedAge,
+            ageFormatted: normalizedAge.map(CreatorAnalytics.formatAge),
+            isSaved: false,
+            outlierScore: 0,
+            isOutlier: false
+        )
+    }
+
+    // MARK: - Topic share
+
+    private static func makeTopicShare(
+        savedByTopic: [(topic: TopicViewModel, videos: [VideoViewModel])]
+    ) -> [CreatorTopicShare] {
+        let total = savedByTopic.reduce(0) { $0 + $1.videos.count }
+        guard total > 0 else { return [] }
+        return savedByTopic
+            .map { entry in
+                CreatorTopicShare(
+                    topicId: entry.topic.id,
+                    topicName: entry.topic.name,
+                    videoCount: entry.videos.count,
+                    percentage: Double(entry.videos.count) / Double(total)
+                )
+            }
+            .sorted { $0.videoCount > $1.videoCount }
+    }
+
+    // MARK: - Monthly cadence
+
+    private static func makeMonthlyCounts(from cards: [CreatorVideoCard]) -> [CreatorMonthlyCount] {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date()
+        guard let twoYearsAgo = calendar.date(byAdding: .month, value: -23, to: now) else { return [] }
+        let earliest = calendar.dateInterval(of: .month, for: twoYearsAgo)?.start ?? twoYearsAgo
+
+        var bucket: [Date: Int] = [:]
+        for card in cards {
+            guard let publishedAt = card.publishedAt,
+                  let date = CreatorAnalytics.parseISO8601Date(publishedAt) ?? approximateDate(forAgeDays: card.ageDays, now: now)
+            else { continue }
+            guard date >= earliest else { continue }
+            guard let monthStart = calendar.dateInterval(of: .month, for: date)?.start else { continue }
+            bucket[monthStart, default: 0] += 1
+        }
+
+        // Fill 24 buckets even when some are empty so the chart shape is stable.
+        var result: [CreatorMonthlyCount] = []
+        for offset in 0..<24 {
+            guard let bucketStart = calendar.date(byAdding: .month, value: -offset, to: now)
+                .flatMap({ calendar.dateInterval(of: .month, for: $0)?.start }) else { continue }
+            result.append(CreatorMonthlyCount(month: bucketStart, count: bucket[bucketStart] ?? 0))
+        }
+        return result.sorted { $0.month < $1.month }
+    }
+
+    private static func approximateDate(forAgeDays ageDays: Int?, now: Date) -> Date? {
+        guard let ageDays else { return nil }
+        return Calendar.current.date(byAdding: .day, value: -ageDays, to: now)
+    }
+
+    // MARK: - Playlists
+
+    @MainActor
+    private static func makePlaylists(
+        savedVideos: [VideoViewModel],
+        store: OrganizerStore
+    ) -> [CreatorPlaylistEntry] {
+        var byPlaylistId: [String: (playlist: PlaylistRecord, count: Int)] = [:]
+        for video in savedVideos {
+            let memberships = store.playlistsForVideo(video.videoId)
+            for playlist in memberships {
+                byPlaylistId[playlist.playlistId, default: (playlist, 0)].count += 1
+            }
+        }
+        return byPlaylistId.values
+            .map { CreatorPlaylistEntry(playlist: $0.playlist, creatorVideoCount: $0.count) }
+            .sorted { lhs, rhs in
+                if lhs.creatorVideoCount != rhs.creatorVideoCount {
+                    return lhs.creatorVideoCount > rhs.creatorVideoCount
+                }
+                return lhs.playlist.title.localizedStandardCompare(rhs.playlist.title) == .orderedAscending
+            }
+    }
+
+    // MARK: - Subtitle / tier helpers
+
+    private static func makeSubtitle(from channel: ChannelRecord?) -> String? {
+        guard let description = channel?.description, !description.isEmpty else { return nil }
+        // First sentence (.! or newline) trimmed to ~80 characters as a soft cap.
+        let separators = CharacterSet(charactersIn: ".!?\n")
+        let firstSentence = description
+            .components(separatedBy: separators)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? description
+        let trimmed = String(firstSentence.prefix(80)).trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func creatorTier(from subscriberString: String?) -> String? {
+        guard let subs = subscriberString.flatMap(Int.init) else { return nil }
+        if subs >= 10_000_000 { return "mega creator" }
+        if subs >= 1_000_000 { return "large creator" }
+        if subs >= 100_000 { return "mid-tier creator" }
+        if subs >= 10_000 { return "growing creator" }
+        return "small creator"
+    }
+
+    private static func formatSubscriberCount(_ raw: String?) -> String? {
+        guard let subs = raw.flatMap(Int.init) else { return nil }
+        if subs >= 1_000_000 {
+            return String(format: "%.1fM subs", Double(subs) / 1_000_000)
+        }
+        if subs >= 1_000 {
+            return String(format: "%.0fK subs", Double(subs) / 1_000)
+        }
+        return "\(subs) subs"
+    }
+
+    private static func formatViewTotal(_ totalViews: Int) -> String {
+        if totalViews >= 1_000_000 {
+            return String(format: "%.1fM views", Double(totalViews) / 1_000_000)
+        }
+        if totalViews >= 1_000 {
+            return String(format: "%.0fK views", Double(totalViews) / 1_000)
+        }
+        return "\(totalViews) views"
+    }
+
+    private static func computeFoundingYear(from cards: [CreatorVideoCard]) -> Int? {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date()
+        let oldestDate = cards.compactMap { card -> Date? in
+            if let published = card.publishedAt, let date = CreatorAnalytics.parseISO8601Date(published) {
+                return date
+            }
+            if let ageDays = card.ageDays {
+                return calendar.date(byAdding: .day, value: -ageDays, to: now)
+            }
+            return nil
+        }.min()
+        return oldestDate.map { calendar.component(.year, from: $0) }
+    }
+}
