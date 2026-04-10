@@ -767,11 +767,19 @@ enum CandidateDiscoveryCoordinator {
         var creatorCounts: [String: Int] = [:]
         var scored: [(CandidateVideoViewModel, Double)] = []
 
+        // Phase 3: pinned creators get a flat additive boost in the watch ranking.
+        // The boost is large enough to noticeably reorder results but smaller than
+        // the existing source-kind weights so a low-quality favorited video can't
+        // displace a high-evidence non-favorited one.
+        let favoriteIds = Set(store.favoriteCreators.map(\.channelId))
+        let favoriteBoost: Double = 25.0
+
         for video in prelim {
             let creatorKey = (video.channelId?.isEmpty == false ? video.channelId : video.channelName) ?? "unknown"
             let seenPenalty = appSeenPenalty(for: video, store: store)
             let repeatPenalty = creatorRepeatPenalty(for: video, currentCount: creatorCounts[creatorKey] ?? 0)
-            let adjusted = video.score - seenPenalty - repeatPenalty
+            let pinnedBoost: Double = (video.channelId.map { favoriteIds.contains($0) } ?? false) ? favoriteBoost : 0
+            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost
             scored.append((video, adjusted))
             creatorCounts[creatorKey, default: 0] += 1
         }
@@ -988,7 +996,7 @@ enum CandidateDiscoveryCoordinator {
             let approved = await store.requestAPIFallbackApproval(
                 kind: .channelArchive,
                 reason: "Archive scraping failed for \(channel.name). Use the YouTube API to check this creator for fresh uploads.",
-                operation: .channelsListContentDetails
+                operation: .channelArchiveRefresh
             )
             guard approved else { return existingArchive }
 

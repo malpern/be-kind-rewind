@@ -171,9 +171,8 @@ struct CreatorDetailView: View {
     /// users grab these faster than reaching for the toolbar.
     ///
     /// The action set is deliberately small and meaningful for a *creator on this page*:
-    /// Open on YouTube (prominent primary), Copy Link, Share (system share sheet),
-    /// and Exclude (destructive). Pin is intentionally absent until Phase 3 wires it
-    /// into Watch refresh ranking — until then it would have no observable effect.
+    /// Open on YouTube (prominent primary), Pin (favorite), Copy Link, Share (system
+    /// share sheet), and Exclude (destructive).
     @ViewBuilder
     private var headerActionButtons: some View {
         HStack(spacing: 8) {
@@ -184,6 +183,25 @@ struct CreatorDetailView: View {
             .controlSize(.regular)
             .help("Open this channel on YouTube")
             .accessibilityIdentifier("creatorHeaderYouTubeButton")
+
+            Button {
+                store.toggleFavoriteCreator(
+                    channelId: channelId,
+                    channelName: page.channelName,
+                    iconUrl: page.avatarUrl?.absoluteString
+                )
+            } label: {
+                Label(
+                    page.isFavorite ? "Pinned" : "Pin",
+                    systemImage: page.isFavorite ? "pin.fill" : "pin"
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .help(page.isFavorite
+                  ? "Remove from pinned creators (their videos will no longer be boosted in Watch refresh)"
+                  : "Pin this creator (their videos will be prioritized in Watch refresh)")
+            .accessibilityIdentifier("creatorHeaderPinButton")
 
             Button {
                 NSPasteboard.general.clearContents()

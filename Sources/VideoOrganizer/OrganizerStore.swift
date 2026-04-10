@@ -970,6 +970,20 @@ final class OrganizerStore {
         visibleWatchTopicIds.forEach { appendIfEligible($0) }
         appendIfEligible(viewportTopicId)
 
+        // Phase 3: topics that contain a favorited creator's videos get priority in
+        // the refresh order, right after the user's currently-visible context. This
+        // means a fresh launch with one Pin set will refresh that creator's topics
+        // before walking the rest of the library.
+        let favoriteIds = Set(favoriteCreators.map(\.channelId))
+        if !favoriteIds.isEmpty {
+            let favoriteTopicIds = topicChannels
+                .compactMap { topicId, channels -> Int64? in
+                    let hasFavorite = channels.contains { favoriteIds.contains($0.channelId) }
+                    return hasFavorite && remaining.contains(topicId) ? topicId : nil
+                }
+            favoriteTopicIds.forEach { appendIfEligible($0) }
+        }
+
         let fallbackOrder = topics.map(\.id).filter { remaining.contains($0) }
         fallbackOrder.forEach { appendIfEligible($0) }
         return ordered
