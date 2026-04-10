@@ -192,7 +192,7 @@ struct AppSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Enable Claude theme classification")
                                 .font(.body.weight(.medium))
-                            Text("When you visit a creator detail page, classify their videos into themed clusters using Claude Haiku. Costs roughly $0.001-0.005 per creator on first visit, then cached forever. Off by default — flip this on if you want richer creator pages with theme tags, series detection, and AI-generated about paragraphs.")
+                            Text("When you visit a creator detail page, classify their videos into themed clusters using Claude Haiku. Costs roughly $0.001-0.005 per creator on first visit, then cached forever. On by default — flip this off to suppress LLM calls entirely. Powers theme tags, series detection, and AI-generated about paragraphs on the creator page.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)

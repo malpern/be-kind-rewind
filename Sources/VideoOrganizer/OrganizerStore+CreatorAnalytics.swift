@@ -174,12 +174,33 @@ enum CreatorAnalytics {
     }
 
     static func parseISO8601Date(_ value: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) {
+        // ISO8601DateFormatter is expensive to allocate (~1ms each on macOS) so
+        // we cache one instance per format-options bucket. Per-thread storage is
+        // a strict requirement: ISO8601DateFormatter is not Sendable across
+        // threads. Phase 3 perf fix — formerly allocated a new formatter on
+        // every call, which dominated CreatorPageBuilder for creators with
+        // 100+ archive videos.
+        let withFractional = cachedISO8601Formatter(fractional: true)
+        if let date = withFractional.date(from: value) {
             return date
         }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        let withoutFractional = cachedISO8601Formatter(fractional: false)
+        return withoutFractional.date(from: value)
+    }
+
+    private static let iso8601FormatterKey = "be.kind.rewind.iso8601Formatter"
+
+    private static func cachedISO8601Formatter(fractional: Bool) -> ISO8601DateFormatter {
+        let key = fractional ? "\(iso8601FormatterKey).withFractional" : "\(iso8601FormatterKey).noFractional"
+        let threadDict = Thread.current.threadDictionary
+        if let existing = threadDict[key] as? ISO8601DateFormatter {
+            return existing
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = fractional
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
+        threadDict[key] = formatter
+        return formatter
     }
 }

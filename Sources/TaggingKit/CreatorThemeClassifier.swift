@@ -108,9 +108,17 @@ public actor CreatorThemeClassifier {
 
         let prompt = """
         Analyze the videos by YouTube creator "\(creatorName)" below and group them into \
-        5-10 named theme clusters that capture how this creator's content is organized. \
-        Each cluster should represent either a recurring topic ("Switch Reviews") or a \
-        recurring format/series ("Day N" build vlog).
+        5-12 named theme clusters that capture how this creator's content is organized. \
+        Each cluster should represent either a recurring topic or a recurring format/series.
+
+        LABEL RULES (very important):
+        - Labels MUST be 1-3 words, ideally 1-2. Maximum 24 characters.
+        - Use plain noun phrases, no leading articles ("the", "a"), no trailing words.
+        - Prefer specific terms unique to this creator over generic ones. \
+          Good: "Switch Lubing", "Lily58 Builds", "Audio Reviews". \
+          Bad: "Mechanical Keyboard Reviews and Tutorials", "Tech Content", \
+          "Videos About Various Topics".
+        - If two natural labels overlap, pick the shorter one.
 
         Videos (format: videoId: title):
         \(titleList)
@@ -121,14 +129,13 @@ public actor CreatorThemeClassifier {
         - "date": titles imply chronological ordering (date-stamped builds, etc.)
         - "unordered": just a recurring theme like "Hot Take #X" or "I tried X for a week"
 
-        Mark `is_series: false` for clusters that are just topic groupings ("Switch Reviews", \
-        "Build Vlogs") with no ordering signal.
+        Mark `is_series: false` for clusters that are just topic groupings with no ordering.
 
         Return ONLY a JSON object with this exact shape:
         {
           "clusters": [
             {
-              "label": "Cluster Name",
+              "label": "Short Label",
               "description": "One-sentence description of this cluster",
               "video_ids": ["videoId1", "videoId2", ...],
               "is_series": true,
@@ -140,7 +147,8 @@ public actor CreatorThemeClassifier {
 
         Every input video MUST appear in exactly one cluster's video_ids. \
         Use the videoId strings exactly as given. \
-        If a video doesn't fit a clear theme, put it in a catch-all "Other" cluster.
+        If a video doesn't fit a clear theme, put it in a catch-all "Other" cluster. \
+        Reminder: every label must be 1-3 words and at most 24 characters.
         """
 
         let response = try await client.complete(
@@ -234,12 +242,24 @@ public actor CreatorThemeClassifier {
                 ? OrderingSignal(rawValue: raw.ordering_signal ?? "unordered") ?? .unordered
                 : nil
             return ThemeCluster(
-                label: raw.label,
+                label: shortenLabel(raw.label),
                 description: raw.description ?? "",
                 videoIds: validIds,
                 isSeries: raw.is_series ?? false,
                 orderingSignal: signal
             )
         }
+    }
+
+    /// Safety net for the prompt's "1-3 words, max 24 chars" rule. Trims
+    /// whitespace, drops trailing punctuation, and truncates with an ellipsis
+    /// if the LLM returned something longer than the limit anyway.
+    nonisolated private func shortenLabel(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?"))
+        let limit = 24
+        if trimmed.count <= limit { return trimmed }
+        let cut = trimmed.prefix(limit - 1)
+        return "\(cut)…"
     }
 }

@@ -120,10 +120,16 @@ final class OrganizerStore {
     }
 
     /// User opt-in for the Phase 2 Claude theme classifier on the creator detail page.
-    /// Default off — running classification on every creator costs ~$0.001-0.005 per
-    /// creator (cached forever), and we want the user to make an explicit decision
-    /// before any LLM cost is incurred. Mirrors the apiSearchFallbackEnabled gate.
-    var claudeThemeClassificationEnabled: Bool = UserDefaults.standard.bool(forKey: "claudeThemeClassificationEnabled") {
+    /// Default ON — costs ~$0.001-0.005 per creator on first visit, then cached forever.
+    /// Existing installs that explicitly set it to false keep that choice; only fresh
+    /// installs (no UserDefaults entry yet) get the new default. Mirrors the apiSearchFallbackEnabled
+    /// gate but flipped because the user wants tags to appear automatically.
+    var claudeThemeClassificationEnabled: Bool = {
+        if UserDefaults.standard.object(forKey: "claudeThemeClassificationEnabled") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "claudeThemeClassificationEnabled")
+    }() {
         didSet { UserDefaults.standard.set(claudeThemeClassificationEnabled, forKey: "claudeThemeClassificationEnabled") }
     }
 

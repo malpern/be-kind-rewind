@@ -367,6 +367,17 @@ enum CreatorPageBuilder {
     /// All inputs come from the `OrganizerStore` cache — no async, no I/O.
     @MainActor
     static func makePage(forChannelId channelId: String, in store: OrganizerStore) -> CreatorPageViewModel {
+        // Phase 3 perf instrumentation: time the full build and the major helpers
+        // so we can spot regressions. Logged to AppLogger.file (debug.log) so the
+        // numbers can be retrieved offline by reading the file directly — OSLog
+        // is unreliable for this because of system filtering and the absence of
+        // a way to scrape it from outside Console.app.
+        let buildStart = CFAbsoluteTimeGetCurrent()
+        defer {
+            let totalMs = (CFAbsoluteTimeGetCurrent() - buildStart) * 1_000
+            AppLogger.file.log("CreatorPageBuilder.makePage(\(channelId)) total=\(String(format: "%.1f", totalMs))ms", category: "perf")
+        }
+
         // 1. Resolve channel record (used for subtitle, avatar, subscriber count, country, etc.)
         let channelRecord = store.topicChannels.values
             .flatMap { $0 }
@@ -482,6 +493,7 @@ enum CreatorPageBuilder {
         let watchedCount = savedVideosFlat.compactMap { store.seenSummary(for: $0.videoId) }.count
 
         // 12. Topic share (only counts saved videos by topic — archive isn't topic-tagged).
+        let topicShareStart = CFAbsoluteTimeGetCurrent()
         let topicShare = makeTopicShare(savedByTopic: savedByTopic, store: store)
         // 12b. Recency-weighted variant: same shape, but only counts videos
         // published in the last 365 days. Used by the topic share toggle so the
@@ -490,12 +502,17 @@ enum CreatorPageBuilder {
             savedByTopic: filterSavedByTopicToRecentYear(savedByTopic),
             store: store
         )
+        AppLogger.file.log("  topicShare(both)=\(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - topicShareStart) * 1_000))ms", category: "perf")
 
         // 13. Monthly cadence (last 24 months) — use parseISO8601 dates from publishedAt.
+        let cadenceStart = CFAbsoluteTimeGetCurrent()
         let monthlyCounts = makeMonthlyCounts(from: scoredCards)
+        AppLogger.file.log("  monthlyCounts=\(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - cadenceStart) * 1_000))ms cards=\(scoredCards.count)", category: "perf")
 
         // 14. Playlists this creator's videos appear in.
+        let playlistsStart = CFAbsoluteTimeGetCurrent()
         let playlists = makePlaylists(savedVideos: savedVideosFlat, store: store)
+        AppLogger.file.log("  playlists=\(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - playlistsStart) * 1_000))ms", category: "perf")
 
         // 15. Channel info bottom section.
         let totalUploadsReported = channelRecord?.videoCountTotal
@@ -519,6 +536,23 @@ enum CreatorPageBuilder {
         let avatarURL = rawAvatarUrl
             .map(CreatorPageBuilder.upscaledAvatarURL)
             .flatMap(URL.init(string:))
+
+        // Leaderboard build is the largest single helper — instrument it
+        // separately so we can see its contribution to the total build cost.
+        let leaderboardStart = CFAbsoluteTimeGetCurrent()
+        let leaderboardScopes = makeLeaderboardScopes(forChannelId: channelId, in: store)
+        let leaderboardByTopic = makeLeaderboardByTopic(forChannelId: channelId, in: store)
+        let leaderboardDefaultTopicId = makeLeaderboardDefaultTopicId(forChannelId: channelId, savedByTopic: savedByTopic)
+        AppLogger.file.log("  leaderboard=\(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - leaderboardStart) * 1_000))ms scopes=\(leaderboardScopes.count)", category: "perf")
+
+        // Phase 3 visit tracking — single read+parse, then reuse for both fields.
+        let visitStart = CFAbsoluteTimeGetCurrent()
+        let prevVisit = previousVisitDate(channelId: channelId, store: store)
+        let newSinceCount = makeNewSinceLastVisitCount(
+            cutoff: prevVisit,
+            allCards: scoredCards
+        )
+        AppLogger.file.log("  visitTracking=\(String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - visitStart) * 1_000))ms hadPriorVisit=\(prevVisit != nil)", category: "perf")
 
         return CreatorPageViewModel(
             channelId: channelId,
@@ -544,9 +578,9 @@ enum CreatorPageBuilder {
             playlists: playlists,
             topicShare: topicShare,
             topicShareLast12Months: topicShareLast12Months,
-            leaderboardScopes: makeLeaderboardScopes(forChannelId: channelId, in: store),
-            leaderboardByTopic: makeLeaderboardByTopic(forChannelId: channelId, in: store),
-            leaderboardDefaultTopicId: makeLeaderboardDefaultTopicId(forChannelId: channelId, savedByTopic: savedByTopic),
+            leaderboardScopes: leaderboardScopes,
+            leaderboardByTopic: leaderboardByTopic,
+            leaderboardDefaultTopicId: leaderboardDefaultTopicId,
             themes: cachedThemes,
             aboutParagraph: (try? store.store.creatorAbout(channelId: channelId))?.summary,
             isClassifyingThemes: store.classifyingThemeChannels.contains(channelId),
@@ -561,12 +595,8 @@ enum CreatorPageBuilder {
             isFavorite: store.isCreatorFavorited(channelId),
             isExcluded: store.isExcludedCreator(channelId),
             notes: store.favoriteCreators.first(where: { $0.channelId == channelId })?.notes,
-            newSinceLastVisitCount: makeNewSinceLastVisitCount(
-                channelId: channelId,
-                allCards: scoredCards,
-                store: store
-            ),
-            previousVisitDate: previousVisitDate(channelId: channelId, store: store)
+            newSinceLastVisitCount: newSinceCount,
+            previousVisitDate: prevVisit
         )
     }
 
@@ -584,18 +614,15 @@ enum CreatorPageBuilder {
     }
 
     /// Phase 3: count uploads (saved + archive merged into `allCards`) whose
-    /// publishedAt is strictly after the previous visit timestamp. 0 when there's
-    /// no prior visit on record. Used by the "What's new" banner so the user can
-    /// see at a glance how much has happened since they last looked.
+    /// publishedAt is strictly after the previous visit timestamp. 0 when the
+    /// cutoff is nil (first visit / non-favorited creator). Caller passes the
+    /// cutoff so we don't read it twice from SQLite per page build.
     @MainActor
     private static func makeNewSinceLastVisitCount(
-        channelId: String,
-        allCards: [CreatorVideoCard],
-        store: OrganizerStore
+        cutoff: Date?,
+        allCards: [CreatorVideoCard]
     ) -> Int {
-        guard let cutoff = previousVisitDate(channelId: channelId, store: store) else {
-            return 0
-        }
+        guard let cutoff else { return 0 }
         return allCards.reduce(0) { acc, card in
             guard let publishedAt = card.publishedAt,
                   let date = CreatorAnalytics.parseISO8601Date(publishedAt) else {

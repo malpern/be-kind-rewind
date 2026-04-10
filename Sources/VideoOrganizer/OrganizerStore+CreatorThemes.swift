@@ -12,20 +12,42 @@ extension OrganizerStore {
     /// the local SQLite cache. The page view observes `classifyingThemeChannels` to
     /// show a loading indicator and rebuilds itself from the cache when this method
     /// completes (the .task(id: channelId) on the page handles re-fetch).
-    func classifyCreatorThemesIfNeeded(channelId: String, channelName: String) {
+    func classifyCreatorThemesIfNeeded(channelId: String, channelName: String, force: Bool = false) {
         guard claudeThemeClassificationEnabled else { return }
         guard let classifier = creatorThemeClassifier else { return }
         guard !classifyingThemeChannels.contains(channelId) else { return }
 
-        // If the cache already has data, do nothing — re-classification is opt-in.
-        if let existing = try? store.creatorThemes(channelId: channelId), !existing.isEmpty {
-            return
-        }
-
-        // Collect titles from saved + archive videos for this creator. Cap upstream
-        // to keep the LLM call bounded.
+        // Collect inputs first so we can compare against the cached count for
+        // staleness detection below.
         let inputs = collectClassifierInputs(forChannelId: channelId)
         guard !inputs.isEmpty else { return }
+
+        // Phase 3: incremental refresh policy.
+        //
+        // - Empty cache → run.
+        // - Manual `force` flag → run unconditionally (for the Refresh button).
+        // - Cached but the creator's input count has grown by ≥25% AND there
+        //   are at least 5 new videos since the last run → run.
+        // - Otherwise → keep the cached results.
+        //
+        // The 25% threshold is a balance between freshness and LLM cost — it
+        // means a creator going from 100→125 or 40→50 videos triggers a refresh
+        // but a creator going from 100→110 does not. Manual override is always
+        // available via the page's Refresh button.
+        if !force {
+            if let existing = try? store.creatorThemes(channelId: channelId), !existing.isEmpty {
+                let cachedCount = existing.first?.classifiedVideoCount ?? 0
+                let growth = inputs.count - cachedCount
+                let growthRatio = cachedCount > 0 ? Double(growth) / Double(cachedCount) : 1.0
+                let isStale = growth >= 5 && growthRatio >= 0.25
+                if !isStale {
+                    return
+                }
+                AppLogger.app.info("Theme cache stale for \(channelName, privacy: .public): \(cachedCount, privacy: .public) → \(inputs.count, privacy: .public) videos (+\(Int(growthRatio * 100), privacy: .public)%)")
+            }
+        } else {
+            AppLogger.app.info("Forcing theme reclassification for \(channelName, privacy: .public) (\(channelId, privacy: .public))")
+        }
 
         classifyingThemeChannels.insert(channelId)
         AppLogger.app.info("Started Claude theme classification for \(channelName, privacy: .public) (\(channelId, privacy: .public)) over \(inputs.count, privacy: .public) videos")

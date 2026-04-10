@@ -100,6 +100,54 @@ struct CreatorDetailView: View {
     /// value mark — when the value is 0 the bar has no height/width.
     @State private var chartsAnimationProgress: Double = 0
 
+    /// Phase 3 perf: cached snapshot of `ClaudeClient.hasStoredAPIKey()` so the
+    /// themesEmptyStateRow doesn't hit the keychain on every SwiftUI re-render.
+    /// Refreshed once per channel switch via the .task(id: channelId) below.
+    /// Keychain queries cost ~50-200ms each on the main thread — calling them
+    /// from a view body slows the page noticeably.
+    @State private var hasClaudeKeyCached: Bool = false
+
+    /// Phase 3: sort order for the All Videos GRID view. The table view has
+    /// built-in sortable column headers, but the grid needs an explicit picker
+    /// to match the main save window's sort menu. Sticky across launches.
+    @AppStorage("creatorAllVideosGridSort") private var allVideosGridSort: AllVideosGridSort = .dateNewest
+
+    enum AllVideosGridSort: String, CaseIterable, Identifiable {
+        case dateNewest
+        case dateOldest
+        case viewsHigh
+        case viewsLow
+        case durationLong
+        case durationShort
+        case alphabetical
+        case outlierScore
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .dateNewest: return "Newest first"
+            case .dateOldest: return "Oldest first"
+            case .viewsHigh: return "Most viewed"
+            case .viewsLow: return "Least viewed"
+            case .durationLong: return "Longest first"
+            case .durationShort: return "Shortest first"
+            case .alphabetical: return "A–Z"
+            case .outlierScore: return "Top outliers"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .dateNewest, .dateOldest: return "calendar"
+            case .viewsHigh, .viewsLow: return "chart.bar.fill"
+            case .durationLong, .durationShort: return "timer"
+            case .alphabetical: return "textformat.abc"
+            case .outlierScore: return "arrow.up.right"
+            }
+        }
+    }
+
     /// Phase 3: topic share window preference. Sticky across launches via
     /// @AppStorage. "All time" uses every saved video; "Last 12 months" filters
     /// to videos published in the last 365 days so the user can see if the
@@ -164,6 +212,12 @@ struct CreatorDetailView: View {
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
             notesDraft = page.notes ?? ""
+            // Phase 3 perf: refresh the cached keychain check once per page open.
+            // The themesEmptyStateRow used to call ClaudeClient.hasStoredAPIKey()
+            // directly from its view body, which fired a keychain query on every
+            // SwiftUI redraw. Now it reads from `hasClaudeKeyCached` which only
+            // updates when the user navigates to a different creator.
+            hasClaudeKeyCached = ClaudeClient.hasStoredAPIKey()
             // Phase 3: stamp last_visited_at AFTER the page model has been built
             // (the builder reads the previous timestamp to compute "new since
             // last visit"). Bumping it before the build would always yield 0.
@@ -863,39 +917,120 @@ struct CreatorDetailView: View {
     private var themeCapsulesSection: some View {
         if !page.themes.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Themes")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(page.themes, id: \.label) { theme in
-                            themeCapsule(theme)
-                        }
-                        if selectedThemeLabel != nil {
-                            Button {
-                                selectedThemeLabel = nil
-                            } label: {
-                                Label("Clear", systemImage: "xmark.circle")
-                                    .font(.callout)
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.tint)
-                        }
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Themes")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    if let cachedCount = page.themes.first?.classifiedVideoCount,
+                       cachedCount > 0,
+                       page.totalUploadsKnown > cachedCount {
+                        Text("· \(page.totalUploadsKnown - cachedCount) new since last classification")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
-                    .padding(.vertical, 2)
+                    Spacer()
+                    if selectedThemeLabel != nil {
+                        Button {
+                            selectedThemeLabel = nil
+                        } label: {
+                            Label("Clear", systemImage: "xmark.circle")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.tint)
+                    }
+                    Button {
+                        store.classifyCreatorThemesIfNeeded(
+                            channelId: channelId,
+                            channelName: page.channelName,
+                            force: true
+                        )
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Re-run theme classification with the latest video list")
+                    .disabled(page.isClassifyingThemes)
+                }
+
+                // Phase 3: replaced the horizontal ScrollView with a wrapping
+                // FlowLayout so capsules fill multiple rows instead of being
+                // hidden behind horizontal scroll. The layout reflows naturally
+                // when the page width changes (split-view, window resize).
+                FlowLayout(spacing: 8, lineSpacing: 8) {
+                    ForEach(page.themes, id: \.label) { theme in
+                        themeCapsule(theme)
+                    }
                 }
             }
-        } else if page.isClassifyingThemes && page.aboutParagraph == nil {
-            // Show a single inline progress row above All Videos when classification
-            // is in flight and we don't have an about paragraph rendering instead.
+        } else if page.isClassifyingThemes {
+            // Classification is mid-flight — show a single inline progress row.
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Classifying themes…")
+                Text("Generating tags…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        } else {
+            themesEmptyStateRow
         }
+    }
+
+    /// Discoverability empty state for the themes section. Branches on three
+    /// reasons the cache is empty: no Claude API key, classification disabled,
+    /// or simply not generated yet. Each branch surfaces the right next-step CTA
+    /// so the user is never left staring at a blank space.
+    @ViewBuilder
+    private var themesEmptyStateRow: some View {
+        let hasKey = hasClaudeKeyCached
+        HStack(spacing: 10) {
+            Image(systemName: "tag")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if !hasKey {
+                Text("Add a Claude API key to generate tags for this creator")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Open Settings") { openSettings() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            } else if !store.claudeThemeClassificationEnabled {
+                Text("Theme classification is off. Enable it to tag this creator's videos.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Enable") {
+                    store.claudeThemeClassificationEnabled = true
+                    store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else {
+                Text("No tags generated yet for this creator")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
+                } label: {
+                    Label("Generate tags", systemImage: "sparkles")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 0.5)
+        )
     }
 
     private func themeCapsule(_ theme: CreatorThemeRecord) -> some View {
@@ -948,6 +1083,9 @@ struct CreatorDetailView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     creatorSearchField
+                    if allVideosViewMode == .grid {
+                        allVideosGridSortMenu
+                    }
                     Picker("", selection: $allVideosViewMode) {
                         ForEach(AllVideosViewMode.allCases) { mode in
                             Image(systemName: mode.symbolName)
@@ -1105,11 +1243,40 @@ struct CreatorDetailView: View {
         return ids.compactMap { lookup[$0] }
     }
 
+    /// Phase 3: sort menu for the All Videos grid view. Mirrors the sort menu
+    /// in the main save window (`OrganizerView.swift:160`) but with a smaller
+    /// case set tuned for a per-creator page (no Creator/Shuffle since both
+    /// are nonsensical when scoped to one creator). Sticky via @AppStorage.
+    @ViewBuilder
+    private var allVideosGridSortMenu: some View {
+        Menu {
+            ForEach(AllVideosGridSort.allCases) { sort in
+                Button {
+                    allVideosGridSort = sort
+                } label: {
+                    if allVideosGridSort == sort {
+                        Label(sort.label, systemImage: "checkmark")
+                    } else {
+                        Label(sort.label, systemImage: sort.symbolName)
+                    }
+                }
+            }
+        } label: {
+            Label(allVideosGridSort.label, systemImage: allVideosGridSort.symbolName)
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Sort grid videos")
+        .accessibilityIdentifier("creatorAllVideosGridSortMenu")
+    }
+
     @ViewBuilder
     private var allVideosGrid: some View {
         let columns = [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)]
         LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
-            ForEach(sortedAllVideos) { card in
+            ForEach(gridSortedAllVideos) { card in
                 Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
                     VideoGridItem(
                         video: gridModel(for: card),
@@ -1177,6 +1344,50 @@ struct CreatorDetailView: View {
 
     private var sortedAllVideos: [CreatorVideoCard] {
         filteredAllVideos.sorted(using: allVideosSort)
+    }
+
+    /// Grid-mode sort path. Reads the @AppStorage-backed `allVideosGridSort`
+    /// preference (see the menu next to the view-mode toggle) and applies it
+    /// to the same filtered set the table uses. Kept separate from the
+    /// table's KeyPathComparator-based sort because Table sorting is column
+    /// header driven and doesn't translate to the grid card layout.
+    private var gridSortedAllVideos: [CreatorVideoCard] {
+        let base = filteredAllVideos
+        switch allVideosGridSort {
+        case .dateNewest:
+            return base.sorted { ($0.ageDays ?? .max) < ($1.ageDays ?? .max) }
+        case .dateOldest:
+            return base.sorted { ($0.ageDays ?? -1) > ($1.ageDays ?? -1) }
+        case .viewsHigh:
+            return base.sorted { $0.viewCountParsed > $1.viewCountParsed }
+        case .viewsLow:
+            return base.sorted { $0.viewCountParsed < $1.viewCountParsed }
+        case .durationLong:
+            return base.sorted { runtimeMinutes($0) > runtimeMinutes($1) }
+        case .durationShort:
+            return base.sorted { runtimeMinutes($0) < runtimeMinutes($1) }
+        case .alphabetical:
+            return base.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case .outlierScore:
+            return base.sorted { $0.outlierScore > $1.outlierScore }
+        }
+    }
+
+    /// Best-effort numeric runtime in minutes for grid sort. Parses the
+    /// "12:34" / "1:02:45" formatted string the rest of the page already has;
+    /// returns -1 (sorts last) for unknown durations so they don't pollute
+    /// the top of either ascending or descending order.
+    private func runtimeMinutes(_ card: CreatorVideoCard) -> Double {
+        guard let raw = card.runtimeFormatted else { return -1 }
+        let parts = raw.split(separator: ":").compactMap { Double($0) }
+        switch parts.count {
+        case 2:
+            return parts[0] + parts[1] / 60
+        case 3:
+            return parts[0] * 60 + parts[1] + parts[2] / 60
+        default:
+            return -1
+        }
     }
 
     @ViewBuilder
