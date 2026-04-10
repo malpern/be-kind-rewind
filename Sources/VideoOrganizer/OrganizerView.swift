@@ -20,18 +20,6 @@ struct OrganizerView: View {
                         TopicScrollProgressBar(progress: store.topicScrollProgress)
                     }
                 }
-                .overlay(alignment: .top) {
-                    if store.watchRefreshTotalTopics > 0 {
-                        WatchRefreshPill(
-                            completed: store.watchRefreshCompletedTopics,
-                            total: store.watchRefreshTotalTopics,
-                            currentTopicName: store.watchRefreshCurrentTopicName
-                        )
-                        .padding(.top, 12)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                        .animation(.easeInOut(duration: 0.3), value: store.watchRefreshTotalTopics)
-                    }
-                }
                 .inspector(isPresented: $displaySettings.showInspector) {
                     VideoInspector(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                         .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
@@ -272,34 +260,4 @@ private struct TopicScrollProgressBar: View {
     }
 }
 
-private struct WatchRefreshPill: View {
-    let completed: Int
-    let total: Int
-    let currentTopicName: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ProgressView()
-                .controlSize(.small)
-
-            Text("Refreshing \(completed)/\(total)")
-                .font(.caption.monospacedDigit().weight(.medium))
-
-            if let name = currentTopicName {
-                Text("·")
-                    .foregroundStyle(.quaternary)
-                Text(name)
-                    .font(.caption)
-                    .lineLimit(1)
-            }
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-        .allowsHitTesting(false)
-        .accessibilityLabel("Refreshing Watch candidates: \(completed) of \(total) topics")
-    }
-}
 

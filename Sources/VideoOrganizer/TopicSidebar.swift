@@ -95,9 +95,17 @@ struct TopicSidebar: View {
                     }
                     .id("search-field")
 
-                    HStack {
-                        Text("\(filteredTopics.count) Topics")
-                            .font(.subheadline.weight(.medium))
+                    HStack(spacing: 6) {
+                        if store.watchRefreshTotalTopics > 0 {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text("Refreshing \(store.watchRefreshCompletedTopics)/\(store.watchRefreshTotalTopics)")
+                                .font(.subheadline.weight(.medium).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("\(filteredTopics.count) Topics")
+                                .font(.subheadline.weight(.medium))
+                        }
                         Spacer()
                         if store.parsedQuery.isEmpty {
                             Text("\(store.totalVideoCount) videos")
