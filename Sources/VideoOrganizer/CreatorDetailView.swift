@@ -24,6 +24,12 @@ struct CreatorDetailView: View {
     /// Same enum used by both creator-page surfaces and any future per-section toggle.
     @AppStorage("creatorAllVideosViewMode") private var allVideosViewMode: AllVideosViewMode = .table
 
+    /// Per-creator search query. Local to the page, resets on navigation away. Filters
+    /// the All Videos table/grid by case-insensitive title substring. Distinct from the
+    /// main app search (which spans the whole library) — this only narrows the videos
+    /// already shown for this one creator.
+    @State private var creatorSearchText: String = ""
+
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
         case table
         case grid
@@ -120,6 +126,12 @@ struct CreatorDetailView: View {
     /// way Apple Music's artist hero (Play / Shuffle / ...) and the Mac App Store
     /// product page (Get button) put primary actions adjacent to the entity. macOS
     /// users grab these faster than reaching for the toolbar.
+    ///
+    /// The action set is deliberately small and meaningful for a *creator on this page*:
+    /// Pin (favorite), Share (system share sheet), Exclude (hide from Watch), and
+    /// YouTube (open the channel externally). The previous "Filter" button was removed
+    /// because filtering the topic grid to this creator is redundant when you're
+    /// already viewing this creator's videos right here.
     @ViewBuilder
     private var headerActionButtons: some View {
         HStack(spacing: 8) {
@@ -140,16 +152,13 @@ struct CreatorDetailView: View {
             .help(page.isFavorite ? "Remove from favorite creators" : "Pin as favorite creator")
             .accessibilityIdentifier("creatorHeaderPinButton")
 
-            Button {
-                store.popToRootDetail()
-                _ = store.navigateToCreator(channelId: channelId, channelName: page.channelName)
-            } label: {
-                Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+            ShareLink(item: page.youtubeURL, subject: Text(page.channelName)) {
+                Label("Share", systemImage: "square.and.arrow.up")
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
-            .help("Filter the topic grid to this creator's saved videos")
-            .accessibilityIdentifier("creatorHeaderFilterButton")
+            .help("Share this channel via the system share sheet")
+            .accessibilityIdentifier("creatorHeaderShareButton")
 
             Button(role: page.isExcluded ? nil : .destructive) {
                 if page.isExcluded {
@@ -501,10 +510,11 @@ struct CreatorDetailView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("All videos")
                         .font(.title3.weight(.semibold))
-                    Text("\(page.allVideos.count) total")
+                    Text(allVideosCountLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    creatorSearchField
                     Picker("", selection: $allVideosViewMode) {
                         ForEach(AllVideosViewMode.allCases) { mode in
                             Image(systemName: mode.symbolName)
@@ -530,6 +540,50 @@ struct CreatorDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Inline search field for filtering this creator's videos by title.
+    /// Magnifying-glass icon + plain TextField wrapped in a rounded background — same
+    /// look as the topic sidebar search field already in the app.
+    @ViewBuilder
+    private var creatorSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            TextField("Search this creator's videos", text: $creatorSearchText)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .frame(minWidth: 160, idealWidth: 200, maxWidth: 240)
+            if !creatorSearchText.isEmpty {
+                Button {
+                    creatorSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 0.5)
+        )
+    }
+
+    /// "52 total" when no filter is active; "12 of 52" when the search has narrowed
+    /// the visible set so the user can see how much the filter is hiding.
+    private var allVideosCountLabel: String {
+        let total = page.allVideos.count
+        let visible = filteredAllVideos.count
+        if visible == total {
+            return "\(total) total"
+        }
+        return "\(visible) of \(total)"
     }
 
     @ViewBuilder
@@ -663,8 +717,20 @@ struct CreatorDetailView: View {
         )
     }
 
+    /// All videos with the per-creator search applied (case-insensitive title substring).
+    /// Used by the count label, the table, and the grid so all three stay in sync with
+    /// what the user is filtering for.
+    private var filteredAllVideos: [CreatorVideoCard] {
+        let trimmed = creatorSearchText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return page.allVideos }
+        let needle = trimmed.lowercased()
+        return page.allVideos.filter { card in
+            card.title.lowercased().contains(needle)
+        }
+    }
+
     private var sortedAllVideos: [CreatorVideoCard] {
-        page.allVideos.sorted(using: allVideosSort)
+        filteredAllVideos.sorted(using: allVideosSort)
     }
 
     @ViewBuilder
