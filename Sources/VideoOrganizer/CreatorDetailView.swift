@@ -128,29 +128,30 @@ struct CreatorDetailView: View {
     /// users grab these faster than reaching for the toolbar.
     ///
     /// The action set is deliberately small and meaningful for a *creator on this page*:
-    /// Pin (favorite), Share (system share sheet), Exclude (hide from Watch), and
-    /// YouTube (open the channel externally). The previous "Filter" button was removed
-    /// because filtering the topic grid to this creator is redundant when you're
-    /// already viewing this creator's videos right here.
+    /// Open on YouTube (prominent primary), Copy Link, Share (system share sheet),
+    /// and Exclude (destructive). Pin is intentionally absent until Phase 3 wires it
+    /// into Watch refresh ranking — until then it would have no observable effect.
     @ViewBuilder
     private var headerActionButtons: some View {
         HStack(spacing: 8) {
+            Link(destination: page.youtubeURL) {
+                Label("Open on YouTube", systemImage: "arrow.up.right.square.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .help("Open this channel on YouTube")
+            .accessibilityIdentifier("creatorHeaderYouTubeButton")
+
             Button {
-                store.toggleFavoriteCreator(
-                    channelId: channelId,
-                    channelName: page.channelName,
-                    iconUrl: page.avatarUrl?.absoluteString
-                )
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(page.youtubeURL.absoluteString, forType: .string)
             } label: {
-                Label(
-                    page.isFavorite ? "Pinned" : "Pin",
-                    systemImage: page.isFavorite ? "pin.fill" : "pin"
-                )
+                Label("Copy Link", systemImage: "link")
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
-            .help(page.isFavorite ? "Remove from favorite creators" : "Pin as favorite creator")
-            .accessibilityIdentifier("creatorHeaderPinButton")
+            .help("Copy this channel's YouTube URL to the clipboard")
+            .accessibilityIdentifier("creatorHeaderCopyLinkButton")
 
             ShareLink(item: page.youtubeURL, subject: Text(page.channelName)) {
                 Label("Share", systemImage: "square.and.arrow.up")
@@ -180,14 +181,6 @@ struct CreatorDetailView: View {
             .controlSize(.regular)
             .help(page.isExcluded ? "Restore this creator to Watch discovery" : "Hide this creator from Watch discovery")
             .accessibilityIdentifier("creatorHeaderExcludeButton")
-
-            Link(destination: page.youtubeURL) {
-                Label("YouTube", systemImage: "arrow.up.right.square")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .help("Open this channel on YouTube")
-            .accessibilityIdentifier("creatorHeaderYouTubeButton")
         }
     }
 
@@ -438,18 +431,24 @@ struct CreatorDetailView: View {
                     }
                 }
 
+                // Always reserve 2 lines of vertical space for the title so cards
+                // with short titles align with cards that have wrapped titles. The
+                // .lineLimit(_:reservesSpace:) variant is the modern SwiftUI way to
+                // pad to a fixed line count.
                 Text(card.title)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
-                    .lineLimit(2)
+                    .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
-                    .frame(width: 200, alignment: .leading)
+                    .frame(width: 200, alignment: .topLeading)
 
-                if card.viewCountParsed > 0 {
-                    Text(card.viewCountFormatted)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                // Always render the metadata line so the bottom edge of every card
+                // sits at the same baseline. Use an em-dash placeholder when view
+                // count is unknown so the row never collapses to zero height.
+                Text(card.viewCountParsed > 0 ? card.viewCountFormatted : "—")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(card.viewCountParsed > 0 ? .secondary : .tertiary)
+                    .frame(width: 200, alignment: .leading)
             }
         }
         .buttonStyle(.plain)
@@ -1074,20 +1073,15 @@ struct CreatorDetailView: View {
     }
 
     /// Context menu for the identity header — channel-level actions. Mirrors the
-    /// toolbar buttons but accessible via right-click directly on the avatar/title.
+    /// header action buttons but accessible via right-click directly on the avatar/title.
+    /// Pin/Unpin is intentionally absent until Phase 3 wires the favorite signal into
+    /// Watch refresh ranking — keeping it out of the menu matches the header.
     @ViewBuilder
     private var identityContextMenuItems: some View {
         Button {
-            store.toggleFavoriteCreator(
-                channelId: channelId,
-                channelName: page.channelName,
-                iconUrl: page.avatarUrl?.absoluteString
-            )
+            NSWorkspace.shared.open(page.youtubeURL)
         } label: {
-            Label(
-                page.isFavorite ? "Unpin Creator" : "Pin Creator",
-                systemImage: page.isFavorite ? "pin.slash" : "pin"
-            )
+            Label("Open Channel on YouTube", systemImage: "arrow.up.right.square")
         }
 
         Button {
@@ -1095,21 +1089,6 @@ struct CreatorDetailView: View {
             NSPasteboard.general.setString(page.youtubeURL.absoluteString, forType: .string)
         } label: {
             Label("Copy Channel URL", systemImage: "link")
-        }
-
-        Button {
-            NSWorkspace.shared.open(page.youtubeURL)
-        } label: {
-            Label("Open Channel on YouTube", systemImage: "arrow.up.right.square")
-        }
-
-        Divider()
-
-        Button {
-            store.popToRootDetail()
-            _ = store.navigateToCreator(channelId: channelId, channelName: page.channelName)
-        } label: {
-            Label("Filter Saved Videos", systemImage: "line.3.horizontal.decrease.circle")
         }
 
         Divider()
