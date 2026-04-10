@@ -16,7 +16,7 @@ Download the latest packaged app from [GitHub Releases](https://github.com/malpe
 
 ### What you need
 
-- macOS 14+
+- macOS 15+
 - An Anthropic API key for topic generation and classification
 - Optional: a YouTube API key for richer discovery refreshes
 - Optional: Google OAuth setup if you want playlist saves, private playlist reads, or Watch Later sync
@@ -121,7 +121,7 @@ Takes a collection of YouTube videos (from one or more playlists) and organizes 
 - Hover-driven inspector updates
 - Native context menus and menu bar actions
 - Keyboard triage shortcuts for Watch / playlist management
-- Per-topic `Watch` mode with floating discovery progress HUD
+- Per-topic `Watch` mode with scraper-first discovery (no API quota for reads)
 - Real Settings window for API access, history import, and sync status
 - Double-click to open on YouTube
 - Adjustable thumbnail size
@@ -168,14 +168,14 @@ Playlist provenance notes:
 
 Runtime notes:
 - `./build-app.sh` is the supported packaging path; it signs the app and bootstraps the managed discovery Python environment
-- discovery fallback uses a repo-managed venv under `.runtime/discovery-venv` with `scrapetube` installed from `scripts/requirements-discovery.txt`
+- discovery uses a repo-managed venv under `.runtime/discovery-venv` with `scrapetube` installed from `scripts/requirements-discovery.txt`; all read operations (channel uploads, search, icons) use scraping as the primary path with YouTube API as fallback
 - browser-backed sync uses the dedicated Chrome profile at `~/.config/be-kind-rewind/playwright-profile`
 
 ## Developer setup
 
 ### Requirements
 
-- macOS 14+
+- macOS 15+
 - Swift toolchain with SwiftPM
 - Anthropic API key (stored in `~/.config/anthropic/api-key` or macOS Keychain)
 - Optional: YouTube API key in `~/.config/youtube/api-key`
@@ -205,18 +205,22 @@ Sources/
 ├── TaggingKit/            # Shared storage, YouTube clients, sync, discovery fallback
 ├── VideoTagger/           # CLI executable and workflow commands
 └── VideoOrganizer/        # SwiftUI/AppKit macOS app
-    ├── OrganizerStore     # Main observable app state
-    ├── OrganizerStore+*   # Discovery, sync, creator analytics, seen-history
-    ├── GridSection*       # Grid shaping and grouping logic
-    ├── CollectionGridView # AppKit-backed grid and context menu handling
-    ├── TopicSidebar       # Topic/filter navigation
-    └── AppSettingsView    # API/history/sync settings
+    ├── OrganizerStore        # Main observable app state (facade)
+    ├── OrganizerStore+*      # Discovery, sync, creator analytics, video actions, seen-history
+    ├── OrganizerViewModels   # View models and enums
+    ├── GridSection*          # Grid shaping and grouping logic
+    ├── CollectionGridView    # NSViewRepresentable bridge and coordinator
+    ├── CollectionGridAppKit  # AppKit container, cells, keyboard handling
+    ├── CollectionGridCellContent # SwiftUI cell and header content
+    ├── TopicSidebar          # Topic/filter navigation
+    └── AppSettingsView       # API/history/sync settings
 ```
 
 - **Local-first**: All changes happen instantly in SQLite. No YouTube mutations until explicit sync.
 - **Commit table**: Queued mutations are collapsed to net effects before sync (A→B→C becomes A→C).
+- **Scraper-first Watch**: channel uploads, video search, and channel icons use web scraping (no API quota). API is fallback only. See [Watch Architecture](docs/watch-architecture.md).
 - **Tested across 3 test targets**: `TaggingKitTests`, `VideoTaggerTests`, and `VideoOrganizerTests`.
-- **Current suite size**: 113 tests covering storage, CLI workflows, organizer state, grid sectioning, OAuth, sync routing, and discovery/archive behavior.
+- **Current suite size**: 147 tests across 25 suites covering storage, CLI workflows, organizer state, grid sectioning, OAuth, sync routing, discovery/archive behavior, thumbnail caching, and service models.
 
 ## Related
 
