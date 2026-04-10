@@ -160,12 +160,18 @@ final class OrganizerStore {
 
     let store: TopicStore
     var suggester: TopicSuggester?
+    var creatorThemeClassifier: CreatorThemeClassifier?
     var youtubeClient: YouTubeClient?
     let runtimeEnvironment: RuntimeEnvironment
+
+    /// Channels currently mid-classification, so the page view can show a loading
+    /// indicator and prevent duplicate concurrent runs for the same creator.
+    var classifyingThemeChannels: Set<String> = []
 
     init(dbPath: String, claudeClient: ClaudeClient? = nil, startBackgroundTasks: Bool = true) throws {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }
+        self.creatorThemeClassifier = claudeClient.map { CreatorThemeClassifier(client: $0) }
         self.youtubeClient = try? YouTubeClient()
         self.runtimeEnvironment = RuntimeEnvironment()
         loadTopics()
@@ -187,6 +193,7 @@ final class OrganizerStore {
     func refreshCredentialBackedClients() {
         let client = try? ClaudeClient()
         suggester = client.map { TopicSuggester(client: $0) }
+        creatorThemeClassifier = client.map { CreatorThemeClassifier(client: $0) }
         youtubeClient = try? YouTubeClient()
         AppLogger.auth.info("Refreshed credential-backed service clients")
     }

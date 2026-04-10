@@ -64,6 +64,11 @@ struct CreatorPageViewModel {
     // in topics where no one else has videos.
     let leaderboardEntries: [CreatorLeaderboardEntry]
 
+    // Phase 2 LLM-cached enrichments. Empty when the toggle is off OR cache is empty.
+    let themes: [CreatorThemeRecord]
+    let aboutParagraph: String?
+    let isClassifyingThemes: Bool
+
     // Cadence: videos per month for the last 24 months
     let monthlyVideoCounts: [CreatorMonthlyCount]
 
@@ -102,6 +107,9 @@ struct CreatorPageViewModel {
         playlists: [CreatorPlaylistEntry],
         topicShare: [CreatorTopicShare],
         leaderboardEntries: [CreatorLeaderboardEntry],
+        themes: [CreatorThemeRecord],
+        aboutParagraph: String?,
+        isClassifyingThemes: Bool,
         monthlyVideoCounts: [CreatorMonthlyCount],
         totalUploadsKnown: Int,
         totalUploadsReported: Int?,
@@ -134,6 +142,9 @@ struct CreatorPageViewModel {
         self.playlists = playlists
         self.topicShare = topicShare
         self.leaderboardEntries = leaderboardEntries
+        self.themes = themes
+        self.aboutParagraph = aboutParagraph
+        self.isClassifyingThemes = isClassifyingThemes
         self.monthlyVideoCounts = monthlyVideoCounts
         self.totalUploadsKnown = totalUploadsKnown
         self.totalUploadsReported = totalUploadsReported
@@ -168,6 +179,9 @@ struct CreatorPageViewModel {
         playlists: [],
         topicShare: [],
         leaderboardEntries: [],
+        themes: [],
+        aboutParagraph: nil,
+        isClassifyingThemes: false,
         monthlyVideoCounts: [],
         totalUploadsKnown: 0,
         totalUploadsReported: nil,
@@ -415,6 +429,9 @@ enum CreatorPageBuilder {
             playlists: playlists,
             topicShare: topicShare,
             leaderboardEntries: makeLeaderboard(forChannelId: channelId, in: store),
+            themes: (try? store.store.creatorThemes(channelId: channelId)) ?? [],
+            aboutParagraph: (try? store.store.creatorAbout(channelId: channelId))?.summary,
+            isClassifyingThemes: store.classifyingThemeChannels.contains(channelId),
             monthlyVideoCounts: monthlyCounts,
             totalUploadsKnown: scoredCards.count,
             totalUploadsReported: totalUploadsReported,

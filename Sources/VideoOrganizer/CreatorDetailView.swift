@@ -30,6 +30,11 @@ struct CreatorDetailView: View {
     /// already shown for this one creator.
     @State private var creatorSearchText: String = ""
 
+    /// Currently-selected theme capsule, if any. Filters the All Videos list to videos
+    /// in the matching cluster's `videoIds`. nil means no theme filter is active.
+    /// Local to the page, resets on navigation away.
+    @State private var selectedThemeLabel: String? = nil
+
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
         case table
         case grid
@@ -45,6 +50,7 @@ struct CreatorDetailView: View {
                 identityCard
                 whatsNewSection
                 essentialsSection
+                themeCapsulesSection
                 allVideosSection
                 playlistsSection
                 nichesAndCadenceSection
@@ -64,6 +70,11 @@ struct CreatorDetailView: View {
         // its "Get" button — actions adjacent to the entity, not in the toolbar.
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+            // Kick off Claude theme classification + about generation in the background
+            // if the toggle is on and the cache is empty. The store inserts this channel
+            // into classifyingThemeChannels, which we observe below to rebuild the page
+            // when classification finishes.
+            store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
         }
         .onChange(of: store.favoriteCreators.map(\.channelId)) { _, _ in
             // Reflect Pin/Unpin and Exclude/Restore actions immediately in the page model.
@@ -71,6 +82,16 @@ struct CreatorDetailView: View {
         }
         .onChange(of: store.excludedCreators.map(\.channelId)) { _, _ in
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+        }
+        .onChange(of: store.classifyingThemeChannels.contains(channelId)) { wasClassifying, isClassifying in
+            // When classification finishes (true → false), rebuild the page so the
+            // newly-cached themes and about paragraph appear.
+            if wasClassifying && !isClassifying {
+                page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+            } else if !wasClassifying && isClassifying {
+                // Rebuild once at the start so the loading indicator appears.
+                page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+            }
         }
     }
 
@@ -103,6 +124,26 @@ struct CreatorDetailView: View {
                             .truncationMode(.tail)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
+                    }
+
+                    if let about = page.aboutParagraph {
+                        Text(about)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .padding(.top, 4)
+                    } else if page.isClassifyingThemes {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Generating creator summary…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 4)
                     }
 
                     tierLine
@@ -560,6 +601,83 @@ struct CreatorDetailView: View {
         return "\(value)"
     }
 
+    // MARK: - Theme capsules (LLM-driven)
+
+    @ViewBuilder
+    private var themeCapsulesSection: some View {
+        if !page.themes.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Themes")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(page.themes, id: \.label) { theme in
+                            themeCapsule(theme)
+                        }
+                        if selectedThemeLabel != nil {
+                            Button {
+                                selectedThemeLabel = nil
+                            } label: {
+                                Label("Clear", systemImage: "xmark.circle")
+                                    .font(.callout)
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.tint)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        } else if page.isClassifyingThemes && page.aboutParagraph == nil {
+            // Show a single inline progress row above All Videos when classification
+            // is in flight and we don't have an about paragraph rendering instead.
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Classifying themes…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func themeCapsule(_ theme: CreatorThemeRecord) -> some View {
+        let isSelected = selectedThemeLabel == theme.label
+        return Button {
+            if isSelected {
+                selectedThemeLabel = nil
+            } else {
+                selectedThemeLabel = theme.label
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if theme.isSeries {
+                    Image(systemName: "list.number")
+                        .font(.caption.weight(.semibold))
+                }
+                Text(theme.label)
+                    .font(.callout.weight(.medium))
+                Text("\(theme.videoIds.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.gray.opacity(0.10))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(isSelected ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: isSelected ? 1.5 : 0.5)
+            )
+            .foregroundStyle(isSelected ? Color.accentColor : .primary)
+        }
+        .buttonStyle(.plain)
+        .help(theme.description ?? theme.label)
+    }
+
     // MARK: - All videos
 
     @ViewBuilder
@@ -776,16 +894,29 @@ struct CreatorDetailView: View {
         )
     }
 
-    /// All videos with the per-creator search applied (case-insensitive title substring).
+    /// All videos with the per-creator search AND the theme capsule filter applied.
     /// Used by the count label, the table, and the grid so all three stay in sync with
-    /// what the user is filtering for.
+    /// what the user is filtering for. Both filters compose as an intersection.
     private var filteredAllVideos: [CreatorVideoCard] {
-        let trimmed = creatorSearchText.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return page.allVideos }
-        let needle = trimmed.lowercased()
-        return page.allVideos.filter { card in
-            card.title.lowercased().contains(needle)
+        var working = page.allVideos
+
+        // Theme capsule filter (LLM-cluster membership).
+        if let themeLabel = selectedThemeLabel,
+           let theme = page.themes.first(where: { $0.label == themeLabel }) {
+            let allowedIds = Set(theme.videoIds)
+            working = working.filter { allowedIds.contains($0.videoId) }
         }
+
+        // Free-text title substring filter.
+        let trimmed = creatorSearchText.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty {
+            let needle = trimmed.lowercased()
+            working = working.filter { card in
+                card.title.lowercased().contains(needle)
+            }
+        }
+
+        return working
     }
 
     private var sortedAllVideos: [CreatorVideoCard] {
