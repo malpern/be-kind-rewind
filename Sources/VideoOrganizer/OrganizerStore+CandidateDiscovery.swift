@@ -223,8 +223,31 @@ extension OrganizerStore {
                 candidateProgressByTopic[topicId] = Double(completedChannels) / Double(totalChannels)
             }
 
-            // Scraper-first search: try scraping YouTube search (no quota), fall back to API
-            let searchPlans = CandidateDiscoveryCoordinator.searchPlans(for: topicId, store: self)
+            // Fix 3: skip the search lane entirely if the channel-archive pass already
+            // produced enough candidates. Search is the most expensive discovery lane and
+            // typically only matters when archives are sparse.
+            let archiveCandidateThreshold = 24
+            let archiveProducedEnough = aggregate.count >= archiveCandidateThreshold
+
+            // Fix 4: per-topic 24h throttle on the search lane. Even if scraping is free,
+            // re-running 4 search queries × 23 topics on every launch wastes work and
+            // makes API fallback prompts cascade.
+            let searchRecentlyAttempted = SearchAttemptLedger.shared.wasRecentlyAttempted(topicId: topicId)
+
+            let searchPlans: [CandidateSearchPlan]
+            if archiveProducedEnough {
+                searchPlans = []
+                AppLogger.discovery.info("Skipping search lane for topic \(topicId, privacy: .public): archive produced \(aggregate.count, privacy: .public) candidates (>= \(archiveCandidateThreshold, privacy: .public))")
+            } else if searchRecentlyAttempted {
+                searchPlans = []
+                AppLogger.discovery.info("Skipping search lane for topic \(topicId, privacy: .public): attempted within last 24h")
+            } else {
+                searchPlans = CandidateDiscoveryCoordinator.searchPlans(for: topicId, store: self)
+                if !searchPlans.isEmpty {
+                    SearchAttemptLedger.shared.markAttempted(topicId: topicId)
+                }
+            }
+
             for plan in searchPlans {
                 do {
                     let fallbackService = DiscoveryFallbackService(environment: runtimeEnvironment)
@@ -609,7 +632,9 @@ extension OrganizerStore {
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
+            self.beginAPIFallbackPass()
             defer {
+                self.endAPIFallbackPass()
                 self.watchRefreshTask = nil
                 self.watchRefreshTotalTopics = 0
                 self.watchRefreshCompletedTopics = 0

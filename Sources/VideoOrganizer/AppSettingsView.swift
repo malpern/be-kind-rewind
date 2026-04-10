@@ -145,6 +145,41 @@ struct AppSettingsView: View {
                     Button("Refresh quota telemetry") {
                         store.refreshYouTubeQuotaSnapshot()
                     }
+
+                    Divider().padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: Bindable(store).apiSearchFallbackEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Allow YouTube API search fallback")
+                                    .font(.body.weight(.medium))
+                                Text("When scrape-based search fails, ask before spending search.list quota (100 units per query). Off by default — search.list is the most expensive discovery call.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .toggleStyle(.switch)
+
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Per-refresh API budget")
+                                .font(.body.weight(.medium))
+                            Spacer()
+                            Stepper(
+                                value: Bindable(store).apiFallbackPassBudgetUnits,
+                                in: 100...10_000,
+                                step: 100
+                            ) {
+                                Text("\(store.apiFallbackPassBudgetUnits) units")
+                                    .font(.body.monospacedDigit())
+                                    .frame(minWidth: 90, alignment: .trailing)
+                            }
+                        }
+                        Text("Hard ceiling on estimated quota a single Watch refresh pass may spend on API fallbacks. Calls that would exceed the ceiling are skipped automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 Divider()

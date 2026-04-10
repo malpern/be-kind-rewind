@@ -106,6 +106,28 @@ final class OrganizerStore {
     var youtubeQuotaExhausted = false
     var youtubeQuotaSnapshot: YouTubeQuotaSnapshot?
     var pendingAPIFallbackApproval: APIFallbackApprovalRequest?
+
+    /// User opt-in for the very expensive search.list API fallback (100 units/call).
+    /// Default off; only the scrape path is allowed unless the user explicitly enables this.
+    var apiSearchFallbackEnabled: Bool = UserDefaults.standard.bool(forKey: "apiSearchFallbackEnabled") {
+        didSet { UserDefaults.standard.set(apiSearchFallbackEnabled, forKey: "apiSearchFallbackEnabled") }
+    }
+
+    /// Maximum estimated YouTube units a single Watch refresh pass is allowed to spend on API
+    /// fallbacks. Acts as a hard ceiling on top of any user approvals.
+    var apiFallbackPassBudgetUnits: Int = {
+        let stored = UserDefaults.standard.integer(forKey: "apiFallbackPassBudgetUnits")
+        return stored > 0 ? stored : 1_000
+    }() {
+        didSet { UserDefaults.standard.set(apiFallbackPassBudgetUnits, forKey: "apiFallbackPassBudgetUnits") }
+    }
+
+    /// Per-pass session memory and aggregate budget tracking for API fallback approval.
+    /// Reset by `beginAPIFallbackPass()` at the start of each Watch refresh.
+    private var apiFallbackPassDenials: Set<DiscoveryTelemetryKind> = []
+    private var apiFallbackPassApprovals: Set<DiscoveryTelemetryKind> = []
+    private var apiFallbackPassUnitsSpent: Int = 0
+    var apiFallbackPassActive: Bool = false
     private(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
     private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
     private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]
@@ -170,11 +192,73 @@ final class OrganizerStore {
         }
     }
 
+    /// Marks the start of a new Watch refresh pass and clears all per-pass approval state.
+    func beginAPIFallbackPass() {
+        apiFallbackPassDenials.removeAll()
+        apiFallbackPassApprovals.removeAll()
+        apiFallbackPassUnitsSpent = 0
+        apiFallbackPassActive = true
+    }
+
+    /// Marks the end of a Watch refresh pass. Called from a defer block.
+    func endAPIFallbackPass() {
+        apiFallbackPassActive = false
+    }
+
+    /// Request approval for an API fallback. Honors per-pass session memory, the per-pass
+    /// aggregate budget, and the search-fallback opt-in. Returns true if the call may proceed.
     func requestAPIFallbackApproval(
         kind: DiscoveryTelemetryKind,
         reason: String,
         operation: YouTubeAPIOperation
     ) async -> Bool {
+        // Fix 1: search.list API fallback is opt-in via Settings.
+        if kind == .search && !apiSearchFallbackEnabled {
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: kind,
+                backend: .api,
+                outcome: .skipped,
+                detail: "search API fallback disabled in Settings"
+            )
+            return false
+        }
+
+        // Fix 2: per-pass denial memory.
+        if apiFallbackPassDenials.contains(kind) {
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: kind,
+                backend: .api,
+                outcome: .skipped,
+                detail: "denied for this refresh pass"
+            )
+            return false
+        }
+
+        // Fix 5: per-pass aggregate budget. Reject before prompting if this call would
+        // exceed the ceiling — protects against runaway approvals.
+        let projected = apiFallbackPassUnitsSpent + operation.estimatedUnits
+        if apiFallbackPassActive && projected > apiFallbackPassBudgetUnits {
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: kind,
+                backend: .api,
+                outcome: .skipped,
+                detail: "per-pass budget exceeded (\(apiFallbackPassUnitsSpent)/\(apiFallbackPassBudgetUnits) units spent, +\(operation.estimatedUnits) needed)"
+            )
+            return false
+        }
+
+        // Fix 2: per-pass approval memory — auto-approve subsequent calls of the same kind.
+        if apiFallbackPassApprovals.contains(kind) {
+            apiFallbackPassUnitsSpent += operation.estimatedUnits
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: kind,
+                backend: .api,
+                outcome: .approvalGranted,
+                detail: "auto-approved for this pass: \(reason)"
+            )
+            return true
+        }
+
         let snapshot = await YouTubeQuotaLedger.shared.snapshot()
         await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
             kind: kind,
@@ -196,7 +280,10 @@ final class OrganizerStore {
             estimatedUnits: operation.estimatedUnits,
             remainingUnitsToday: snapshot.remainingUnitsToday,
             resetAt: snapshot.resetAt,
-            kind: kind
+            kind: kind,
+            passUnitsSpent: apiFallbackPassUnitsSpent,
+            passBudgetUnits: apiFallbackPassBudgetUnits,
+            passActive: apiFallbackPassActive
         )
 
         return await withCheckedContinuation { continuation in
@@ -204,33 +291,42 @@ final class OrganizerStore {
         }
     }
 
-    func approvePendingAPIFallback() {
+    func approvePendingAPIFallback(rememberForPass: Bool = false) {
         guard let request = pendingAPIFallbackApproval else { return }
         pendingAPIFallbackApproval = nil
         let continuation = apiFallbackApprovalContinuation
         apiFallbackApprovalContinuation = nil
+        if apiFallbackPassActive {
+            apiFallbackPassUnitsSpent += request.estimatedUnits
+            if rememberForPass {
+                apiFallbackPassApprovals.insert(request.kind)
+            }
+        }
         Task {
             await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
                 kind: request.kind,
                 backend: .api,
                 outcome: .approvalGranted,
-                detail: request.reason
+                detail: rememberForPass ? "remembered for pass: \(request.reason)" : request.reason
             )
         }
         continuation?.resume(returning: true)
     }
 
-    func denyPendingAPIFallback() {
+    func denyPendingAPIFallback(rememberForPass: Bool = false) {
         guard let request = pendingAPIFallbackApproval else { return }
         pendingAPIFallbackApproval = nil
         let continuation = apiFallbackApprovalContinuation
         apiFallbackApprovalContinuation = nil
+        if apiFallbackPassActive && rememberForPass {
+            apiFallbackPassDenials.insert(request.kind)
+        }
         Task {
             await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
                 kind: request.kind,
                 backend: .api,
                 outcome: .approvalDenied,
-                detail: request.reason
+                detail: rememberForPass ? "remembered for pass: \(request.reason)" : request.reason
             )
         }
         continuation?.resume(returning: false)

@@ -75,15 +75,23 @@ struct OrganizerView: View {
             store.pendingAPIFallbackApproval?.title ?? "",
             isPresented: Binding(
                 get: { store.pendingAPIFallbackApproval != nil },
-                set: { if !$0 { store.denyPendingAPIFallback() } }
+                set: { if !$0 { store.denyPendingAPIFallback(rememberForPass: false) } }
             ),
             presenting: store.pendingAPIFallbackApproval
         ) { request in
-            Button("Use API") {
-                store.approvePendingAPIFallback()
+            Button("Use API once") {
+                store.approvePendingAPIFallback(rememberForPass: false)
+            }
+            if store.apiFallbackPassActive {
+                Button("Use API for the rest of this refresh") {
+                    store.approvePendingAPIFallback(rememberForPass: true)
+                }
+                Button("Don’t ask again this refresh", role: .destructive) {
+                    store.denyPendingAPIFallback(rememberForPass: true)
+                }
             }
             Button("Not Now", role: .cancel) {
-                store.denyPendingAPIFallback()
+                store.denyPendingAPIFallback(rememberForPass: false)
             }
         } message: { request in
             Text(request.message)
