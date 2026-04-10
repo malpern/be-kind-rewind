@@ -68,6 +68,11 @@ struct CreatorPageViewModel {
     let themes: [CreatorThemeRecord]
     let aboutParagraph: String?
     let isClassifyingThemes: Bool
+    /// Phase 3: per-series standout episode lookup. For each theme cluster where
+    /// `isSeries == true`, this map contains the videoId of the cluster member with
+    /// the highest series-scoped outlier score (views relative to the SERIES median,
+    /// not the channel median). Used by the "By theme" section to badge the standout.
+    let standoutEpisodesBySeriesLabel: [String: String]
 
     // Cadence: videos per month for the last 24 months
     let monthlyVideoCounts: [CreatorMonthlyCount]
@@ -110,6 +115,7 @@ struct CreatorPageViewModel {
         themes: [CreatorThemeRecord],
         aboutParagraph: String?,
         isClassifyingThemes: Bool,
+        standoutEpisodesBySeriesLabel: [String: String],
         monthlyVideoCounts: [CreatorMonthlyCount],
         totalUploadsKnown: Int,
         totalUploadsReported: Int?,
@@ -145,6 +151,7 @@ struct CreatorPageViewModel {
         self.themes = themes
         self.aboutParagraph = aboutParagraph
         self.isClassifyingThemes = isClassifyingThemes
+        self.standoutEpisodesBySeriesLabel = standoutEpisodesBySeriesLabel
         self.monthlyVideoCounts = monthlyVideoCounts
         self.totalUploadsKnown = totalUploadsKnown
         self.totalUploadsReported = totalUploadsReported
@@ -182,6 +189,7 @@ struct CreatorPageViewModel {
         themes: [],
         aboutParagraph: nil,
         isClassifyingThemes: false,
+        standoutEpisodesBySeriesLabel: [:],
         monthlyVideoCounts: [],
         totalUploadsKnown: 0,
         totalUploadsReported: nil,
@@ -370,6 +378,9 @@ enum CreatorPageBuilder {
         let recentVideos = Array(recentVideosInWindow.prefix(5))
         let recentVideosTotalInWindow = recentVideosInWindow.count
 
+        // 10c. Phase 2 LLM theme cache + Phase 3 series-scoped standout computation.
+        let cachedThemes = (try? store.store.creatorThemes(channelId: channelId)) ?? []
+
         // 11. Header counts and totals.
         let totalViews = scoredCards.reduce(0) { $0 + $1.viewCountParsed }
         let watchedCount = savedVideosFlat.compactMap { store.seenSummary(for: $0.videoId) }.count
@@ -429,9 +440,10 @@ enum CreatorPageBuilder {
             playlists: playlists,
             topicShare: topicShare,
             leaderboardEntries: makeLeaderboard(forChannelId: channelId, in: store),
-            themes: (try? store.store.creatorThemes(channelId: channelId)) ?? [],
+            themes: cachedThemes,
             aboutParagraph: (try? store.store.creatorAbout(channelId: channelId))?.summary,
             isClassifyingThemes: store.classifyingThemeChannels.contains(channelId),
+            standoutEpisodesBySeriesLabel: makeStandoutEpisodes(themes: cachedThemes, allCards: scoredCards),
             monthlyVideoCounts: monthlyCounts,
             totalUploadsKnown: scoredCards.count,
             totalUploadsReported: totalUploadsReported,
@@ -566,6 +578,49 @@ enum CreatorPageBuilder {
     }
 
     // MARK: - Playlists
+
+    /// Phase 3: for each series-typed theme cluster, find the standout episode by
+    /// scoring videos against the SERIES median (not the channel median). Returns a
+    /// map of `seriesLabel → standoutVideoId`. The standout is the video with the
+    /// highest series-scoped outlier score; if no video meaningfully exceeds the
+    /// series median (max ratio < 1.5×), the series gets no standout.
+    ///
+    /// Costs nothing — pure stats over the existing `OutlierAnalytics` module on
+    /// data already in memory. The series detection itself happens upstream in the
+    /// LLM theme classifier (Phase 2 #4); this function just consumes its output.
+    private static func makeStandoutEpisodes(
+        themes: [CreatorThemeRecord],
+        allCards: [CreatorVideoCard]
+    ) -> [String: String] {
+        guard !themes.isEmpty else { return [:] }
+        let cardsById = Dictionary(uniqueKeysWithValues: allCards.map { ($0.videoId, $0) })
+
+        var result: [String: String] = [:]
+        for theme in themes where theme.isSeries {
+            let seriesCards = theme.videoIds.compactMap { cardsById[$0] }
+            guard seriesCards.count >= 3 else { continue } // not enough to compute a meaningful median
+
+            let seriesMedian = OutlierAnalytics.channelMedianViews(seriesCards)
+            guard seriesMedian > 0 else { continue }
+
+            // Find the video with the highest views relative to the series median.
+            // Require at least 1.5× to count as a "standout" — anything less is just
+            // normal variance within the series.
+            var bestRatio: Double = 0
+            var bestVideoId: String?
+            for card in seriesCards where card.viewCountParsed > 0 {
+                let ratio = Double(card.viewCountParsed) / Double(seriesMedian)
+                if ratio > bestRatio {
+                    bestRatio = ratio
+                    bestVideoId = card.videoId
+                }
+            }
+            if let bestVideoId, bestRatio >= 1.5 {
+                result[theme.label] = bestVideoId
+            }
+        }
+        return result
+    }
 
     /// Builds the competitor leaderboard — other creators in the user's library who
     /// publish in topics that overlap with this creator. Pure stats over the existing

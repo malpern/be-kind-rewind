@@ -1037,10 +1037,17 @@ struct CreatorDetailView: View {
     private func byThemeVideoList(for theme: CreatorThemeRecord) -> some View {
         let allowed = Set(theme.videoIds)
         let videosInTheme = page.allVideos.filter { allowed.contains($0.videoId) }
+        let standoutId = page.standoutEpisodesBySeriesLabel[theme.label]
         VStack(alignment: .leading, spacing: 4) {
             ForEach(videosInTheme) { card in
                 Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
                     HStack(spacing: 8) {
+                        if card.videoId == standoutId {
+                            Image(systemName: "star.fill")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.yellow)
+                                .help("Standout episode of this series")
+                        }
                         Text(card.title)
                             .font(.callout)
                             .foregroundStyle(.primary)
