@@ -152,6 +152,7 @@ struct CreatorDetailView: View {
                         .font(.largeTitle.weight(.semibold))
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
 
                     if let subtitle = page.subtitle {
                         Text(subtitle)
@@ -160,6 +161,7 @@ struct CreatorDetailView: View {
                             .lineLimit(2)
                             .truncationMode(.tail)
                             .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
 
                     tierLine
@@ -168,6 +170,10 @@ struct CreatorDetailView: View {
                 .padding(.top, 4)
 
                 Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .contextMenu {
+                identityContextMenuItems
             }
 
             Divider()
@@ -306,6 +312,9 @@ struct CreatorDetailView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(.quaternary, lineWidth: 0.5)
         )
+        .contextMenu {
+            videoContextMenuItems(for: [card])
+        }
     }
 
     @ViewBuilder
@@ -414,6 +423,9 @@ struct CreatorDetailView: View {
         }
         .buttonStyle(.plain)
         .help(essentialsCardTooltip(card))
+        .contextMenu {
+            videoContextMenuItems(for: [card])
+        }
     }
 
     private func outlierBadge(_ card: CreatorVideoCard) -> some View {
@@ -560,6 +572,27 @@ struct CreatorDetailView: View {
         }
         .frame(minHeight: 240, idealHeight: 380, maxHeight: 520)
         .tableStyle(.inset(alternatesRowBackgrounds: true))
+        .contextMenu(forSelectionType: CreatorVideoCard.ID.self) { ids in
+            let cards = cardsForSelection(ids)
+            if !cards.isEmpty {
+                videoContextMenuItems(for: cards)
+            }
+        } primaryAction: { ids in
+            // Double-click / return-key default action: open the selected video(s)
+            // on YouTube. Native list pattern (Mail, Music, Files all behave this way).
+            let cards = cardsForSelection(ids)
+            for card in cards {
+                if let url = card.youtubeUrl {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
+    }
+
+    private func cardsForSelection(_ ids: Set<CreatorVideoCard.ID>) -> [CreatorVideoCard] {
+        guard !ids.isEmpty else { return [] }
+        let lookup = Dictionary(uniqueKeysWithValues: page.allVideos.map { ($0.videoId, $0) })
+        return ids.compactMap { lookup[$0] }
     }
 
     @ViewBuilder
@@ -580,6 +613,9 @@ struct CreatorDetailView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    videoContextMenuItems(for: [card])
+                }
             }
         }
     }
@@ -874,6 +910,137 @@ struct CreatorDetailView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+
+    // MARK: - Context menus (macOS-native actions)
+
+    /// The single source of truth for per-video actions on the page. Used by every
+    /// surface that displays a video — All Videos table rows, grid cards, Essentials
+    /// shelf cards, and the What's new row. Mirrors the existing CollectionGridView
+    /// context menu so muscle memory transfers between the topic grid and the creator
+    /// detail page.
+    @ViewBuilder
+    private func videoContextMenuItems(for cards: [CreatorVideoCard]) -> some View {
+        let openLabel = cards.count == 1 ? "Open on YouTube" : "Open All on YouTube"
+        Button {
+            for card in cards {
+                if let url = card.youtubeUrl {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        } label: {
+            Label(openLabel, systemImage: "arrow.up.right.square")
+        }
+
+        let copyLabel = cards.count == 1 ? "Copy YouTube Link" : "Copy YouTube Links"
+        Button {
+            let urls = cards.map { "https://www.youtube.com/watch?v=\($0.videoId)" }.joined(separator: "\n")
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(urls, forType: .string)
+        } label: {
+            Label(copyLabel, systemImage: "link")
+        }
+
+        Divider()
+
+        Button {
+            store.saveVideosToWatchLater(videoIds: cards.map(\.videoId))
+        } label: {
+            Label("Save to Watch Later", systemImage: "clock")
+        }
+
+        let savablePlaylists = store.knownPlaylists().filter { $0.playlistId != "WL" }
+        if !savablePlaylists.isEmpty {
+            Menu {
+                ForEach(savablePlaylists) { playlist in
+                    Button(playlist.title) {
+                        store.saveVideosToPlaylist(
+                            videoIds: cards.map(\.videoId),
+                            playlist: playlist
+                        )
+                    }
+                }
+            } label: {
+                Label("Save to Playlist…", systemImage: "music.note.list")
+            }
+        }
+
+        // Mark Not Interested only applies to videos already saved into a topic.
+        let savedCardsWithTopic = cards.filter { $0.isSaved && $0.topicId != nil }
+        if !savedCardsWithTopic.isEmpty {
+            Divider()
+            Button(role: .destructive) {
+                // Group by topicId since markCandidatesNotInterested takes a single topic.
+                let byTopic = Dictionary(grouping: savedCardsWithTopic) { $0.topicId ?? -1 }
+                for (topicId, group) in byTopic where topicId != -1 {
+                    store.markCandidatesNotInterested(
+                        topicId: topicId,
+                        videoIds: group.map(\.videoId)
+                    )
+                }
+            } label: {
+                Label("Mark as Not Interested", systemImage: "hand.thumbsdown")
+            }
+        }
+    }
+
+    /// Context menu for the identity header — channel-level actions. Mirrors the
+    /// toolbar buttons but accessible via right-click directly on the avatar/title.
+    @ViewBuilder
+    private var identityContextMenuItems: some View {
+        Button {
+            store.toggleFavoriteCreator(
+                channelId: channelId,
+                channelName: page.channelName,
+                iconUrl: page.avatarUrl?.absoluteString
+            )
+        } label: {
+            Label(
+                page.isFavorite ? "Unpin Creator" : "Pin Creator",
+                systemImage: page.isFavorite ? "pin.slash" : "pin"
+            )
+        }
+
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(page.youtubeURL.absoluteString, forType: .string)
+        } label: {
+            Label("Copy Channel URL", systemImage: "link")
+        }
+
+        Button {
+            NSWorkspace.shared.open(page.youtubeURL)
+        } label: {
+            Label("Open Channel on YouTube", systemImage: "arrow.up.right.square")
+        }
+
+        Divider()
+
+        Button {
+            store.popToRootDetail()
+            _ = store.navigateToCreator(channelId: channelId, channelName: page.channelName)
+        } label: {
+            Label("Filter Saved Videos", systemImage: "line.3.horizontal.decrease.circle")
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            if page.isExcluded {
+                store.restoreExcludedCreator(channelId: channelId)
+            } else {
+                store.excludeCreatorFromWatch(
+                    channelId: channelId,
+                    channelName: page.channelName,
+                    channelIconUrl: page.avatarUrl?.absoluteString
+                )
+            }
+        } label: {
+            Label(
+                page.isExcluded ? "Restore from Watch" : "Exclude from Watch",
+                systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
+            )
+        }
     }
 }
 
