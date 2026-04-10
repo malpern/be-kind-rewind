@@ -193,6 +193,27 @@ struct OrganizerStoreTests {
         }
     }
 
+    @Test("stopBackgroundTasks cancels running lifecycle tasks")
+    @MainActor
+    func stopBackgroundTasksCancelsTasks() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try OrganizerStore(dbPath: fixture.dbPath, startBackgroundTasks: true)
+
+            #expect(store.syncLoopTask != nil)
+            #expect(store.browserStatusTask != nil)
+
+            store.stopBackgroundTasks()
+
+            #expect(store.syncTask == nil)
+            #expect(store.browserSyncTask == nil)
+            #expect(store.syncLoopTask == nil)
+            #expect(store.browserStatusTask == nil)
+            #expect(store.watchRefreshTask == nil)
+            #expect(store.pendingAPIFallbackApproval == nil)
+            #expect(store.apiFallbackPassActive == false)
+        }
+    }
+
     @Test("setPageDisplayMode clears selection state when entering watch candidates")
     @MainActor
     func setPageDisplayModeClearsSelectionState() throws {

@@ -190,6 +190,23 @@ final class OrganizerStore {
         }
     }
 
+    func stopBackgroundTasks() {
+        syncTask?.cancel()
+        syncTask = nil
+        browserSyncTask?.cancel()
+        browserSyncTask = nil
+        syncLoopTask?.cancel()
+        syncLoopTask = nil
+        browserStatusTask?.cancel()
+        browserStatusTask = nil
+        watchRefreshTask?.cancel()
+        watchRefreshTask = nil
+        apiFallbackApprovalContinuation?.resume(returning: false)
+        apiFallbackApprovalContinuation = nil
+        pendingAPIFallbackApproval = nil
+        apiFallbackPassActive = false
+    }
+
     func refreshCredentialBackedClients() {
         let client = try? ClaudeClient()
         suggester = client.map { TopicSuggester(client: $0) }

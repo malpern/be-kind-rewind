@@ -134,7 +134,6 @@ struct SearchQueryTests {
         // Topic name match (no channelName) should ignore from: rather than reject.
         #expect(query.matches(fields: ["Mechanical Keyboards"]) == true)
     }
-
     // MARK: - from: handle matching
 
     @Test("from: matches against the channel handle in addition to the channel name")

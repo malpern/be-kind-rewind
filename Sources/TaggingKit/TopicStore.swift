@@ -197,7 +197,7 @@ public final class TopicStore: Sendable {
 
         // Migrate: add metadata columns if missing
         let tableInfo = try db.prepare("PRAGMA table_info(videos)")
-        let existingColumns = Set(tableInfo.map { $0[1] as! String })
+        let existingColumns = try Set(tableInfo.map { try requiredValue($0, at: 1, as: String.self, context: "videos schema") })
         if !existingColumns.contains("view_count") {
             try db.run("ALTER TABLE videos ADD COLUMN view_count TEXT")
         }
@@ -213,7 +213,7 @@ public final class TopicStore: Sendable {
 
         // Migrate: add parent_id to topics if missing
         let topicInfo = try db.prepare("PRAGMA table_info(topics)")
-        let topicColumns = Set(topicInfo.map { $0[1] as! String })
+        let topicColumns = try Set(topicInfo.map { try requiredValue($0, at: 1, as: String.self, context: "topics schema") })
         if !topicColumns.contains("parent_id") {
             try db.run("ALTER TABLE topics ADD COLUMN parent_id INTEGER REFERENCES topics(id)")
         }
@@ -270,7 +270,7 @@ public final class TopicStore: Sendable {
         })
 
         let commitInfo = try db.prepare("PRAGMA table_info(commit_log)")
-        let commitColumns = Set(commitInfo.map { $0[1] as! String })
+        let commitColumns = try Set(commitInfo.map { try requiredValue($0, at: 1, as: String.self, context: "commit_log schema") })
         if !commitColumns.contains("state") {
             try db.run("ALTER TABLE commit_log ADD COLUMN state TEXT DEFAULT 'queued'")
         }
@@ -463,9 +463,9 @@ public final class TopicStore: Sendable {
         var results: [TopicSummary] = []
         for row in try db.prepare(query) {
             results.append(TopicSummary(
-                id: row[0] as! Int64,
-                name: row[1] as! String,
-                videoCount: Int(row[2] as! Int64),
+                id: try requiredValue(row, at: 0, as: Int64.self, context: "listTopics.id"),
+                name: try requiredValue(row, at: 1, as: String.self, context: "listTopics.name"),
+                videoCount: Int(try requiredValue(row, at: 2, as: Int64.self, context: "listTopics.videoCount")),
                 parentId: nil
             ))
         }
@@ -485,9 +485,9 @@ public final class TopicStore: Sendable {
         var results: [TopicSummary] = []
         for row in try db.prepare(query, parentTopicId) {
             results.append(TopicSummary(
-                id: row[0] as! Int64,
-                name: row[1] as! String,
-                videoCount: Int(row[2] as! Int64),
+                id: try requiredValue(row, at: 0, as: Int64.self, context: "subtopicsForTopic.id"),
+                name: try requiredValue(row, at: 1, as: String.self, context: "subtopicsForTopic.name"),
+                videoCount: Int(try requiredValue(row, at: 2, as: Int64.self, context: "subtopicsForTopic.videoCount")),
                 parentId: parentTopicId
             ))
         }
@@ -529,10 +529,10 @@ public final class TopicStore: Sendable {
         var results: [TopicSummary] = []
         for row in try db.prepare(query) {
             results.append(TopicSummary(
-                id: row[0] as! Int64,
-                name: row[1] as! String,
-                videoCount: Int(row[2] as! Int64),
-                parentId: row[3] as? Int64
+                id: try requiredValue(row, at: 0, as: Int64.self, context: "listAllTopicsFlat.id"),
+                name: try requiredValue(row, at: 1, as: String.self, context: "listAllTopicsFlat.name"),
+                videoCount: Int(try requiredValue(row, at: 2, as: Int64.self, context: "listAllTopicsFlat.videoCount")),
+                parentId: try optionalValue(row, at: 3, as: Int64.self, context: "listAllTopicsFlat.parentId")
             ))
         }
         return results
@@ -1047,12 +1047,12 @@ public final class TopicStore: Sendable {
         var results: [PlaylistRecord] = []
         for row in try db.prepare(query, vid) {
             results.append(PlaylistRecord(
-                playlistId: row[0] as! String,
-                title: row[1] as! String,
-                visibility: row[2] as? String,
-                videoCount: row[3] as? Int64 != nil ? Int(row[3] as! Int64) : nil,
-                source: row[4] as? String,
-                fetchedAt: row[5] as? String
+                playlistId: try requiredValue(row, at: 0, as: String.self, context: "playlistsForVideo.playlistId"),
+                title: try requiredValue(row, at: 1, as: String.self, context: "playlistsForVideo.title"),
+                visibility: try optionalValue(row, at: 2, as: String.self, context: "playlistsForVideo.visibility"),
+                videoCount: try optionalIntValue(row, at: 3, context: "playlistsForVideo.videoCount"),
+                source: try optionalValue(row, at: 4, as: String.self, context: "playlistsForVideo.source"),
+                fetchedAt: try optionalValue(row, at: 5, as: String.self, context: "playlistsForVideo.fetchedAt")
             ))
         }
         return results
@@ -1081,14 +1081,14 @@ public final class TopicStore: Sendable {
 
         var results: [String: [PlaylistRecord]] = [:]
         for row in try db.prepare(query) {
-            let videoId = row[0] as! String
+            let videoId = try requiredValue(row, at: 0, as: String.self, context: "allPlaylistsByVideo.videoId")
             let playlist = PlaylistRecord(
-                playlistId: row[1] as! String,
-                title: row[2] as! String,
-                visibility: row[3] as? String,
-                videoCount: row[4] as? Int64 != nil ? Int(row[4] as! Int64) : nil,
-                source: row[5] as? String,
-                fetchedAt: row[6] as? String
+                playlistId: try requiredValue(row, at: 1, as: String.self, context: "allPlaylistsByVideo.playlistId"),
+                title: try requiredValue(row, at: 2, as: String.self, context: "allPlaylistsByVideo.title"),
+                visibility: try optionalValue(row, at: 3, as: String.self, context: "allPlaylistsByVideo.visibility"),
+                videoCount: try optionalIntValue(row, at: 4, context: "allPlaylistsByVideo.videoCount"),
+                source: try optionalValue(row, at: 5, as: String.self, context: "allPlaylistsByVideo.source"),
+                fetchedAt: try optionalValue(row, at: 6, as: String.self, context: "allPlaylistsByVideo.fetchedAt")
             )
             results[videoId, default: []].append(playlist)
         }
@@ -1161,20 +1161,20 @@ public final class TopicStore: Sendable {
         var results: [TopicCandidate] = []
         for row in try db.prepare(query, topicId) {
             results.append(TopicCandidate(
-                topicId: row[0] as! Int64,
-                videoId: row[1] as! String,
-                title: row[2] as! String,
-                channelId: row[3] as? String,
-                channelName: row[4] as? String,
-                videoUrl: row[5] as? String,
-                viewCount: row[6] as? String,
-                publishedAt: row[7] as? String,
-                duration: row[8] as? String,
-                channelIconUrl: row[9] as? String,
-                score: row[10] as! Double,
-                reason: row[11] as! String,
-                state: row[12] as! String,
-                discoveredAt: row[13] as? String
+                topicId: try requiredValue(row, at: 0, as: Int64.self, context: "candidatesForTopic.topicId"),
+                videoId: try requiredValue(row, at: 1, as: String.self, context: "candidatesForTopic.videoId"),
+                title: try requiredValue(row, at: 2, as: String.self, context: "candidatesForTopic.title"),
+                channelId: try optionalValue(row, at: 3, as: String.self, context: "candidatesForTopic.channelId"),
+                channelName: try optionalValue(row, at: 4, as: String.self, context: "candidatesForTopic.channelName"),
+                videoUrl: try optionalValue(row, at: 5, as: String.self, context: "candidatesForTopic.videoUrl"),
+                viewCount: try optionalValue(row, at: 6, as: String.self, context: "candidatesForTopic.viewCount"),
+                publishedAt: try optionalValue(row, at: 7, as: String.self, context: "candidatesForTopic.publishedAt"),
+                duration: try optionalValue(row, at: 8, as: String.self, context: "candidatesForTopic.duration"),
+                channelIconUrl: try optionalValue(row, at: 9, as: String.self, context: "candidatesForTopic.channelIconUrl"),
+                score: try requiredValue(row, at: 10, as: Double.self, context: "candidatesForTopic.score"),
+                reason: try requiredValue(row, at: 11, as: String.self, context: "candidatesForTopic.reason"),
+                state: try requiredValue(row, at: 12, as: String.self, context: "candidatesForTopic.state"),
+                discoveredAt: try optionalValue(row, at: 13, as: String.self, context: "candidatesForTopic.discoveredAt")
             ))
         }
         return results
@@ -1203,20 +1203,20 @@ public final class TopicStore: Sendable {
 
         for row in try db.prepare(query, topicId, vid) {
             return TopicCandidate(
-                topicId: row[0] as! Int64,
-                videoId: row[1] as! String,
-                title: row[2] as! String,
-                channelId: row[3] as? String,
-                channelName: row[4] as? String,
-                videoUrl: row[5] as? String,
-                viewCount: row[6] as? String,
-                publishedAt: row[7] as? String,
-                duration: row[8] as? String,
-                channelIconUrl: row[9] as? String,
-                score: row[10] as! Double,
-                reason: row[11] as! String,
-                state: row[12] as! String,
-                discoveredAt: row[13] as? String
+                topicId: try requiredValue(row, at: 0, as: Int64.self, context: "candidateForTopic.topicId"),
+                videoId: try requiredValue(row, at: 1, as: String.self, context: "candidateForTopic.videoId"),
+                title: try requiredValue(row, at: 2, as: String.self, context: "candidateForTopic.title"),
+                channelId: try optionalValue(row, at: 3, as: String.self, context: "candidateForTopic.channelId"),
+                channelName: try optionalValue(row, at: 4, as: String.self, context: "candidateForTopic.channelName"),
+                videoUrl: try optionalValue(row, at: 5, as: String.self, context: "candidateForTopic.videoUrl"),
+                viewCount: try optionalValue(row, at: 6, as: String.self, context: "candidateForTopic.viewCount"),
+                publishedAt: try optionalValue(row, at: 7, as: String.self, context: "candidateForTopic.publishedAt"),
+                duration: try optionalValue(row, at: 8, as: String.self, context: "candidateForTopic.duration"),
+                channelIconUrl: try optionalValue(row, at: 9, as: String.self, context: "candidateForTopic.channelIconUrl"),
+                score: try requiredValue(row, at: 10, as: Double.self, context: "candidateForTopic.score"),
+                reason: try requiredValue(row, at: 11, as: String.self, context: "candidateForTopic.reason"),
+                state: try requiredValue(row, at: 12, as: String.self, context: "candidateForTopic.state"),
+                discoveredAt: try optionalValue(row, at: 13, as: String.self, context: "candidateForTopic.discoveredAt")
             )
         }
 
@@ -1293,15 +1293,15 @@ public final class TopicStore: Sendable {
         var results: [ArchivedChannelVideo] = []
         for row in try db.prepare(query, bindings) {
             results.append(ArchivedChannelVideo(
-                channelId: row[0] as! String,
-                videoId: row[1] as! String,
-                title: row[2] as! String,
-                channelName: row[3] as? String,
-                publishedAt: row[4] as? String,
-                duration: row[5] as? String,
-                viewCount: row[6] as? String,
-                channelIconUrl: row[7] as? String,
-                fetchedAt: row[8] as? String
+                channelId: try requiredValue(row, at: 0, as: String.self, context: "archivedVideosForChannels.channelId"),
+                videoId: try requiredValue(row, at: 1, as: String.self, context: "archivedVideosForChannels.videoId"),
+                title: try requiredValue(row, at: 2, as: String.self, context: "archivedVideosForChannels.title"),
+                channelName: try optionalValue(row, at: 3, as: String.self, context: "archivedVideosForChannels.channelName"),
+                publishedAt: try optionalValue(row, at: 4, as: String.self, context: "archivedVideosForChannels.publishedAt"),
+                duration: try optionalValue(row, at: 5, as: String.self, context: "archivedVideosForChannels.duration"),
+                viewCount: try optionalValue(row, at: 6, as: String.self, context: "archivedVideosForChannels.viewCount"),
+                channelIconUrl: try optionalValue(row, at: 7, as: String.self, context: "archivedVideosForChannels.channelIconUrl"),
+                fetchedAt: try optionalValue(row, at: 8, as: String.self, context: "archivedVideosForChannels.fetchedAt")
             ))
         }
         return results
