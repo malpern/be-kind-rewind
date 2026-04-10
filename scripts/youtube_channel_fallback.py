@@ -93,31 +93,67 @@ def main():
     parser.add_argument("--max-results", type=int, default=16)
     args = parser.parse_args()
 
-    source = None
-    videos = None
+    # Fetch BOTH scrapetube (deep historical archive) AND the YouTube RSS feed
+    # (always-fresh latest 15) and merge them. RSS catches Shorts and recent
+    # uploads that scrapetube's /videos shelf walker silently misses, AND
+    # provides accurate ISO 8601 timestamps instead of relative strings.
+    # When the same video appears in both, RSS wins (better metadata).
+    scrapetube_videos = []
+    rss_videos = []
     scrapetube_error = None
+    rss_error = None
 
     try:
-        videos = parse_scrapetube_videos(args.channel_id, args.max_results)
-        source = "scrapetube"
+        scrapetube_videos = parse_scrapetube_videos(args.channel_id, args.max_results)
     except Exception as exc:
         scrapetube_error = str(exc)
 
-    if videos is None:
-        try:
-            videos = parse_rss_videos(args.channel_id, args.max_results)
-            source = "rss"
-        except Exception as exc:
-            if scrapetube_error:
-                print(
-                    f"Fallback discovery failed. scrapetube: {scrapetube_error}. rss: {exc}",
-                    file=sys.stderr,
-                )
-            else:
-                print(f"Fallback discovery failed: {exc}", file=sys.stderr)
-            return 1
+    try:
+        rss_videos = parse_rss_videos(args.channel_id, args.max_results)
+    except Exception as exc:
+        rss_error = str(exc)
 
-    print(json.dumps({"source": source, "videos": videos}))
+    # If both sources failed, surface both errors and exit non-zero so the
+    # caller's failure-pattern detector can pick it up.
+    if not scrapetube_videos and not rss_videos:
+        if scrapetube_error and rss_error:
+            print(
+                f"Fallback discovery failed. scrapetube: {scrapetube_error}. rss: {rss_error}",
+                file=sys.stderr,
+            )
+        elif scrapetube_error:
+            print(f"Fallback discovery failed: {scrapetube_error}", file=sys.stderr)
+        elif rss_error:
+            print(f"Fallback discovery failed: {rss_error}", file=sys.stderr)
+        else:
+            print("Fallback discovery returned no videos", file=sys.stderr)
+        return 1
+
+    # Merge: RSS first (newest, accurate timestamps), then scrapetube fills in
+    # the historical tail. Dedupe by videoId — first occurrence wins so RSS
+    # metadata is preferred for overlapping videos.
+    seen = set()
+    merged = []
+    for video in rss_videos + scrapetube_videos:
+        vid = video.get("videoId")
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        merged.append(video)
+
+    # Reflect which sources contributed in the response so the Swift caller's
+    # telemetry can show what worked. Backwards-compatible with the old
+    # single-source field — if one source failed, we still report the other.
+    if rss_videos and scrapetube_videos:
+        source = "scrapetube+rss"
+    elif rss_videos:
+        source = "rss"
+    elif scrapetube_videos:
+        source = "scrapetube"
+    else:
+        source = "none"
+
+    print(json.dumps({"source": source, "videos": merged}))
     return 0
 
 

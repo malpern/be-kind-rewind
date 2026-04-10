@@ -735,10 +735,17 @@ struct CreatorDetailView: View {
             )
             // When the load completes (count appears, even if 0), force a
             // page rebuild so the new archive videos flow into allVideos and
-            // monthlyCounts immediately.
+            // monthlyCounts immediately. Also kicks off theme classification
+            // now that the archive is populated — themes are gated on the
+            // archive being loaded so they classify against the full catalog
+            // instead of just the user's saved videos.
             .onChange(of: store.lastFullHistoryLoadCount[channelId]) { _, newCount in
                 guard newCount != nil, !store.loadingFullHistoryChannels.contains(channelId) else { return }
                 page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+                store.classifyCreatorThemesIfNeeded(
+                    channelId: channelId,
+                    channelName: page.channelName
+                )
             }
         }
     }
@@ -1085,13 +1092,36 @@ struct CreatorDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            } else if page.lastRefreshedAt == nil {
+                // Archive empty AND no tags. Combined CTA — load full history
+                // first, then theme classification fires automatically when
+                // the load completes (see the .onChange in emptyArchiveBanner).
+                Text("Load this creator's uploads to generate tags")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    store.loadFullChannelHistory(
+                        channelId: channelId,
+                        channelName: page.channelName
+                    )
+                } label: {
+                    Label("Load uploads & generate tags", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.loadingFullHistoryChannels.contains(channelId))
             } else {
                 Text("No tags generated yet for this creator")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
+                    store.classifyCreatorThemesIfNeeded(
+                        channelId: channelId,
+                        channelName: page.channelName,
+                        force: true
+                    )
                 } label: {
                     Label("Generate tags", systemImage: "sparkles")
                 }

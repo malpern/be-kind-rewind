@@ -7,6 +7,7 @@ extension OrganizerStore {
     /// - A `creatorThemeClassifier` is configured (Claude API key present)
     /// - The cache for this channel is empty
     /// - We're not already classifying this channel
+    /// - **The channel's archive has been loaded** (see comment below)
     ///
     /// Runs the two LLM calls (themes + about) in parallel and writes the results to
     /// the local SQLite cache. The page view observes `classifyingThemeChannels` to
@@ -16,6 +17,19 @@ extension OrganizerStore {
         guard claudeThemeClassificationEnabled else { return }
         guard let classifier = creatorThemeClassifier else { return }
         guard !classifyingThemeChannels.contains(channelId) else { return }
+
+        // Phase 3 gating: never classify themes from a partial dataset. The
+        // channel must have a populated discovery archive first — otherwise
+        // we'd burn LLM tokens classifying just the user's saved videos
+        // (typically <10) instead of the full catalog. Skipped when force=true
+        // (manual refresh button) since the user is explicitly opting in.
+        if !force {
+            let archived = (try? store.archivedVideoIDsForChannel(channelId)) ?? []
+            guard !archived.isEmpty else {
+                AppLogger.app.info("Skipping theme classification for \(channelName, privacy: .public) — archive not yet loaded")
+                return
+            }
+        }
 
         // Collect inputs first so we can compare against the cached count for
         // staleness detection below.
