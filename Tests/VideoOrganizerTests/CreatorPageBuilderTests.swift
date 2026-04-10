@@ -200,4 +200,39 @@ struct CreatorPageBuilderTests {
             #expect(sum <= page.allVideos.count)
         }
     }
+
+    @Test("upscaledAvatarURL bumps yt3.ggpht.com size parameters to s800")
+    func upscalesYT3Avatars() {
+        let small = "https://yt3.ggpht.com/ytc/AIdro_kAAAA-foo=s88-c-k-c0x00ffffff-no-rj"
+        let bumped = CreatorPageBuilder.upscaledAvatarURL(small)
+        #expect(bumped == "https://yt3.ggpht.com/ytc/AIdro_kAAAA-foo=s800-c-k-c0x00ffffff-no-rj")
+    }
+
+    @Test("upscaledAvatarURL bumps any starting size to 800, including 240")
+    func upscalesAnyStartingSize() {
+        let medium = "https://yt3.ggpht.com/foo=s240-c-k"
+        let bumped = CreatorPageBuilder.upscaledAvatarURL(medium)
+        #expect(bumped == "https://yt3.ggpht.com/foo=s800-c-k")
+    }
+
+    @Test("upscaledAvatarURL also handles googleusercontent.com avatar URLs")
+    func upscalesGoogleusercontentAvatars() {
+        let small = "https://lh3.googleusercontent.com/foo=s96-c"
+        let bumped = CreatorPageBuilder.upscaledAvatarURL(small)
+        #expect(bumped == "https://lh3.googleusercontent.com/foo=s800-c")
+    }
+
+    @Test("upscaledAvatarURL leaves non-yt3 URLs unchanged")
+    func upscaleIgnoresUnknownHosts() {
+        let other = "https://example.com/avatar=s88-c"
+        let bumped = CreatorPageBuilder.upscaledAvatarURL(other)
+        #expect(bumped == other)
+    }
+
+    @Test("upscaledAvatarURL leaves URLs with no size parameter unchanged")
+    func upscaleIgnoresMissingSizeParameter() {
+        let url = "https://yt3.ggpht.com/avatar.jpg"
+        let bumped = CreatorPageBuilder.upscaledAvatarURL(url)
+        #expect(bumped == url)
+    }
 }

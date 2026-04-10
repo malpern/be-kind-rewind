@@ -276,14 +276,23 @@ enum CreatorPageBuilder {
         let youtubeURL = URL(string: "https://www.youtube.com/channel/\(channelId)")
             ?? URL(string: "https://www.youtube.com")!
 
+        // Avatar URL: prefer the channel record, fall back to the first saved video's
+        // channelIconUrl. Never fall back to a video's thumbnail (a different image).
+        // The URL is upscaled at render time via upscaledAvatarURL — YouTube serves the
+        // same image at higher resolution by changing the =sNNN size parameter.
+        let rawAvatarUrl = channelRecord?.iconUrl
+            ?? savedVideosFlat.first(where: { $0.channelIconUrl != nil })?.channelIconUrl
+        let avatarURL = rawAvatarUrl
+            .map(CreatorPageBuilder.upscaledAvatarURL)
+            .flatMap(URL.init(string:))
+
         return CreatorPageViewModel(
             channelId: channelId,
             channelName: resolvedName,
             subtitle: makeSubtitle(from: channelRecord),
             creatorTier: creatorTier(from: channelRecord?.subscriberCount),
             avatarData: channelRecord?.iconData,
-            avatarUrl: channelRecord?.iconUrl.flatMap(URL.init(string:))
-                ?? scoredCards.first(where: { $0.thumbnailUrl != nil })?.thumbnailUrl,
+            avatarUrl: avatarURL,
             countryDisplayName: nil, // not yet sourced
             foundingYear: foundingYear,
             savedVideoCount: savedVideosFlat.count,
@@ -498,6 +507,26 @@ enum CreatorPageBuilder {
             return String(format: "%.0fK views", Double(totalViews) / 1_000)
         }
         return "\(totalViews) views"
+    }
+
+    /// Rewrite a YouTube channel avatar URL to request a larger image. YouTube serves
+    /// avatars from `yt3.ggpht.com` (and a few related hosts) with a `=sNNN` size
+    /// parameter in the URL path — `=s88`, `=s240`, etc. The same image is available
+    /// at any size by changing that number, with no scraping or new requests required.
+    /// We bump everything to `=s800` for the creator detail page header (rendered at
+    /// 160pt × 2x retina = 320px effective; 800px gives plenty of headroom).
+    ///
+    /// Non-yt3 URLs and URLs without a size parameter are returned unchanged.
+    static func upscaledAvatarURL(_ urlString: String) -> String {
+        guard urlString.contains("ggpht.com") || urlString.contains("googleusercontent.com") else {
+            return urlString
+        }
+        let pattern = #"=s\d+"#
+        return urlString.replacingOccurrences(
+            of: pattern,
+            with: "=s800",
+            options: .regularExpression
+        )
     }
 
     private static func computeFoundingYear(from cards: [CreatorVideoCard]) -> Int? {

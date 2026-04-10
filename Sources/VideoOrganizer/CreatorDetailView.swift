@@ -48,8 +48,10 @@ struct CreatorDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background)
-        .navigationTitle(page.channelName)
-        .navigationSubtitle(page.subtitle ?? "")
+        // Deliberately no navigationTitle or navigationSubtitle here — the page body
+        // owns the title display via the largeTitle in the identity card. Mac App
+        // Store and Apple Podcasts both follow this pattern: the toolbar has the
+        // back button + actions, and the entity name lives in the page header only.
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 pinButton
@@ -145,7 +147,7 @@ struct CreatorDetailView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 20) {
                 avatar
-                    .frame(width: 128, height: 128)
+                    .frame(width: 160, height: 160)
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text(page.channelName)
@@ -183,45 +185,58 @@ struct CreatorDetailView: View {
     /// Rounded-square avatar (App Store icon style). Continuous corner radius gives
     /// the iOS/macOS app icon shape; the size + treatment combine to read as
     /// "this page is about this entity" rather than "thumbnail of a creator."
+    ///
+    /// We **prefer the high-resolution URL** (`page.avatarUrl` is upscaled at build
+    /// time via `CreatorPageBuilder.upscaledAvatarURL`) over the cached `iconData`
+    /// blob, because the cache stores whatever low-res version was downloaded for
+    /// the small thumbnails elsewhere in the app — typically 88-240px. The page
+    /// header at 160pt × 2x retina needs at least 320px to avoid looking soft.
+    /// We fall back to the cached blob only when no URL is available.
     @ViewBuilder
     private var avatar: some View {
         Group {
-            if let data = page.avatarData, let nsImage = NSImage(data: data) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if let url = page.avatarUrl {
+            if let url = page.avatarUrl {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .empty:
-                        avatarFallback
+                        avatarLowResOrFallback
                     case .success(let image):
                         image.resizable().aspectRatio(contentMode: .fill)
                     case .failure:
-                        avatarFallback
+                        avatarLowResOrFallback
                     @unknown default:
-                        avatarFallback
+                        avatarLowResOrFallback
                     }
                 }
             } else {
-                avatarFallback
+                avatarLowResOrFallback
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .strokeBorder(.quaternary, lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 5)
     }
 
-    private var avatarFallback: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(.tertiary)
-            Image(systemName: "person.crop.square.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.secondary)
+    /// Shown while the high-res URL is loading or after it fails. Falls back to the
+    /// cached low-res icon data if we have it (better than a blank box), and to a
+    /// generic SF Symbol if we don't.
+    @ViewBuilder
+    private var avatarLowResOrFallback: some View {
+        if let data = page.avatarData, let nsImage = NSImage(data: data) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(.tertiary)
+                Image(systemName: "person.crop.square.fill")
+                    .font(.system(size: 80))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
