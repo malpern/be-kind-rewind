@@ -272,37 +272,48 @@ extension OrganizerStore {
                     }
                 } catch {
                     // Scraper failed — try API if available
-                    if let youtubeClient {
-                        do {
-                            let results = try await youtubeClient.searchVideos(
-                                query: plan.query, maxResults: 5, publishedAfterDays: 30
-                            )
-                            for video in results {
-                                if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
-                                    continue
-                                }
-                                let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
-                                    forTopic: topicId, title: video.title,
-                                    sourceKind: "search_query_recent", sourceRef: plan.query, store: self
-                                )
-                                guard admission.shouldAdmit else { continue }
-                                let creatorAffinity = (try? store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)) ?? 0
-                                let resolvedIconUrl = video.channelId.flatMap { cid in
-                                    resolvedChannelRecord(channelId: cid, fallbackName: nil, fallbackIconURL: nil)?.iconUrl
-                                }
-                                CandidateDiscoveryCoordinator.accumulateCandidate(
-                                    video: video, sourceKind: "search_query_recent", sourceRef: plan.query,
-                                    creatorAffinity: creatorAffinity, reasonHint: plan.query,
-                                    topicalEvidenceBonus: admission.scoreBonus,
-                                    existingVideoIds: existingVideoIds, aggregate: &aggregate,
-                                    channelIconUrl: resolvedIconUrl
-                                )
-                            }
-                        } catch {
-                            AppLogger.file.log("Search failed for '\(plan.query)': scraper + API both failed", category: "discovery")
-                        }
-                    } else {
+                    guard let youtubeClient else {
                         AppLogger.file.log("Search scraper failed for '\(plan.query)': \(error.localizedDescription)", category: "discovery")
+                        continue
+                    }
+
+                    let approved = await requestAPIFallbackApproval(
+                        kind: .search,
+                        reason: "Search scraping failed for “\(plan.query)”. Use the YouTube API to retry this search-based discovery lane.",
+                        operation: .searchList
+                    )
+                    guard approved else {
+                        AppLogger.file.log("Search API fallback denied for '\(plan.query)'", category: "discovery")
+                        continue
+                    }
+
+                    do {
+                        let results = try await youtubeClient.searchVideos(
+                            query: plan.query, maxResults: 5, publishedAfterDays: 30
+                        )
+                        for video in results {
+                            if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
+                                continue
+                            }
+                            let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                                forTopic: topicId, title: video.title,
+                                sourceKind: "search_query_recent", sourceRef: plan.query, store: self
+                            )
+                            guard admission.shouldAdmit else { continue }
+                            let creatorAffinity = (try? store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)) ?? 0
+                            let resolvedIconUrl = video.channelId.flatMap { cid in
+                                resolvedChannelRecord(channelId: cid, fallbackName: nil, fallbackIconURL: nil)?.iconUrl
+                            }
+                            CandidateDiscoveryCoordinator.accumulateCandidate(
+                                video: video, sourceKind: "search_query_recent", sourceRef: plan.query,
+                                creatorAffinity: creatorAffinity, reasonHint: plan.query,
+                                topicalEvidenceBonus: admission.scoreBonus,
+                                existingVideoIds: existingVideoIds, aggregate: &aggregate,
+                                channelIconUrl: resolvedIconUrl
+                            )
+                        }
+                    } catch {
+                        AppLogger.file.log("Search failed for '\(plan.query)': scraper + API both failed", category: "discovery")
                     }
                 }
             }
@@ -407,20 +418,29 @@ extension OrganizerStore {
 
         // Phase 1b: API fallback for channels scraper couldn't resolve
         if !channelsWithoutUrl.isEmpty, let youtubeClient {
-            let ids = channelsWithoutUrl.map(\.channelId)
-            do {
-                let thumbnailMap = try await youtubeClient.fetchChannelThumbnails(channelIds: ids)
-                for entry in channelsWithoutUrl {
-                    if let urlString = thumbnailMap[entry.channelId], let url = URL(string: urlString) {
-                        channelsWithUrl.append((entry.channelId, url, entry.name))
+            let approved = await requestAPIFallbackApproval(
+                kind: .channelIcons,
+                reason: "Channel icon scraping missed \(channelsWithoutUrl.count) creator avatar\(channelsWithoutUrl.count == 1 ? "" : "s"). Use the YouTube API to fetch the missing icons.",
+                operation: .channelsListSnippet
+            )
+            if approved {
+                let ids = channelsWithoutUrl.map(\.channelId)
+                do {
+                    let thumbnailMap = try await youtubeClient.fetchChannelThumbnails(channelIds: ids)
+                    for entry in channelsWithoutUrl {
+                        if let urlString = thumbnailMap[entry.channelId], let url = URL(string: urlString) {
+                            channelsWithUrl.append((entry.channelId, url, entry.name))
+                        }
+                    }
+                    log("API resolved \(thumbnailMap.count) of \(ids.count) remaining channel icons")
+                } catch {
+                    log("API fallback failed: \(error.localizedDescription)")
+                    if let ytError = error as? YouTubeError, ytError.isQuotaExceeded {
+                        youtubeQuotaExhausted = true
                     }
                 }
-                log("API resolved \(thumbnailMap.count) of \(ids.count) remaining channel icons")
-            } catch {
-                log("API fallback failed: \(error.localizedDescription)")
-                if let ytError = error as? YouTubeError, ytError.isQuotaExceeded {
-                    youtubeQuotaExhausted = true
-                }
+            } else {
+                log("API fallback denied for remaining channel icons")
             }
         }
 
@@ -475,9 +495,21 @@ extension OrganizerStore {
     /// Scrapes YouTube channel pages for avatar URLs — no API quota needed.
     private func scrapeChannelIconURLs(channelIds: [String]) async -> [String: String] {
         guard !channelIds.isEmpty else { return [:] }
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .channelIcons,
+            backend: .scrape,
+            outcome: .started,
+            detail: "channel_count=\(channelIds.count)"
+        )
         let scriptURL = runtimeEnvironment.scriptURL(named: "youtube_channel_icons.py")
         guard FileManager.default.fileExists(atPath: scriptURL.path) else {
             AppLogger.file.log("Channel icon scraper not found at \(scriptURL.path)", category: "icons")
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelIcons,
+                backend: .scrape,
+                outcome: .failed,
+                detail: "icon scraper missing"
+            )
             return [:]
         }
 
@@ -526,14 +558,32 @@ extension OrganizerStore {
                 let errText = String(data: stderrData, encoding: .utf8) ?? ""
                 let sanitized = errText.replacingOccurrences(of: "\n", with: " | ").prefix(1000)
                 AppLogger.file.log("Scraper exited \(process.terminationStatus): \(sanitized)", category: "icons")
+                await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                    kind: .channelIcons,
+                    backend: .scrape,
+                    outcome: .failed,
+                    detail: "exit=\(process.terminationStatus) \(sanitized)"
+                )
                 return [:]
             }
 
             struct Response: Decodable { let icons: [String: String] }
             let response = try JSONDecoder().decode(Response.self, from: stdoutData)
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelIcons,
+                backend: .scrape,
+                outcome: .succeeded,
+                detail: "resolved=\(response.icons.count) requested=\(channelIds.count)"
+            )
             return response.icons
         } catch {
             AppLogger.file.log("Channel icon scraper failed: \(error.localizedDescription)", category: "icons")
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelIcons,
+                backend: .scrape,
+                outcome: .failed,
+                detail: error.localizedDescription
+            )
             return [:]
         }
     }
@@ -850,6 +900,13 @@ enum CandidateDiscoveryCoordinator {
         } catch {
             // Scraper failed — fall back to YouTube API if available
             guard let youtubeClient else { throw error }
+
+            let approved = await store.requestAPIFallbackApproval(
+                kind: .channelArchive,
+                reason: "Archive scraping failed for \(channel.name). Use the YouTube API to check this creator for fresh uploads.",
+                operation: .channelsListContentDetails
+            )
+            guard approved else { return existingArchive }
 
             let incremental = try await youtubeClient.fetchIncrementalChannelUploads(
                 channelId: channel.channelId,

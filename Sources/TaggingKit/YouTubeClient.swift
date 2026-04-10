@@ -500,6 +500,7 @@ public struct YouTubeClient: Sendable {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
             let (data, response) = try await session.data(for: request)
+            await recordQuotaEvent(for: request, response: response)
             guard let http = response as? HTTPURLResponse else {
                 throw YouTubeError.invalidResponse
             }
@@ -532,6 +533,7 @@ public struct YouTubeClient: Sendable {
         request.httpBody = try JSONEncoder().encode(payload)
 
         let (data, response) = try await session.data(for: request)
+        await recordQuotaEvent(for: request, response: response)
         guard let http = response as? HTTPURLResponse else {
             throw YouTubeError.invalidResponse
         }
@@ -661,7 +663,9 @@ public struct YouTubeClient: Sendable {
         if authorization == .bearerIfAvailable, let accessToken, !accessToken.isEmpty {
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         }
-        return try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
+        await recordQuotaEvent(for: request, response: response)
+        return (data, response)
     }
 
     private func validWriteAccessToken() async throws -> String {
@@ -685,6 +689,71 @@ public struct YouTubeClient: Sendable {
             throw YouTubeError.noOAuthToken
         }
         return refreshed.accessToken
+    }
+
+    private func quotaOperation(for request: URLRequest) -> YouTubeAPIOperation {
+        guard let url = request.url,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return .unknown
+        }
+
+        let path = components.path
+        let queryItems = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        let part = queryItems["part"] ?? ""
+        let method = request.httpMethod?.uppercased() ?? "GET"
+
+        switch (method, path) {
+        case ("GET", let p) where p.hasSuffix("/search"):
+            return .searchList
+        case ("GET", let p) where p.hasSuffix("/videos"):
+            return .videosList
+        case ("GET", let p) where p.hasSuffix("/channels"):
+            if part.contains("contentDetails") {
+                return .channelsListContentDetails
+            }
+            if part.contains("statistics") {
+                return .channelsListStatistics
+            }
+            return .channelsListSnippet
+        case ("GET", let p) where p.hasSuffix("/playlistItems"):
+            return .playlistItemsList
+        case ("POST", let p) where p.hasSuffix("/playlistItems"):
+            return .playlistItemsInsert
+        case ("DELETE", let p) where p.hasSuffix("/playlistItems"):
+            return .playlistItemsDelete
+        default:
+            return .unknown
+        }
+    }
+
+    private func quotaDetail(for request: URLRequest) -> String {
+        guard let url = request.url,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return request.url?.absoluteString ?? "unknown"
+        }
+
+        let filteredItems = (components.queryItems ?? []).filter { $0.name != "key" }
+        if filteredItems.isEmpty {
+            return components.path
+        }
+        let query = filteredItems.map { "\($0.name)=\($0.value ?? "")" }.joined(separator: "&")
+        return "\(components.path)?\(query)"
+    }
+
+    private func recordQuotaEvent(for request: URLRequest, response: URLResponse) async {
+        let operation = quotaOperation(for: request)
+        let success = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+        await YouTubeQuotaLedger.shared.recordAPIEvent(
+            operation: operation,
+            detail: quotaDetail(for: request),
+            success: success
+        )
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .other,
+            backend: .api,
+            outcome: success ? .succeeded : .failed,
+            detail: "\(operation.label): \(quotaDetail(for: request))"
+        )
     }
 }
 

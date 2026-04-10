@@ -104,6 +104,8 @@ final class OrganizerStore {
     var watchRefreshTotalTopics = 0
     var watchRefreshCurrentTopicName: String?
     var youtubeQuotaExhausted = false
+    var youtubeQuotaSnapshot: YouTubeQuotaSnapshot?
+    var pendingAPIFallbackApproval: APIFallbackApprovalRequest?
     private(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
     private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
     private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]
@@ -118,6 +120,7 @@ final class OrganizerStore {
     var browserStatusTask: Task<Void, Never>?
     var watchRefreshTask: Task<Void, Never>?
     private var isUpdatingSelectionFromGrid = false
+    private var apiFallbackApprovalContinuation: CheckedContinuation<Bool, Never>?
 
     let store: TopicStore
     var suggester: TopicSuggester?
@@ -158,6 +161,79 @@ final class OrganizerStore {
             AppLogger.app.error("Failed to load excluded creators: \(error.localizedDescription, privacy: .public)")
             excludedCreators = []
         }
+    }
+
+    func refreshYouTubeQuotaSnapshot() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.youtubeQuotaSnapshot = await YouTubeQuotaLedger.shared.snapshot()
+        }
+    }
+
+    func requestAPIFallbackApproval(
+        kind: DiscoveryTelemetryKind,
+        reason: String,
+        operation: YouTubeAPIOperation
+    ) async -> Bool {
+        let snapshot = await YouTubeQuotaLedger.shared.snapshot()
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: kind,
+            backend: .api,
+            outcome: .approvalRequested,
+            detail: reason
+        )
+
+        if let existing = apiFallbackApprovalContinuation {
+            existing.resume(returning: false)
+            apiFallbackApprovalContinuation = nil
+        }
+
+        youtubeQuotaSnapshot = snapshot
+        pendingAPIFallbackApproval = APIFallbackApprovalRequest(
+            title: "Use YouTube API?",
+            reason: reason,
+            operation: operation,
+            estimatedUnits: operation.estimatedUnits,
+            remainingUnitsToday: snapshot.remainingUnitsToday,
+            resetAt: snapshot.resetAt,
+            kind: kind
+        )
+
+        return await withCheckedContinuation { continuation in
+            apiFallbackApprovalContinuation = continuation
+        }
+    }
+
+    func approvePendingAPIFallback() {
+        guard let request = pendingAPIFallbackApproval else { return }
+        pendingAPIFallbackApproval = nil
+        let continuation = apiFallbackApprovalContinuation
+        apiFallbackApprovalContinuation = nil
+        Task {
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: request.kind,
+                backend: .api,
+                outcome: .approvalGranted,
+                detail: request.reason
+            )
+        }
+        continuation?.resume(returning: true)
+    }
+
+    func denyPendingAPIFallback() {
+        guard let request = pendingAPIFallbackApproval else { return }
+        pendingAPIFallbackApproval = nil
+        let continuation = apiFallbackApprovalContinuation
+        apiFallbackApprovalContinuation = nil
+        Task {
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: request.kind,
+                backend: .api,
+                outcome: .approvalDenied,
+                detail: request.reason
+            )
+        }
+        continuation?.resume(returning: false)
     }
 
     // MARK: - Loading

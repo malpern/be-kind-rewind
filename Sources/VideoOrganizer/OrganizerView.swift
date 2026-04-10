@@ -71,11 +71,29 @@ struct OrganizerView: View {
                 Text(message)
             }
         }
+        .alert(
+            store.pendingAPIFallbackApproval?.title ?? "",
+            isPresented: Binding(
+                get: { store.pendingAPIFallbackApproval != nil },
+                set: { if !$0 { store.denyPendingAPIFallback() } }
+            ),
+            presenting: store.pendingAPIFallbackApproval
+        ) { request in
+            Button("Use API") {
+                store.approvePendingAPIFallback()
+            }
+            Button("Not Now", role: .cancel) {
+                store.denyPendingAPIFallback()
+            }
+        } message: { request in
+            Text(request.message)
+        }
         .task {
             // If we launch directly into Watch mode, trigger the refresh cycle
             if store.pageDisplayMode == .watchCandidates {
                 store.ensureCandidatesForWatchPage()
             }
+            store.refreshYouTubeQuotaSnapshot()
         }
         .task(id: watchThumbnailPrefetchKey) {
             await prefetchWatchThumbnailsIfNeeded()

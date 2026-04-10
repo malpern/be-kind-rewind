@@ -86,6 +86,70 @@ struct AppSettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 12) {
+                    Text("YouTube Quota")
+                        .font(.title3.weight(.semibold))
+
+                    if let snapshot = store.youtubeQuotaSnapshot {
+                        authStatusCard(
+                            title: "Daily usage",
+                            message: "\(snapshot.usedUnitsToday) used, \(snapshot.remainingUnitsToday) remaining",
+                            detail: "Estimated against the 10,000-unit daily YouTube quota. Resets at \(resetTimeString(snapshot.resetAt)) Pacific.",
+                            icon: snapshot.remainingUnitsToday > 0 ? "gauge.with.dots.needle.50percent" : "exclamationmark.triangle.fill",
+                            tint: snapshot.remainingUnitsToday > 0 ? .secondary : .orange
+                        )
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            syncRow("Used today", value: snapshot.usedUnitsToday)
+                            syncRow("Remaining", value: snapshot.remainingUnitsToday)
+                        }
+
+                        if !snapshot.recentAPIEvents.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Recent API usage")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                ForEach(snapshot.recentAPIEvents.prefix(6)) { event in
+                                    telemetryRow(
+                                        title: event.operation.label,
+                                        detail: event.detail,
+                                        trailing: "\(event.estimatedUnits)u",
+                                        success: event.success
+                                    )
+                                }
+                            }
+                        }
+
+                        if !snapshot.recentDiscoveryEvents.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Recent discovery telemetry")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                ForEach(snapshot.recentDiscoveryEvents.prefix(8)) { event in
+                                    telemetryRow(
+                                        title: "\(event.backend.rawValue.capitalized) \(event.kind.rawValue)",
+                                        detail: event.detail,
+                                        trailing: event.outcome.rawValue,
+                                        success: event.outcome != .failed
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Text("Loading quota estimates…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button("Refresh quota telemetry") {
+                        store.refreshYouTubeQuotaSnapshot()
+                    }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
                     Text("YouTube")
                         .font(.title3.weight(.semibold))
 
@@ -373,6 +437,7 @@ struct AppSettingsView: View {
             store.refreshExcludedCreators()
             store.refreshBrowserExecutorStatus()
             store.refreshCredentialBackedClients()
+            store.refreshYouTubeQuotaSnapshot()
         }
     }
 
@@ -466,5 +531,42 @@ struct AppSettingsView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(.quaternary, lineWidth: 0.5)
         )
+    }
+
+    private func telemetryRow(
+        title: String,
+        detail: String,
+        trailing: String,
+        success: Bool
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(success ? Color.green : Color.orange)
+                .frame(width: 8, height: 8)
+                .padding(.top, 5)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Text(trailing)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func resetTimeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        formatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
+        return formatter.string(from: date)
     }
 }

@@ -43,6 +43,12 @@ public struct DiscoveryFallbackService: Sendable {
     }
 
     public func fetchRecentChannelUploads(channelId: String, maxResults: Int = 16) async throws -> [DiscoveryFallbackVideo] {
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .channelArchive,
+            backend: .scrape,
+            outcome: .started,
+            detail: "channel_id=\(channelId) max_results=\(maxResults)"
+        )
         let scriptURL = environment.scriptURL(named: "youtube_channel_fallback.py")
         let arguments = [
             pythonExecutable.path,
@@ -55,10 +61,22 @@ public struct DiscoveryFallbackService: Sendable {
         guard execution.terminationStatus == 0 else {
             let stderrText = String(data: execution.stderr, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelArchive,
+                backend: .scrape,
+                outcome: .failed,
+                detail: stderrText.isEmpty ? "channel_id=\(channelId)" : stderrText
+            )
             throw DiscoveryFallbackError.executionFailed(stderrText.isEmpty ? "Channel fallback discovery failed." : stderrText)
         }
 
         let response = try JSONDecoder().decode(DiscoveryFallbackResponse.self, from: execution.stdout)
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .channelArchive,
+            backend: response.source == "rss" ? .rss : .scrape,
+            outcome: .succeeded,
+            detail: "channel_id=\(channelId) videos=\(response.videos.count)"
+        )
         return response.videos.map {
             DiscoveryFallbackVideo(
                 videoId: $0.videoId,
@@ -73,6 +91,12 @@ public struct DiscoveryFallbackService: Sendable {
     }
 
     public func searchVideos(query: String, maxResults: Int = 5) async throws -> [DiscoveryFallbackVideo] {
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .search,
+            backend: .scrape,
+            outcome: .started,
+            detail: "query=\(query) max_results=\(maxResults)"
+        )
         let scriptURL = environment.scriptURL(named: "youtube_search_fallback.py")
         let arguments = [
             pythonExecutable.path,
@@ -85,10 +109,22 @@ public struct DiscoveryFallbackService: Sendable {
         guard execution.terminationStatus == 0 else {
             let stderrText = String(data: execution.stderr, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .search,
+                backend: .scrape,
+                outcome: .failed,
+                detail: stderrText.isEmpty ? "query=\(query)" : stderrText
+            )
             throw DiscoveryFallbackError.executionFailed(stderrText.isEmpty ? "Search fallback failed." : stderrText)
         }
 
         let response = try JSONDecoder().decode(SearchFallbackResponse.self, from: execution.stdout)
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .search,
+            backend: .scrape,
+            outcome: .succeeded,
+            detail: "query=\(query) videos=\(response.videos.count)"
+        )
         return response.videos.map {
             DiscoveryFallbackVideo(
                 videoId: $0.videoId,
