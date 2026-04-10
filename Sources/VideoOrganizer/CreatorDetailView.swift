@@ -13,12 +13,23 @@ import TaggingKit
 struct CreatorDetailView: View {
     @Bindable var store: OrganizerStore
     let channelId: String
+    let thumbnailCache: ThumbnailCache
 
     @State private var page: CreatorPageViewModel = .placeholderEmpty
     @State private var allVideosSort: [KeyPathComparator<CreatorVideoCard>] = [
         KeyPathComparator(\CreatorVideoCard.ageDays, order: .forward)
     ]
     @State private var allVideosSelection: CreatorVideoCard.ID?
+    @State private var allVideosViewMode: AllVideosViewMode = .table
+
+    enum AllVideosViewMode: String, CaseIterable, Identifiable {
+        case table
+        case grid
+
+        var id: String { rawValue }
+        var label: String { self == .table ? "Table" : "Grid" }
+        var symbolName: String { self == .table ? "tablecells" : "square.grid.2x2" }
+    }
 
     var body: some View {
         ScrollView {
@@ -124,41 +135,48 @@ struct CreatorDetailView: View {
 
     // MARK: - Identity card
 
+    /// App Store / Apple Podcasts pattern: square (rounded-corner) icon on the left,
+    /// info stack on the right, no card chrome — sits flush with the page. The
+    /// rounded-square avatar treatment deliberately departs from YouTube's circular
+    /// convention so the page reads as a native macOS detail page rather than a
+    /// YouTube-flavored widget.
     @ViewBuilder
     private var identityCard: some View {
-        HStack(alignment: .top, spacing: 16) {
-            avatar
-                .frame(width: 96, height: 96)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 20) {
+                avatar
+                    .frame(width: 128, height: 128)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(page.channelName)
-                    .font(.title.weight(.semibold))
-                    .lineLimit(1)
-
-                if let subtitle = page.subtitle {
-                    Text(subtitle)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(page.channelName)
+                        .font(.largeTitle.weight(.semibold))
                         .lineLimit(2)
-                }
+                        .fixedSize(horizontal: false, vertical: true)
 
-                tierLine
-                statsLine
+                    if let subtitle = page.subtitle {
+                        Text(subtitle)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    tierLine
+                    statsLine
+                }
+                .padding(.top, 4)
+
+                Spacer(minLength: 0)
             }
 
-            Spacer(minLength: 0)
+            Divider()
         }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.regularMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.quaternary, lineWidth: 0.5)
-        )
     }
 
+    /// Rounded-square avatar (App Store icon style). Continuous corner radius gives
+    /// the iOS/macOS app icon shape; the size + treatment combine to read as
+    /// "this page is about this entity" rather than "thumbnail of a creator."
     @ViewBuilder
     private var avatar: some View {
         Group {
@@ -183,15 +201,20 @@ struct CreatorDetailView: View {
                 avatarFallback
             }
         }
-        .clipShape(Circle())
-        .overlay(Circle().strokeBorder(.quaternary, lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
     }
 
     private var avatarFallback: some View {
         ZStack {
-            Circle().fill(.tertiary)
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 48))
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.tertiary)
+            Image(systemName: "person.crop.square.fill")
+                .font(.system(size: 64))
                 .foregroundStyle(.secondary)
         }
     }
@@ -441,82 +464,144 @@ struct CreatorDetailView: View {
     private var allVideosSection: some View {
         if !page.allVideos.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("All videos")
                         .font(.title3.weight(.semibold))
-                    Spacer()
                     Text("\(page.allVideos.count) total")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-
-                Table(sortedAllVideos, selection: $allVideosSelection, sortOrder: $allVideosSort) {
-                    TableColumn("Title", value: \.title) { card in
-                        HStack(spacing: 8) {
-                            tableThumbnail(for: card)
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(card.title)
-                                        .font(.body)
-                                        .lineLimit(1)
-                                    if card.isOutlier {
-                                        Image(systemName: "arrow.up")
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.tint)
-                                            .help(outlierTooltip(card))
-                                            .accessibilityLabel("Outlier")
-                                    }
-                                }
-                                if let topic = card.topicName {
-                                    Text(topic)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
+                    Spacer()
+                    Picker("View as", selection: $allVideosViewMode) {
+                        ForEach(AllVideosViewMode.allCases) { mode in
+                            Image(systemName: mode.symbolName)
+                                .help(mode.label)
+                                .tag(mode)
                         }
                     }
-                    .width(min: 240, ideal: 360)
-
-                    TableColumn("Views", value: \.viewCountParsed) { card in
-                        Text(card.viewCountParsed > 0 ? card.viewCountFormatted : "—")
-                            .font(.body.monospacedDigit())
-                            .foregroundStyle(card.viewCountParsed > 0 ? .primary : .secondary)
-                    }
-                    .width(min: 70, ideal: 90, max: 120)
-
-                    TableColumn("Runtime") { card in
-                        Text(card.runtimeFormatted ?? "—")
-                            .font(.body.monospacedDigit())
-                            .foregroundStyle(card.runtimeFormatted != nil ? .primary : .secondary)
-                    }
-                    .width(min: 60, ideal: 70, max: 100)
-
-                    TableColumn("Age", value: \.ageDaysSortKey) { card in
-                        Text(card.ageFormatted ?? "—")
-                            .font(.body)
-                            .foregroundStyle(card.ageFormatted != nil ? .primary : .secondary)
-                    }
-                    .width(min: 80, ideal: 100, max: 140)
-
-                    TableColumn("Saved") { card in
-                        if card.isSaved {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(.tint)
-                                .accessibilityLabel("Saved in your library")
-                        } else {
-                            Text("")
-                        }
-                    }
-                    .width(min: 40, ideal: 50, max: 70)
+                    .pickerStyle(.segmented)
+                    .frame(width: 88)
+                    .help("Switch between table and grid views")
                 }
-                .frame(minHeight: 240, idealHeight: 380, maxHeight: 520)
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
+
+                switch allVideosViewMode {
+                case .table:
+                    allVideosTable
+                case .grid:
+                    allVideosGrid
+                }
 
                 Text("↑ marks videos punching above this creator's median view count")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private var allVideosTable: some View {
+        Table(sortedAllVideos, selection: $allVideosSelection, sortOrder: $allVideosSort) {
+            TableColumn("Title", value: \.title) { card in
+                HStack(spacing: 8) {
+                    tableThumbnail(for: card)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(card.title)
+                                .font(.body)
+                                .lineLimit(1)
+                            if card.isOutlier {
+                                Image(systemName: "arrow.up")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.tint)
+                                    .help(outlierTooltip(card))
+                                    .accessibilityLabel("Outlier")
+                            }
+                        }
+                        if let topic = card.topicName {
+                            Text(topic)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .width(min: 240, ideal: 360)
+
+            TableColumn("Views", value: \.viewCountParsed) { card in
+                Text(card.viewCountParsed > 0 ? card.viewCountFormatted : "—")
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(card.viewCountParsed > 0 ? .primary : .secondary)
+            }
+            .width(min: 70, ideal: 90, max: 120)
+
+            TableColumn("Runtime") { card in
+                Text(card.runtimeFormatted ?? "—")
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(card.runtimeFormatted != nil ? .primary : .secondary)
+            }
+            .width(min: 60, ideal: 70, max: 100)
+
+            TableColumn("Age", value: \.ageDaysSortKey) { card in
+                Text(card.ageFormatted ?? "—")
+                    .font(.body)
+                    .foregroundStyle(card.ageFormatted != nil ? .primary : .secondary)
+            }
+            .width(min: 80, ideal: 100, max: 140)
+
+            TableColumn("Saved") { card in
+                if card.isSaved {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                        .accessibilityLabel("Saved in your library")
+                } else {
+                    Text("")
+                }
+            }
+            .width(min: 40, ideal: 50, max: 70)
+        }
+        .frame(minHeight: 240, idealHeight: 380, maxHeight: 520)
+        .tableStyle(.inset(alternatesRowBackgrounds: true))
+    }
+
+    @ViewBuilder
+    private var allVideosGrid: some View {
+        let columns = [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)]
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+            ForEach(sortedAllVideos) { card in
+                Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
+                    VideoGridItem(
+                        video: gridModel(for: card),
+                        isSelected: false,
+                        isHovering: false,
+                        cacheDir: thumbnailCache.cacheDirURL,
+                        showMetadata: true,
+                        size: 200,
+                        highlightTerms: [],
+                        forceShowTitle: false
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func gridModel(for card: CreatorVideoCard) -> VideoGridItemModel {
+        VideoGridItemModel(
+            id: card.videoId,
+            topicId: card.topicId,
+            title: card.title,
+            channelName: page.channelName,
+            topicName: card.topicName,
+            thumbnailUrl: card.thumbnailUrl,
+            viewCount: card.viewCountParsed > 0 ? card.viewCountFormatted : nil,
+            publishedAt: card.ageFormatted,
+            duration: card.runtimeFormatted,
+            channelIconUrl: page.avatarUrl,
+            channelId: card.topicId == nil ? nil : channelId,
+            candidateScore: nil,
+            stateTag: card.isOutlier ? "OUTLIER" : nil,
+            isPlaceholder: false,
+            placeholderMessage: nil
+        )
     }
 
     private var sortedAllVideos: [CreatorVideoCard] {

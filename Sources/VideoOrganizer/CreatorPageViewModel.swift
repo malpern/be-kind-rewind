@@ -458,13 +458,15 @@ enum CreatorPageBuilder {
 
     private static func makeSubtitle(from channel: ChannelRecord?) -> String? {
         guard let description = channel?.description, !description.isEmpty else { return nil }
-        // First sentence (.! or newline) trimmed to ~80 characters as a soft cap.
+        // Take the first sentence (or the full description if there's no sentence break)
+        // and let the SwiftUI view handle visual truncation via .lineLimit + .truncationMode.
+        // Hard-capping the string here was the bug — it chopped mid-word with no ellipsis.
         let separators = CharacterSet(charactersIn: ".!?\n")
         let firstSentence = description
             .components(separatedBy: separators)
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? description
-        let trimmed = String(firstSentence.prefix(80)).trimmingCharacters(in: .whitespaces)
+        let trimmed = firstSentence.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? nil : trimmed
     }
 

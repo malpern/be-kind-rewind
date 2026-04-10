@@ -63,7 +63,11 @@ struct OrganizerView: View {
                     .navigationDestination(for: DetailRoute.self) { route in
                         switch route {
                         case .creator(let channelId):
-                            CreatorDetailView(store: store, channelId: channelId)
+                            CreatorDetailView(
+                                store: store,
+                                channelId: channelId,
+                                thumbnailCache: thumbnailCache
+                            )
                         }
                     }
             }
