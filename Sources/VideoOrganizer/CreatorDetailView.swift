@@ -29,6 +29,7 @@ struct CreatorDetailView: View {
                 allVideosSection
                 playlistsSection
                 nichesAndCadenceSection
+                channelInformationSection
             }
             .padding(.horizontal, 24)
             .padding(.top, 16)
@@ -625,6 +626,91 @@ struct CreatorDetailView: View {
             return String(format: "%.0f%%", value * 100)
         }
         return String(format: "%.1f%%", value * 100)
+    }
+
+    // MARK: - Channel information
+
+    @ViewBuilder
+    private var channelInformationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Channel information")
+                .font(.title3.weight(.semibold))
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                if let subs = page.subscriberCountFormatted {
+                    infoRow("Subscribers", value: subs)
+                }
+                infoRow("Total uploads (known)", value: "\(page.totalUploadsKnown)")
+                if let reported = page.totalUploadsReported, reported != page.totalUploadsKnown {
+                    infoRow("Total uploads (reported)", value: "\(reported)")
+                }
+                infoRow("In your library", value: libraryCoverageString)
+                if let founding = page.foundingYear {
+                    infoRow("Earliest known upload", value: String(founding))
+                }
+                if let country = page.countryDisplayName {
+                    infoRow("Country", value: country)
+                }
+                if let refreshed = page.lastRefreshedAt {
+                    infoRow("Last refreshed", value: formatRefreshTime(refreshed))
+                }
+                infoRowLink("YouTube", url: page.youtubeURL)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.background.secondary)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(.quaternary, lineWidth: 0.5)
+            )
+        }
+    }
+
+    private var libraryCoverageString: String {
+        if let coverage = page.coveragePercent {
+            let pct = Int(coverage * 100)
+            return "\(page.savedVideoCount) (\(pct)%)"
+        }
+        return "\(page.savedVideoCount)"
+    }
+
+    @ViewBuilder
+    private func infoRow(_ label: String, value: String) -> some View {
+        GridRow {
+            Text(label)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .gridColumnAlignment(.leading)
+            Text(value)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private func infoRowLink(_ label: String, url: URL) -> some View {
+        GridRow {
+            Text(label)
+                .font(.body)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Link(url.absoluteString, destination: url)
+                    .font(.body)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func formatRefreshTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 }
 
