@@ -294,10 +294,20 @@ struct CreatorLeaderboardEntry: Identifiable, Equatable {
     let channelIconUrl: URL?
     /// Number of topics this creator shares with the page's creator (1+).
     let sharedTopicCount: Int
-    /// Total saved videos this creator has in shared topics.
+    /// Total saved videos this creator has in shared topics. Kept as a secondary
+    /// signal — exposes the bias toward what the user happens to have saved.
     let savedVideoCount: Int
-    /// Subscriber count from the channel record (formatted), nil if unknown.
+    /// Parsed subscriber count from the channel record. The PRIMARY ranking signal —
+    /// it's the most honest "niche dominance" proxy because it's external to the
+    /// user's library and reflects what the rest of YouTube has voted on with their
+    /// subscriptions. nil only when the channel record is missing it.
+    let subscriberCount: Int?
+    /// Subscriber count formatted for display ("1.2M", "410K", "9K").
     let subscriberCountFormatted: String?
+    /// True for the row representing the creator whose page is currently shown.
+    /// The leaderboard renders this row with a highlight so the user can see where
+    /// the page creator sits in the ranking, not just who else is in the niche.
+    let isPageCreator: Bool
 
     var id: String { channelId }
 }
@@ -670,17 +680,26 @@ enum CreatorPageBuilder {
         return result
     }
 
-    /// Builds the competitor leaderboard — other creators in the user's library who
-    /// publish in topics that overlap with this creator. Pure stats over the existing
-    /// `topicChannels` cache + saved video counts; no new persistence, no LLM.
+    /// Builds the niche dominance leaderboard — every creator in the user's library
+    /// who publishes in topics that overlap with the page creator, INCLUDING the page
+    /// creator themselves so the user can see where they sit in the ranking.
+    ///
+    /// Ranking signal: **subscriber count**. This is the most honest "niche dominance"
+    /// proxy because it's external to the user's library — it reflects what the rest
+    /// of YouTube has voted on with their subscriptions, not what the user happens to
+    /// have saved. The earlier version ranked by saved video count, which was biased
+    /// toward whatever the user had bothered to save and didn't actually answer "who
+    /// dominates this niche".
     ///
     /// Algorithm:
-    /// 1. Find every topic this channelId appears in (the creator's topic footprint).
-    /// 2. For each shared topic, gather all OTHER channelIds that also appear there.
-    /// 3. For each candidate competitor, count how many of THEIR videos exist in the
-    ///    shared topics combined (saved video count).
-    /// 4. Rank by saved video count desc, secondary by shared topic count desc.
-    /// 5. Return top 10. Excludes the page creator themselves.
+    /// 1. Find every topic the page creator appears in (their topic footprint).
+    /// 2. For each shared topic, gather every channelId that also appears there.
+    ///    Self is INCLUDED in the result so we can highlight where they sit.
+    /// 3. For each candidate, count their videos in shared topics (secondary signal)
+    ///    and resolve their subscriber count from the channel record.
+    /// 4. Rank by parsed subscriber count desc. Tiebreaker by saved video count desc,
+    ///    then by name. Creators with no subscriber count sort last.
+    /// 5. Return top 10.
     @MainActor
     private static func makeLeaderboard(
         forChannelId channelId: String,
@@ -693,16 +712,14 @@ enum CreatorPageBuilder {
 
         guard !sharedTopicIds.isEmpty else { return [] }
 
-        // Step 2-3: tally other creators by saved video count across shared topics.
-        // Map: competitor channelId → (sharedTopicCount, savedVideoCount, ChannelRecord)
+        // Step 2-3: tally creators (including self) by video count across shared topics.
         var tally: [String: (sharedTopicCount: Int, savedVideoCount: Int, record: ChannelRecord)] = [:]
 
         for topicId in sharedTopicIds {
             let topicVideos = store.videosForTopicIncludingSubtopics(topicId)
-            // Group videos in this topic by channelId, count per channel.
             var perChannelInTopic: [String: Int] = [:]
             for video in topicVideos {
-                guard let cid = video.channelId, !cid.isEmpty, cid != channelId else { continue }
+                guard let cid = video.channelId, !cid.isEmpty else { continue }
                 perChannelInTopic[cid, default: 0] += 1
             }
 
@@ -720,10 +737,11 @@ enum CreatorPageBuilder {
             }
         }
 
-        // Step 4-5: rank and cap.
+        // Step 4-5: rank by subscriber count, build entries.
         let entries = tally.values
             .map { entry -> CreatorLeaderboardEntry in
-                CreatorLeaderboardEntry(
+                let subs = parseSubscriberCount(entry.record.subscriberCount)
+                return CreatorLeaderboardEntry(
                     channelId: entry.record.channelId,
                     channelName: entry.record.name,
                     channelIconUrl: entry.record.iconUrl
@@ -731,20 +749,39 @@ enum CreatorPageBuilder {
                         .flatMap(URL.init(string:)),
                     sharedTopicCount: entry.sharedTopicCount,
                     savedVideoCount: entry.savedVideoCount,
-                    subscriberCountFormatted: formatSubscriberCount(entry.record.subscriberCount)
+                    subscriberCount: subs,
+                    subscriberCountFormatted: formatSubscriberCount(entry.record.subscriberCount),
+                    isPageCreator: entry.record.channelId == channelId
                 )
             }
             .sorted { lhs, rhs in
+                // Subscriber count is the primary signal. nil sorts last.
+                switch (lhs.subscriberCount, rhs.subscriberCount) {
+                case let (l?, r?) where l != r:
+                    return l > r
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    break
+                }
+                // Tiebreakers: saved video count desc, then name asc.
                 if lhs.savedVideoCount != rhs.savedVideoCount {
                     return lhs.savedVideoCount > rhs.savedVideoCount
-                }
-                if lhs.sharedTopicCount != rhs.sharedTopicCount {
-                    return lhs.sharedTopicCount > rhs.sharedTopicCount
                 }
                 return lhs.channelName.localizedStandardCompare(rhs.channelName) == .orderedAscending
             }
 
         return Array(entries.prefix(10))
+    }
+
+    /// Parse the channel record's subscriber count string ("1200000", "150000") to Int.
+    /// Returns nil for empty / unparseable / negative values. Strict parsing only —
+    /// no "1.2M" handling needed since the YouTube API returns raw integer strings.
+    private static func parseSubscriberCount(_ raw: String?) -> Int? {
+        guard let raw, let value = Int(raw), value > 0 else { return nil }
+        return value
     }
 
     @MainActor

@@ -1364,7 +1364,7 @@ struct CreatorDetailView: View {
                     Text("Top creators in this niche")
                         .font(.title3.weight(.semibold))
                     Spacer()
-                    Text("ranked by saved videos in shared topics")
+                    Text("ranked by subscribers · across \(sharedTopicsRangeText) shared with this creator")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1390,24 +1390,46 @@ struct CreatorDetailView: View {
         }
     }
 
+    private var sharedTopicsRangeText: String {
+        let counts = page.leaderboardEntries.map(\.sharedTopicCount)
+        let max = counts.max() ?? 0
+        if max == 1 {
+            return "1 topic"
+        }
+        return "up to \(max) topics"
+    }
+
     private func leaderboardRow(rank: Int, entry: CreatorLeaderboardEntry) -> some View {
         Button {
-            store.openCreatorDetail(channelId: entry.channelId)
+            // Don't navigate to self — just no-op (already viewing this page).
+            if !entry.isPageCreator {
+                store.openCreatorDetail(channelId: entry.channelId)
+            }
         } label: {
             HStack(spacing: 12) {
                 Text("\(rank)")
                     .font(.body.monospacedDigit().weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(entry.isPageCreator ? Color.accentColor : .secondary)
                     .frame(width: 22, alignment: .trailing)
 
                 leaderboardAvatar(entry)
                     .frame(width: 32, height: 32)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.channelName)
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(entry.channelName)
+                            .font(.body.weight(entry.isPageCreator ? .semibold : .regular))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if entry.isPageCreator {
+                            Text("YOU")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(Color.accentColor))
+                        }
+                    }
                     Text(leaderboardSubtitle(for: entry))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1416,16 +1438,40 @@ struct CreatorDetailView: View {
 
                 Spacer(minLength: 0)
 
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                // Subscriber count is the prominent right-aligned figure — the
+                // user wants to see "who dominates" at a glance, and external
+                // subscriber count is the most honest dominance signal.
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(entry.subscriberCountFormatted ?? "—")
+                        .font(.body.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(entry.subscriberCount == nil ? .tertiary : .primary)
+                    Text("subscribers")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if !entry.isPageCreator {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                } else {
+                    // Same horizontal slot, no chevron when this row is the page creator.
+                    Color.clear.frame(width: 7)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
+            .background(
+                entry.isPageCreator
+                ? Color.accentColor.opacity(0.08)
+                : Color.clear
+            )
         }
         .buttonStyle(.plain)
-        .help("Open \(entry.channelName)'s creator page")
+        .help(entry.isPageCreator
+              ? "This is the creator whose page you're viewing"
+              : "Open \(entry.channelName)'s creator page")
     }
 
     @ViewBuilder
@@ -1458,14 +1504,15 @@ struct CreatorDetailView: View {
     }
 
     private func leaderboardSubtitle(for entry: CreatorLeaderboardEntry) -> String {
-        var parts: [String] = ["\(entry.savedVideoCount) saved"]
-        if let subs = entry.subscriberCountFormatted {
-            parts.append(subs)
-        }
-        if entry.sharedTopicCount > 1 {
-            parts.append("\(entry.sharedTopicCount) shared topics")
-        } else {
-            parts.append("1 shared topic")
+        // Sub count is the prominent figure (right side); subtitle line shows the
+        // secondary library-bound signals: how many of THIS user's videos by this
+        // creator exist in shared topics, plus the topic overlap.
+        var parts: [String] = []
+        let topicLabel = entry.sharedTopicCount == 1 ? "1 shared topic" : "\(entry.sharedTopicCount) shared topics"
+        parts.append(topicLabel)
+        if entry.savedVideoCount > 0 {
+            let savedLabel = entry.savedVideoCount == 1 ? "1 saved" : "\(entry.savedVideoCount) saved"
+            parts.append(savedLabel)
         }
         return parts.joined(separator: " · ")
     }

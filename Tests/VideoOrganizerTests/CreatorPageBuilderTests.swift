@@ -235,29 +235,38 @@ struct CreatorPageBuilderTests {
     }
 
     @MainActor
-    @Test("makePage builds a leaderboard from creators in shared topics")
-    func leaderboardFromSharedTopics() throws {
+    @Test("makePage builds a leaderboard including the page creator themselves")
+    func leaderboardIncludesPageCreator() throws {
         try withFileBackedOrganizerFixture { fixture in
             let store = try fixture.makeOrganizerStore()
 
-            // chan-alpha is in Alpha Topic; chan-beta is in Beta Topic. They don't
-            // share any topics in the seed fixture, so chan-alpha's leaderboard
-            // should be empty (no other creator in any of alpha's topics).
+            // chan-alpha is in Alpha Topic with no other creators in the fixture.
+            // Under the Phase 3 leaderboard contract, the page creator is INCLUDED
+            // in their own leaderboard so the user can see where they rank in the
+            // niche relative to peers (the previous version excluded self).
+            // chan-alpha is the only creator in their topics, so the leaderboard
+            // should contain exactly one entry — themselves.
             let alphaPage = CreatorPageBuilder.makePage(forChannelId: "chan-alpha", in: store)
-            #expect(alphaPage.leaderboardEntries.isEmpty)
+            #expect(alphaPage.leaderboardEntries.count == 1)
+            #expect(alphaPage.leaderboardEntries[0].channelId == "chan-alpha")
+            #expect(alphaPage.leaderboardEntries[0].isPageCreator == true)
         }
     }
 
     @MainActor
-    @Test("makePage leaderboard excludes the page creator from their own list")
-    func leaderboardExcludesSelf() throws {
+    @Test("makePage leaderboard marks the page creator's row with isPageCreator")
+    func leaderboardMarksPageCreator() throws {
         try withFileBackedOrganizerFixture { fixture in
             let store = try fixture.makeOrganizerStore()
 
             let page = CreatorPageBuilder.makePage(forChannelId: "chan-alpha", in: store)
-            // Even if there were other creators, chan-alpha must never appear on
-            // their own leaderboard.
-            #expect(!page.leaderboardEntries.contains { $0.channelId == "chan-alpha" })
+            let selfRow = page.leaderboardEntries.first { $0.channelId == "chan-alpha" }
+            #expect(selfRow != nil)
+            #expect(selfRow?.isPageCreator == true)
+            // Other rows (if any) must NOT be marked as the page creator.
+            for entry in page.leaderboardEntries where entry.channelId != "chan-alpha" {
+                #expect(entry.isPageCreator == false)
+            }
         }
     }
 
