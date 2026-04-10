@@ -1,58 +1,97 @@
 import SwiftUI
 
+/// Identifies a deep-link destination inside the detail-column NavigationStack. Phase 1
+/// only supports the creator detail route; future phases will add topic detail and library
+/// insights routes.
+enum DetailRoute: Hashable {
+    case creator(channelId: String)
+}
+
 /// Root three-column layout: topic sidebar, collection grid, and optional inspector.
 struct OrganizerView: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache
     @Bindable var displaySettings: DisplaySettings
 
+    /// NavigationStack push path for the detail column. Empty when the grid is the visible
+    /// content; non-empty when a creator (or future destination) detail page is pushed on
+    /// top of the grid. Drives auto-collapse of the sidebar via `columnVisibility`.
+    @State private var detailPath: [DetailRoute] = []
+
+    /// Bound directly to `NavigationSplitView(columnVisibility:)`. Auto-collapses to
+    /// `.detailOnly` when a detail route is pushed (Photos.app / Music.app pattern) and
+    /// restores to `.all` when the user navigates back. The toolbar's standard sidebar
+    /// toggle (⌘0) lets the user override this at any time.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             TopicSidebar(store: store, displaySettings: displaySettings)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         } detail: {
-            CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
-                .navigationTitle("")
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    if store.selectedTopicId != nil,
-                       (store.pageDisplayMode == .saved
-                        || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
-                        TopicScrollProgressBar(progress: store.topicScrollProgress)
-                    }
-                }
-                .inspector(isPresented: $displaySettings.showInspector) {
-                    VideoInspector(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
-                        .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
-                        .accessibilityIdentifier("videoInspector")
-                }
-                .toolbar {
-                    ToolbarItemGroup(placement: .automatic) {
-                        pageModeControls
-                    }
-
-                    ToolbarItemGroup(placement: .automatic) {
-                        sortMenu
-                    }
-
-                    ToolbarItemGroup(placement: .automatic) {
-                        statusIndicators
-                    }
-
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        Button {
-                            displaySettings.showInspector.toggle()
-                            displaySettings.toast.show(
-                                displaySettings.showInspector ? "Inspector" : "Inspector Hidden",
-                                icon: "sidebar.trailing"
-                            )
-                        } label: {
-                            Label("Inspector", systemImage: "sidebar.trailing")
+            NavigationStack(path: $detailPath) {
+                CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
+                    .navigationTitle("")
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        if store.selectedTopicId != nil,
+                           (store.pageDisplayMode == .saved
+                            || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
+                            TopicScrollProgressBar(progress: store.topicScrollProgress)
                         }
-                        .help(displaySettings.showInspector ? "Hide Inspector" : "Show Inspector")
-                        .accessibilityIdentifier("toggleInspector")
-                        .accessibilityLabel(displaySettings.showInspector ? "Hide inspector panel" : "Show inspector panel")
                     }
+                    .inspector(isPresented: $displaySettings.showInspector) {
+                        VideoInspector(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
+                            .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
+                            .accessibilityIdentifier("videoInspector")
+                    }
+                    .toolbar {
+                        ToolbarItemGroup(placement: .automatic) {
+                            pageModeControls
+                        }
+
+                        ToolbarItemGroup(placement: .automatic) {
+                            sortMenu
+                        }
+
+                        ToolbarItemGroup(placement: .automatic) {
+                            statusIndicators
+                        }
+
+                        ToolbarItemGroup(placement: .primaryAction) {
+                            Button {
+                                displaySettings.showInspector.toggle()
+                                displaySettings.toast.show(
+                                    displaySettings.showInspector ? "Inspector" : "Inspector Hidden",
+                                    icon: "sidebar.trailing"
+                                )
+                            } label: {
+                                Label("Inspector", systemImage: "sidebar.trailing")
+                            }
+                            .help(displaySettings.showInspector ? "Hide Inspector" : "Show Inspector")
+                            .accessibilityIdentifier("toggleInspector")
+                            .accessibilityLabel(displaySettings.showInspector ? "Hide inspector panel" : "Show inspector panel")
+                        }
+                    }
+                    .navigationDestination(for: DetailRoute.self) { route in
+                        switch route {
+                        case .creator(let channelId):
+                            // Real CreatorDetailView arrives in commit #6. Phase 1
+                            // commit #5 lands only the navigation primitives so the
+                            // structural risk is isolated.
+                            CreatorDetailPagePlaceholder(channelId: channelId)
+                        }
+                    }
+            }
+            .onChange(of: detailPath) { _, newPath in
+                // Auto-collapse the sidebar when entering a detail route, restore when
+                // popping back to the grid root. The user's manual toggles via ⌘0 still
+                // work — we only flip on path transitions, not on every render.
+                if newPath.isEmpty {
+                    columnVisibility = .all
+                } else {
+                    columnVisibility = .detailOnly
                 }
+            }
         }
         .overlay(alignment: .top) {
             ActionToast(state: displaySettings.toast)
