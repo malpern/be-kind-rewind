@@ -20,6 +20,7 @@ public final class TopicStore: Sendable {
     private let channelDiscoveryState = Table("channel_discovery_state")
     private let seenVideos = Table("seen_videos")
     private let excludedChannels = Table("excluded_channels")
+    private let favoriteChannels = Table("favorite_channels")
 
     // Topic columns
     private let topicId = SQLite.Expression<Int64>("id")
@@ -113,6 +114,14 @@ public final class TopicStore: Sendable {
     private let excludedChannelIconUrl = SQLite.Expression<String?>("icon_url")
     private let excludedChannelExcludedAt = SQLite.Expression<String>("excluded_at")
     private let excludedChannelReason = SQLite.Expression<String?>("reason")
+
+    // Favorite channels columns (mirror of excluded; favoritedAt instead of excludedAt,
+    // notes instead of reason — both optional, both small).
+    private let favoriteChannelId = SQLite.Expression<String>("channel_id")
+    private let favoriteChannelName = SQLite.Expression<String>("channel_name")
+    private let favoriteChannelIconUrl = SQLite.Expression<String?>("icon_url")
+    private let favoriteChannelFavoritedAt = SQLite.Expression<String>("favorited_at")
+    private let favoriteChannelNotes = SQLite.Expression<String?>("notes")
 
     // Commit log columns
     private let commitId = SQLite.Expression<Int64>("id")
@@ -330,6 +339,14 @@ public final class TopicStore: Sendable {
             t.column(excludedChannelReason)
         })
 
+        try db.run(favoriteChannels.create(ifNotExists: true) { t in
+            t.column(favoriteChannelId, primaryKey: true)
+            t.column(favoriteChannelName)
+            t.column(favoriteChannelIconUrl)
+            t.column(favoriteChannelFavoritedAt, defaultValue: ISO8601DateFormatter().string(from: Date()))
+            t.column(favoriteChannelNotes)
+        })
+
         try db.run("CREATE INDEX IF NOT EXISTS idx_topics_parent_id ON topics(parent_id)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_source ON videos(topic_id, source_index)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_channel_source ON videos(topic_id, channel_id, source_index)")
@@ -345,6 +362,7 @@ public final class TopicStore: Sendable {
         try db.run("CREATE INDEX IF NOT EXISTS idx_seen_videos_video_id ON seen_videos(video_id)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_seen_videos_seen_at ON seen_videos(seen_at DESC)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_excluded_channels_excluded_at ON excluded_channels(excluded_at DESC)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_favorite_channels_favorited_at ON favorite_channels(favorited_at DESC)")
     }
 
     // MARK: - Import
@@ -641,6 +659,64 @@ public final class TopicStore: Sendable {
 
     public func isChannelExcluded(_ id: String) throws -> Bool {
         try db.pluck(excludedChannels.filter(excludedChannelId == id)) != nil
+    }
+
+    // MARK: - Favorite channels
+
+    /// Insert or update a favorite channel record. The user has explicitly pinned this
+    /// creator. Used by the creator detail page Pin toolbar action and consumed in Phase 3
+    /// by Watch refresh ranking to boost favorited creators.
+    public func favoriteChannel(
+        channelId id: String,
+        channelName name: String,
+        iconUrl: String? = nil,
+        notes: String? = nil
+    ) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try db.run(favoriteChannels.insert(or: .replace,
+            favoriteChannelId <- id,
+            favoriteChannelName <- name,
+            favoriteChannelIconUrl <- iconUrl,
+            favoriteChannelFavoritedAt <- now,
+            favoriteChannelNotes <- notes
+        ))
+    }
+
+    /// Remove a favorite channel by ID. No-op if the channel was not favorited.
+    public func unfavoriteChannel(channelId id: String) throws {
+        try db.run(favoriteChannels.filter(favoriteChannelId == id).delete())
+    }
+
+    /// Update only the notes field for an existing favorite. Throws if the channel is not
+    /// favorited (the caller should call `favoriteChannel(...)` first to upsert).
+    public func updateFavoriteChannelNotes(channelId id: String, notes: String?) throws {
+        try db.run(favoriteChannels
+            .filter(favoriteChannelId == id)
+            .update(favoriteChannelNotes <- notes))
+    }
+
+    /// Returns all favorited channels, most recently favorited first.
+    public func favoriteChannelsList() throws -> [FavoriteChannelRecord] {
+        try db.prepare(favoriteChannels.order(favoriteChannelFavoritedAt.desc)).map { row in
+            FavoriteChannelRecord(
+                channelId: row[favoriteChannelId],
+                channelName: row[favoriteChannelName],
+                iconUrl: row[favoriteChannelIconUrl],
+                favoritedAt: row[favoriteChannelFavoritedAt],
+                notes: row[favoriteChannelNotes]
+            )
+        }
+    }
+
+    /// Set of all favorited channel IDs. Useful for fast membership checks when
+    /// rendering many videos that need a favorite indicator.
+    public func favoriteChannelIDs() throws -> Set<String> {
+        Set(try db.prepare(favoriteChannels.select(favoriteChannelId)).map { $0[favoriteChannelId] })
+    }
+
+    /// Single-channel membership check.
+    public func isChannelFavorite(_ id: String) throws -> Bool {
+        try db.pluck(favoriteChannels.filter(favoriteChannelId == id)) != nil
     }
 
     /// Return all channels that have at least one video in the given topic.

@@ -34,6 +34,7 @@ final class OrganizerStore {
     var lastSyncErrorIsBrowser = false
     var seenHistoryCount = 0
     var excludedCreators: [ExcludedChannelRecord] = []
+    var favoriteCreators: [FavoriteChannelRecord] = []
     var browserExecutorReady = false
     var browserExecutorStatusMessage = "Checking browser executor status…"
     var topicScrollProgress = 0.0
@@ -159,6 +160,7 @@ final class OrganizerStore {
         refreshSyncQueueSummary()
         refreshSeenHistoryCount()
         refreshExcludedCreators()
+        refreshFavoriteCreators()
         if startBackgroundTasks {
             refreshBrowserExecutorStatus()
             processPendingSync(reason: "startup")

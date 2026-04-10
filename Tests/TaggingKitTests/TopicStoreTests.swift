@@ -349,6 +349,106 @@ struct TopicStoreCandidateTests {
         #expect(try store.isChannelExcluded("chan-alpha") == false)
         #expect(try store.excludedChannelsList().isEmpty)
     }
+
+    @Test("favorite channels round-trip: insert, list, check, delete")
+    func favoriteChannelsRoundTrip() throws {
+        let store = try TopicStore(inMemory: true)
+
+        #expect(try store.isChannelFavorite("chan-alpha") == false)
+        #expect(try store.favoriteChannelsList().isEmpty)
+        #expect(try store.favoriteChannelIDs().isEmpty)
+
+        try store.favoriteChannel(
+            channelId: "chan-alpha",
+            channelName: "Alpha Channel",
+            iconUrl: "https://example.com/a.png"
+        )
+        #expect(try store.isChannelFavorite("chan-alpha") == true)
+        #expect(try store.favoriteChannelIDs() == Set(["chan-alpha"]))
+
+        let favorites = try store.favoriteChannelsList()
+        #expect(favorites.count == 1)
+        #expect(favorites[0].channelId == "chan-alpha")
+        #expect(favorites[0].channelName == "Alpha Channel")
+        #expect(favorites[0].iconUrl == "https://example.com/a.png")
+        #expect(favorites[0].notes == nil)
+
+        try store.unfavoriteChannel(channelId: "chan-alpha")
+        #expect(try store.isChannelFavorite("chan-alpha") == false)
+        #expect(try store.favoriteChannelsList().isEmpty)
+    }
+
+    @Test("favorite channels are upserted on duplicate insert")
+    func favoriteChannelsUpsert() throws {
+        let store = try TopicStore(inMemory: true)
+
+        try store.favoriteChannel(
+            channelId: "chan-alpha",
+            channelName: "Alpha Channel",
+            iconUrl: "https://example.com/old.png"
+        )
+        // Second favorite call updates the icon URL.
+        try store.favoriteChannel(
+            channelId: "chan-alpha",
+            channelName: "Alpha Channel",
+            iconUrl: "https://example.com/new.png"
+        )
+
+        let favorites = try store.favoriteChannelsList()
+        #expect(favorites.count == 1)
+        #expect(favorites[0].iconUrl == "https://example.com/new.png")
+    }
+
+    @Test("favorite channels can store and update notes")
+    func favoriteChannelsNotes() throws {
+        let store = try TopicStore(inMemory: true)
+
+        try store.favoriteChannel(
+            channelId: "chan-alpha",
+            channelName: "Alpha Channel",
+            notes: "great keyboard reviews"
+        )
+        let initial = try store.favoriteChannelsList()
+        #expect(initial[0].notes == "great keyboard reviews")
+
+        try store.updateFavoriteChannelNotes(channelId: "chan-alpha", notes: "great keyboard and switch reviews")
+        let updated = try store.favoriteChannelsList()
+        #expect(updated[0].notes == "great keyboard and switch reviews")
+
+        try store.updateFavoriteChannelNotes(channelId: "chan-alpha", notes: nil)
+        let cleared = try store.favoriteChannelsList()
+        #expect(cleared[0].notes == nil)
+    }
+
+    @Test("favorite channels list orders most-recently favorited first")
+    func favoriteChannelsOrdering() throws {
+        let store = try TopicStore(inMemory: true)
+
+        try store.favoriteChannel(channelId: "chan-alpha", channelName: "Alpha")
+        // Tiny sleep so the ISO8601 timestamps differ at second resolution.
+        Thread.sleep(forTimeInterval: 1.05)
+        try store.favoriteChannel(channelId: "chan-beta", channelName: "Beta")
+
+        let favorites = try store.favoriteChannelsList()
+        #expect(favorites.map(\.channelId) == ["chan-beta", "chan-alpha"])
+    }
+
+    @Test("favorite and exclude live in independent tables")
+    func favoriteAndExcludeAreIndependent() throws {
+        let store = try TopicStore(inMemory: true)
+
+        try store.excludeChannel(channelId: "chan-alpha", channelName: "Alpha Channel")
+        try store.favoriteChannel(channelId: "chan-alpha", channelName: "Alpha Channel")
+
+        // Both states can coexist for the same channel — the user can favorite a creator
+        // they previously excluded; the app's behavior is governed by which list it consults.
+        #expect(try store.isChannelExcluded("chan-alpha") == true)
+        #expect(try store.isChannelFavorite("chan-alpha") == true)
+
+        try store.unfavoriteChannel(channelId: "chan-alpha")
+        #expect(try store.isChannelExcluded("chan-alpha") == true)
+        #expect(try store.isChannelFavorite("chan-alpha") == false)
+    }
 }
 
 // MARK: - VideoItem Tests
