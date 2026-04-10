@@ -449,6 +449,150 @@ struct TopicStoreCandidateTests {
         #expect(try store.isChannelExcluded("chan-alpha") == true)
         #expect(try store.isChannelFavorite("chan-alpha") == false)
     }
+
+    // MARK: - Creator themes (LLM cache)
+
+    @Test("creator themes round-trip: replace, fetch ordered, delete")
+    func creatorThemesRoundTrip() throws {
+        let store = try TopicStore(inMemory: true)
+
+        let themes = [
+            CreatorThemeRecord(
+                channelId: "chan-x",
+                label: "Switch Reviews",
+                description: "Switches",
+                order: 0,
+                videoIds: ["v1", "v2"],
+                isSeries: false,
+                orderingSignal: nil,
+                classifiedAt: "2026-04-10T00:00:00Z",
+                classifiedVideoCount: 50
+            ),
+            CreatorThemeRecord(
+                channelId: "chan-x",
+                label: "Day Vlog",
+                description: "Build vlog",
+                order: 1,
+                videoIds: ["v3", "v4", "v5"],
+                isSeries: true,
+                orderingSignal: "numeric",
+                classifiedAt: "2026-04-10T00:00:00Z",
+                classifiedVideoCount: 50
+            )
+        ]
+
+        try store.replaceCreatorThemes(channelId: "chan-x", themes: themes)
+
+        let fetched = try store.creatorThemes(channelId: "chan-x")
+        #expect(fetched.count == 2)
+        #expect(fetched[0].label == "Switch Reviews")
+        #expect(fetched[0].videoIds == ["v1", "v2"])
+        #expect(fetched[0].isSeries == false)
+        #expect(fetched[1].label == "Day Vlog")
+        #expect(fetched[1].videoIds == ["v3", "v4", "v5"])
+        #expect(fetched[1].isSeries == true)
+        #expect(fetched[1].orderingSignal == "numeric")
+
+        try store.deleteCreatorThemes(channelId: "chan-x")
+        #expect(try store.creatorThemes(channelId: "chan-x").isEmpty)
+    }
+
+    @Test("creator themes replace overwrites existing rows for the same channel")
+    func creatorThemesReplaceOverwrites() throws {
+        let store = try TopicStore(inMemory: true)
+
+        let original = [
+            CreatorThemeRecord(
+                channelId: "chan-x", label: "Old", description: nil, order: 0,
+                videoIds: ["v1"], isSeries: false, orderingSignal: nil,
+                classifiedAt: "2026-01-01T00:00:00Z", classifiedVideoCount: 1
+            )
+        ]
+        try store.replaceCreatorThemes(channelId: "chan-x", themes: original)
+        #expect(try store.creatorThemes(channelId: "chan-x").count == 1)
+
+        let updated = [
+            CreatorThemeRecord(
+                channelId: "chan-x", label: "New A", description: nil, order: 0,
+                videoIds: ["v2"], isSeries: false, orderingSignal: nil,
+                classifiedAt: "2026-04-10T00:00:00Z", classifiedVideoCount: 5
+            ),
+            CreatorThemeRecord(
+                channelId: "chan-x", label: "New B", description: nil, order: 1,
+                videoIds: ["v3"], isSeries: false, orderingSignal: nil,
+                classifiedAt: "2026-04-10T00:00:00Z", classifiedVideoCount: 5
+            )
+        ]
+        try store.replaceCreatorThemes(channelId: "chan-x", themes: updated)
+        let fetched = try store.creatorThemes(channelId: "chan-x")
+        #expect(fetched.count == 2)
+        #expect(fetched.map(\.label) == ["New A", "New B"])
+    }
+
+    @Test("creator themes are isolated per channel")
+    func creatorThemesIsolatedPerChannel() throws {
+        let store = try TopicStore(inMemory: true)
+
+        try store.replaceCreatorThemes(channelId: "chan-a", themes: [
+            CreatorThemeRecord(
+                channelId: "chan-a", label: "A theme", description: nil, order: 0,
+                videoIds: ["v1"], isSeries: false, orderingSignal: nil,
+                classifiedAt: "2026-04-10T00:00:00Z", classifiedVideoCount: 1
+            )
+        ])
+        try store.replaceCreatorThemes(channelId: "chan-b", themes: [
+            CreatorThemeRecord(
+                channelId: "chan-b", label: "B theme", description: nil, order: 0,
+                videoIds: ["v2"], isSeries: false, orderingSignal: nil,
+                classifiedAt: "2026-04-10T00:00:00Z", classifiedVideoCount: 1
+            )
+        ])
+
+        #expect(try store.creatorThemes(channelId: "chan-a").map(\.label) == ["A theme"])
+        #expect(try store.creatorThemes(channelId: "chan-b").map(\.label) == ["B theme"])
+    }
+
+    // MARK: - Creator about (LLM cache)
+
+    @Test("creator about round-trip: upsert, fetch, delete")
+    func creatorAboutRoundTrip() throws {
+        let store = try TopicStore(inMemory: true)
+
+        #expect(try store.creatorAbout(channelId: "chan-x") == nil)
+
+        let record = CreatorAboutRecord(
+            channelId: "chan-x",
+            summary: "This creator builds custom mechanical keyboards.",
+            generatedAt: "2026-04-10T00:00:00Z",
+            sourceVideoCount: 75
+        )
+        try store.upsertCreatorAbout(record)
+
+        let fetched = try store.creatorAbout(channelId: "chan-x")
+        #expect(fetched?.summary == "This creator builds custom mechanical keyboards.")
+        #expect(fetched?.sourceVideoCount == 75)
+
+        try store.deleteCreatorAbout(channelId: "chan-x")
+        #expect(try store.creatorAbout(channelId: "chan-x") == nil)
+    }
+
+    @Test("creator about upsert replaces an existing row")
+    func creatorAboutUpsertReplaces() throws {
+        let store = try TopicStore(inMemory: true)
+
+        try store.upsertCreatorAbout(CreatorAboutRecord(
+            channelId: "chan-x", summary: "old summary",
+            generatedAt: "2026-01-01T00:00:00Z", sourceVideoCount: 10
+        ))
+        try store.upsertCreatorAbout(CreatorAboutRecord(
+            channelId: "chan-x", summary: "new summary",
+            generatedAt: "2026-04-10T00:00:00Z", sourceVideoCount: 80
+        ))
+
+        let fetched = try store.creatorAbout(channelId: "chan-x")
+        #expect(fetched?.summary == "new summary")
+        #expect(fetched?.sourceVideoCount == 80)
+    }
 }
 
 // MARK: - VideoItem Tests

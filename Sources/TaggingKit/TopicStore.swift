@@ -21,6 +21,8 @@ public final class TopicStore: Sendable {
     private let seenVideos = Table("seen_videos")
     private let excludedChannels = Table("excluded_channels")
     private let favoriteChannels = Table("favorite_channels")
+    private let creatorThemes = Table("creator_themes")
+    private let creatorAbout = Table("creator_about")
 
     // Topic columns
     private let topicId = SQLite.Expression<Int64>("id")
@@ -122,6 +124,24 @@ public final class TopicStore: Sendable {
     private let favoriteChannelIconUrl = SQLite.Expression<String?>("icon_url")
     private let favoriteChannelFavoritedAt = SQLite.Expression<String>("favorited_at")
     private let favoriteChannelNotes = SQLite.Expression<String?>("notes")
+
+    // creator_themes columns — composite PK on (channel_id, theme_label).
+    // Stores LLM-generated theme clusters from CreatorThemeClassifier.
+    private let creatorThemeChannelId = SQLite.Expression<String>("channel_id")
+    private let creatorThemeLabel = SQLite.Expression<String>("theme_label")
+    private let creatorThemeDescription = SQLite.Expression<String?>("theme_description")
+    private let creatorThemeOrder = SQLite.Expression<Int>("theme_order")
+    private let creatorThemeVideoIds = SQLite.Expression<String>("video_ids")     // JSON array
+    private let creatorThemeIsSeries = SQLite.Expression<Bool>("is_series")
+    private let creatorThemeOrderingSignal = SQLite.Expression<String?>("ordering_signal")
+    private let creatorThemeClassifiedAt = SQLite.Expression<String>("classified_at")
+    private let creatorThemeClassifiedVideoCount = SQLite.Expression<Int>("classified_video_count")
+
+    // creator_about columns — one row per channel.
+    private let creatorAboutChannelId = SQLite.Expression<String>("channel_id")
+    private let creatorAboutSummary = SQLite.Expression<String>("summary")
+    private let creatorAboutGeneratedAt = SQLite.Expression<String>("generated_at")
+    private let creatorAboutSourceVideoCount = SQLite.Expression<Int>("source_video_count")
 
     // Commit log columns
     private let commitId = SQLite.Expression<Int64>("id")
@@ -347,6 +367,26 @@ public final class TopicStore: Sendable {
             t.column(favoriteChannelNotes)
         })
 
+        try db.run(creatorThemes.create(ifNotExists: true) { t in
+            t.column(creatorThemeChannelId)
+            t.column(creatorThemeLabel)
+            t.column(creatorThemeDescription)
+            t.column(creatorThemeOrder)
+            t.column(creatorThemeVideoIds)
+            t.column(creatorThemeIsSeries, defaultValue: false)
+            t.column(creatorThemeOrderingSignal)
+            t.column(creatorThemeClassifiedAt)
+            t.column(creatorThemeClassifiedVideoCount)
+            t.primaryKey(creatorThemeChannelId, creatorThemeLabel)
+        })
+
+        try db.run(creatorAbout.create(ifNotExists: true) { t in
+            t.column(creatorAboutChannelId, primaryKey: true)
+            t.column(creatorAboutSummary)
+            t.column(creatorAboutGeneratedAt)
+            t.column(creatorAboutSourceVideoCount)
+        })
+
         try db.run("CREATE INDEX IF NOT EXISTS idx_topics_parent_id ON topics(parent_id)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_source ON videos(topic_id, source_index)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_videos_topic_channel_source ON videos(topic_id, channel_id, source_index)")
@@ -363,6 +403,7 @@ public final class TopicStore: Sendable {
         try db.run("CREATE INDEX IF NOT EXISTS idx_seen_videos_seen_at ON seen_videos(seen_at DESC)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_excluded_channels_excluded_at ON excluded_channels(excluded_at DESC)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_favorite_channels_favorited_at ON favorite_channels(favorited_at DESC)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_creator_themes_channel_order ON creator_themes(channel_id, theme_order)")
     }
 
     // MARK: - Import
@@ -717,6 +758,96 @@ public final class TopicStore: Sendable {
     /// Single-channel membership check.
     public func isChannelFavorite(_ id: String) throws -> Bool {
         try db.pluck(favoriteChannels.filter(favoriteChannelId == id)) != nil
+    }
+
+    // MARK: - Creator themes (LLM-cached)
+
+    /// Replace all theme rows for a channel with a fresh classification result. Done
+    /// in a single transaction so the cache never sits in a half-updated state.
+    public func replaceCreatorThemes(channelId id: String, themes: [CreatorThemeRecord]) throws {
+        try db.transaction {
+            try db.run(creatorThemes.filter(creatorThemeChannelId == id).delete())
+            for theme in themes {
+                let videoIdsJSON = try jsonStringForArray(theme.videoIds)
+                try db.run(creatorThemes.insert(
+                    creatorThemeChannelId <- theme.channelId,
+                    creatorThemeLabel <- theme.label,
+                    creatorThemeDescription <- theme.description,
+                    creatorThemeOrder <- theme.order,
+                    creatorThemeVideoIds <- videoIdsJSON,
+                    creatorThemeIsSeries <- theme.isSeries,
+                    creatorThemeOrderingSignal <- theme.orderingSignal,
+                    creatorThemeClassifiedAt <- theme.classifiedAt,
+                    creatorThemeClassifiedVideoCount <- theme.classifiedVideoCount
+                ))
+            }
+        }
+    }
+
+    /// Returns all themes for a channel, ordered by `theme_order`.
+    public func creatorThemes(channelId id: String) throws -> [CreatorThemeRecord] {
+        let query = creatorThemes
+            .filter(creatorThemeChannelId == id)
+            .order(creatorThemeOrder.asc)
+
+        return try db.prepare(query).map { row in
+            let videoIds = (try? jsonArrayFromString(row[creatorThemeVideoIds])) ?? []
+            return CreatorThemeRecord(
+                channelId: row[creatorThemeChannelId],
+                label: row[creatorThemeLabel],
+                description: row[creatorThemeDescription],
+                order: row[creatorThemeOrder],
+                videoIds: videoIds,
+                isSeries: row[creatorThemeIsSeries],
+                orderingSignal: row[creatorThemeOrderingSignal],
+                classifiedAt: row[creatorThemeClassifiedAt],
+                classifiedVideoCount: row[creatorThemeClassifiedVideoCount]
+            )
+        }
+    }
+
+    public func deleteCreatorThemes(channelId id: String) throws {
+        try db.run(creatorThemes.filter(creatorThemeChannelId == id).delete())
+    }
+
+    // MARK: - Creator about (LLM-cached)
+
+    /// Insert or update the about paragraph for a channel. One row per channel.
+    public func upsertCreatorAbout(_ record: CreatorAboutRecord) throws {
+        try db.run(creatorAbout.insert(or: .replace,
+            creatorAboutChannelId <- record.channelId,
+            creatorAboutSummary <- record.summary,
+            creatorAboutGeneratedAt <- record.generatedAt,
+            creatorAboutSourceVideoCount <- record.sourceVideoCount
+        ))
+    }
+
+    public func creatorAbout(channelId id: String) throws -> CreatorAboutRecord? {
+        guard let row = try db.pluck(creatorAbout.filter(creatorAboutChannelId == id)) else {
+            return nil
+        }
+        return CreatorAboutRecord(
+            channelId: row[creatorAboutChannelId],
+            summary: row[creatorAboutSummary],
+            generatedAt: row[creatorAboutGeneratedAt],
+            sourceVideoCount: row[creatorAboutSourceVideoCount]
+        )
+    }
+
+    public func deleteCreatorAbout(channelId id: String) throws {
+        try db.run(creatorAbout.filter(creatorAboutChannelId == id).delete())
+    }
+
+    // MARK: - JSON helpers (used by creator_themes video_ids)
+
+    private func jsonStringForArray(_ array: [String]) throws -> String {
+        let data = try JSONEncoder().encode(array)
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    private func jsonArrayFromString(_ jsonString: String) throws -> [String] {
+        guard let data = jsonString.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([String].self, from: data)) ?? []
     }
 
     /// Return all channels that have at least one video in the given topic.
