@@ -893,6 +893,52 @@ enum CandidateDiscoveryCoordinator {
         return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
     }
 
+    /// Backfills viewCount/duration/publishedAt for channel-archive scrape results that
+    /// degraded to the RSS path. Returns an empty map if there is nothing to enrich,
+    /// no API key configured, or the enrichment call fails. Costs 1 unit per call.
+    static func enrichRSSFallbackMetadataIfNeeded(
+        videos: [DiscoveryFallbackVideo],
+        channelId: String,
+        youtubeClient: YouTubeClient?
+    ) async -> [String: VideoMetadata] {
+        guard let youtubeClient else { return [:] }
+        let needsEnrichment = videos.contains { video in
+            video.source == "rss" && (video.viewCount == nil || video.duration == nil)
+        }
+        guard needsEnrichment else { return [:] }
+
+        let videoIds = videos
+            .filter { $0.source == "rss" && ($0.viewCount == nil || $0.duration == nil) }
+            .map(\.videoId)
+        guard !videoIds.isEmpty else { return [:] }
+
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .channelArchive,
+            backend: .api,
+            outcome: .started,
+            detail: "rss enrichment channel_id=\(channelId) videos=\(videoIds.count)"
+        )
+
+        do {
+            let metadata = try await youtubeClient.fetchVideoMetadata(ids: videoIds)
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelArchive,
+                backend: .api,
+                outcome: .succeeded,
+                detail: "rss enrichment resolved \(metadata.count) of \(videoIds.count)"
+            )
+            return Dictionary(uniqueKeysWithValues: metadata.map { ($0.videoId, $0) })
+        } catch {
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelArchive,
+                backend: .api,
+                outcome: .failed,
+                detail: "rss enrichment failed: \(error.localizedDescription)"
+            )
+            return [:]
+        }
+    }
+
     static func refreshChannelArchiveIfNeeded(channel: ChannelRecord, youtubeClient: YouTubeClient?, store: OrganizerStore) async throws -> [ArchivedChannelVideo] {
         let existingArchive = try store.store.archivedVideosForChannels([channel.channelId], perChannelLimit: 24)
         let knownVideoIDs = try store.store.archivedVideoIDsForChannel(channel.channelId)
@@ -906,16 +952,29 @@ enum CandidateDiscoveryCoordinator {
             let recent = try await DiscoveryFallbackService(environment: store.runtimeEnvironment)
                 .fetchRecentChannelUploads(channelId: channel.channelId, maxResults: 16)
                 .filter { !knownVideoIDs.contains($0.videoId) }
+
+            // RSS-fallback enrichment: when the scraper degraded to RSS, viewCount and
+            // duration come back nil. A single videos.list call (1 unit per batch of 50)
+            // backfills them. This is intentionally not gated by approval — it only fires
+            // after a successful but degraded scrape, costs 1 unit per channel, and the
+            // alternative is permanent missing metadata that hurts ranking and UX.
+            let metadataMap = await enrichRSSFallbackMetadataIfNeeded(
+                videos: recent,
+                channelId: channel.channelId,
+                youtubeClient: youtubeClient
+            )
+
             let scannedAt = ISO8601DateFormatter().string(from: Date())
-            let archived = recent.map { video in
-                ArchivedChannelVideo(
+            let archived = recent.map { video -> ArchivedChannelVideo in
+                let metadata = metadataMap[video.videoId]
+                return ArchivedChannelVideo(
                     channelId: channel.channelId,
                     videoId: video.videoId,
                     title: video.title,
                     channelName: video.channelTitle ?? channel.name,
-                    publishedAt: video.publishedAt,
-                    duration: video.duration,
-                    viewCount: video.viewCount,
+                    publishedAt: metadata?.formattedDate ?? video.publishedAt,
+                    duration: metadata?.formattedDuration ?? video.duration,
+                    viewCount: metadata?.formattedViewCount ?? video.viewCount,
                     channelIconUrl: channel.iconUrl,
                     fetchedAt: scannedAt
                 )
