@@ -58,6 +58,12 @@ struct CreatorPageViewModel {
     // Niche fingerprint
     let topicShare: [CreatorTopicShare]
 
+    // Top creators in this niche — other creators in the user's library who publish
+    // in topics that overlap with this creator's. Ranked by saved video count by
+    // default. Excludes self. Capped at 10. Empty when this creator only appears
+    // in topics where no one else has videos.
+    let leaderboardEntries: [CreatorLeaderboardEntry]
+
     // Cadence: videos per month for the last 24 months
     let monthlyVideoCounts: [CreatorMonthlyCount]
 
@@ -95,6 +101,7 @@ struct CreatorPageViewModel {
         allVideos: [CreatorVideoCard],
         playlists: [CreatorPlaylistEntry],
         topicShare: [CreatorTopicShare],
+        leaderboardEntries: [CreatorLeaderboardEntry],
         monthlyVideoCounts: [CreatorMonthlyCount],
         totalUploadsKnown: Int,
         totalUploadsReported: Int?,
@@ -126,6 +133,7 @@ struct CreatorPageViewModel {
         self.allVideos = allVideos
         self.playlists = playlists
         self.topicShare = topicShare
+        self.leaderboardEntries = leaderboardEntries
         self.monthlyVideoCounts = monthlyVideoCounts
         self.totalUploadsKnown = totalUploadsKnown
         self.totalUploadsReported = totalUploadsReported
@@ -159,6 +167,7 @@ struct CreatorPageViewModel {
         allVideos: [],
         playlists: [],
         topicShare: [],
+        leaderboardEntries: [],
         monthlyVideoCounts: [],
         totalUploadsKnown: 0,
         totalUploadsReported: nil,
@@ -232,6 +241,20 @@ struct CreatorMonthlyCount: Identifiable, Equatable {
     let count: Int
 
     var id: Date { month }
+}
+
+struct CreatorLeaderboardEntry: Identifiable, Equatable {
+    let channelId: String
+    let channelName: String
+    let channelIconUrl: URL?
+    /// Number of topics this creator shares with the page's creator (1+).
+    let sharedTopicCount: Int
+    /// Total saved videos this creator has in shared topics.
+    let savedVideoCount: Int
+    /// Subscriber count from the channel record (formatted), nil if unknown.
+    let subscriberCountFormatted: String?
+
+    var id: String { channelId }
 }
 
 // MARK: - Builder
@@ -391,6 +414,7 @@ enum CreatorPageBuilder {
             allVideos: allVideos,
             playlists: playlists,
             topicShare: topicShare,
+            leaderboardEntries: makeLeaderboard(forChannelId: channelId, in: store),
             monthlyVideoCounts: monthlyCounts,
             totalUploadsKnown: scoredCards.count,
             totalUploadsReported: totalUploadsReported,
@@ -525,6 +549,83 @@ enum CreatorPageBuilder {
     }
 
     // MARK: - Playlists
+
+    /// Builds the competitor leaderboard — other creators in the user's library who
+    /// publish in topics that overlap with this creator. Pure stats over the existing
+    /// `topicChannels` cache + saved video counts; no new persistence, no LLM.
+    ///
+    /// Algorithm:
+    /// 1. Find every topic this channelId appears in (the creator's topic footprint).
+    /// 2. For each shared topic, gather all OTHER channelIds that also appear there.
+    /// 3. For each candidate competitor, count how many of THEIR videos exist in the
+    ///    shared topics combined (saved video count).
+    /// 4. Rank by saved video count desc, secondary by shared topic count desc.
+    /// 5. Return top 10. Excludes the page creator themselves.
+    @MainActor
+    private static func makeLeaderboard(
+        forChannelId channelId: String,
+        in store: OrganizerStore
+    ) -> [CreatorLeaderboardEntry] {
+        // Step 1: find topics this creator publishes in.
+        let sharedTopicIds = store.topicChannels
+            .filter { _, channels in channels.contains { $0.channelId == channelId } }
+            .map { $0.key }
+
+        guard !sharedTopicIds.isEmpty else { return [] }
+
+        // Step 2-3: tally other creators by saved video count across shared topics.
+        // Map: competitor channelId → (sharedTopicCount, savedVideoCount, ChannelRecord)
+        var tally: [String: (sharedTopicCount: Int, savedVideoCount: Int, record: ChannelRecord)] = [:]
+
+        for topicId in sharedTopicIds {
+            let topicVideos = store.videosForTopicIncludingSubtopics(topicId)
+            // Group videos in this topic by channelId, count per channel.
+            var perChannelInTopic: [String: Int] = [:]
+            for video in topicVideos {
+                guard let cid = video.channelId, !cid.isEmpty, cid != channelId else { continue }
+                perChannelInTopic[cid, default: 0] += 1
+            }
+
+            for (cid, countInTopic) in perChannelInTopic {
+                guard let record = store.topicChannels[topicId]?.first(where: { $0.channelId == cid }) else {
+                    continue
+                }
+                if var existing = tally[cid] {
+                    existing.sharedTopicCount += 1
+                    existing.savedVideoCount += countInTopic
+                    tally[cid] = existing
+                } else {
+                    tally[cid] = (sharedTopicCount: 1, savedVideoCount: countInTopic, record: record)
+                }
+            }
+        }
+
+        // Step 4-5: rank and cap.
+        let entries = tally.values
+            .map { entry -> CreatorLeaderboardEntry in
+                CreatorLeaderboardEntry(
+                    channelId: entry.record.channelId,
+                    channelName: entry.record.name,
+                    channelIconUrl: entry.record.iconUrl
+                        .map(upscaledAvatarURL)
+                        .flatMap(URL.init(string:)),
+                    sharedTopicCount: entry.sharedTopicCount,
+                    savedVideoCount: entry.savedVideoCount,
+                    subscriberCountFormatted: formatSubscriberCount(entry.record.subscriberCount)
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.savedVideoCount != rhs.savedVideoCount {
+                    return lhs.savedVideoCount > rhs.savedVideoCount
+                }
+                if lhs.sharedTopicCount != rhs.sharedTopicCount {
+                    return lhs.sharedTopicCount > rhs.sharedTopicCount
+                }
+                return lhs.channelName.localizedStandardCompare(rhs.channelName) == .orderedAscending
+            }
+
+        return Array(entries.prefix(10))
+    }
 
     @MainActor
     private static func makePlaylists(

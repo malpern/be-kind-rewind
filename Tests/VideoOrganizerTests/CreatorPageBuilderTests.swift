@@ -234,6 +234,44 @@ struct CreatorPageBuilderTests {
         }
     }
 
+    @MainActor
+    @Test("makePage builds a leaderboard from creators in shared topics")
+    func leaderboardFromSharedTopics() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+
+            // chan-alpha is in Alpha Topic; chan-beta is in Beta Topic. They don't
+            // share any topics in the seed fixture, so chan-alpha's leaderboard
+            // should be empty (no other creator in any of alpha's topics).
+            let alphaPage = CreatorPageBuilder.makePage(forChannelId: "chan-alpha", in: store)
+            #expect(alphaPage.leaderboardEntries.isEmpty)
+        }
+    }
+
+    @MainActor
+    @Test("makePage leaderboard excludes the page creator from their own list")
+    func leaderboardExcludesSelf() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+
+            let page = CreatorPageBuilder.makePage(forChannelId: "chan-alpha", in: store)
+            // Even if there were other creators, chan-alpha must never appear on
+            // their own leaderboard.
+            #expect(!page.leaderboardEntries.contains { $0.channelId == "chan-alpha" })
+        }
+    }
+
+    @MainActor
+    @Test("makePage leaderboard returns empty for an unknown channel id")
+    func leaderboardEmptyForUnknownChannel() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+
+            let page = CreatorPageBuilder.makePage(forChannelId: "chan-does-not-exist", in: store)
+            #expect(page.leaderboardEntries.isEmpty)
+        }
+    }
+
     @Test("upscaledAvatarURL bumps yt3.ggpht.com size parameters to s800")
     func upscalesYT3Avatars() {
         let small = "https://yt3.ggpht.com/ytc/AIdro_kAAAA-foo=s88-c-k-c0x00ffffff-no-rj"

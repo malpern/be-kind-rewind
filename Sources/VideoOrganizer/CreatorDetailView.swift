@@ -48,6 +48,7 @@ struct CreatorDetailView: View {
                 allVideosSection
                 playlistsSection
                 nichesAndCadenceSection
+                leaderboardSection
                 channelInformationSection
             }
             .padding(.horizontal, 24)
@@ -972,6 +973,122 @@ struct CreatorDetailView: View {
             return String(format: "%.0f%%", value * 100)
         }
         return String(format: "%.1f%%", value * 100)
+    }
+
+    // MARK: - Top creators in this niche (competitor leaderboard)
+
+    @ViewBuilder
+    private var leaderboardSection: some View {
+        if !page.leaderboardEntries.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Top creators in this niche")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
+                    Text("ranked by saved videos in shared topics")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(spacing: 0) {
+                    ForEach(Array(page.leaderboardEntries.enumerated()), id: \.element.id) { index, entry in
+                        leaderboardRow(rank: index + 1, entry: entry)
+                        if index < page.leaderboardEntries.count - 1 {
+                            Divider()
+                                .padding(.leading, 56)
+                        }
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.background.secondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(.quaternary, lineWidth: 0.5)
+                )
+            }
+        }
+    }
+
+    private func leaderboardRow(rank: Int, entry: CreatorLeaderboardEntry) -> some View {
+        Button {
+            store.openCreatorDetail(channelId: entry.channelId)
+        } label: {
+            HStack(spacing: 12) {
+                Text("\(rank)")
+                    .font(.body.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, alignment: .trailing)
+
+                leaderboardAvatar(entry)
+                    .frame(width: 32, height: 32)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.channelName)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(leaderboardSubtitle(for: entry))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open \(entry.channelName)'s creator page")
+    }
+
+    @ViewBuilder
+    private func leaderboardAvatar(_ entry: CreatorLeaderboardEntry) -> some View {
+        Group {
+            if let url = entry.channelIconUrl {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    default:
+                        leaderboardAvatarFallback
+                    }
+                }
+            } else {
+                leaderboardAvatarFallback
+            }
+        }
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(.quaternary, lineWidth: 0.5))
+    }
+
+    private var leaderboardAvatarFallback: some View {
+        ZStack {
+            Circle().fill(.tertiary)
+            Image(systemName: "person.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func leaderboardSubtitle(for entry: CreatorLeaderboardEntry) -> String {
+        var parts: [String] = ["\(entry.savedVideoCount) saved"]
+        if let subs = entry.subscriberCountFormatted {
+            parts.append(subs)
+        }
+        if entry.sharedTopicCount > 1 {
+            parts.append("\(entry.sharedTopicCount) shared topics")
+        } else {
+            parts.append("1 shared topic")
+        }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Channel information
