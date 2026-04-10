@@ -30,10 +30,12 @@ struct GridSectionBuilder {
 
         if context.pageDisplayMode == .watchCandidates,
            context.watchPresentationMode == .allTogether {
-            let allWatchVideos = context.allWatchVideos().filter { video in
-                guard let selectedTopicId = context.selectedTopicId else { return true }
-                return video.topicId == selectedTopicId
-            }
+            // "Show All" deliberately ignores the sidebar topic selection — the whole
+            // point of this mode is to merge candidates from every topic into one
+            // ranked pool. Previously this code re-filtered by selectedTopicId, which
+            // made Show All collapse to "show only this one topic" whenever the user
+            // had any topic selected in the sidebar.
+            let allWatchVideos = context.allWatchVideos()
             if !allWatchVideos.isEmpty {
                 baseSections = [
                     TopicSection(
