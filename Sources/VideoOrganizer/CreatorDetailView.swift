@@ -1156,9 +1156,15 @@ struct CreatorDetailView: View {
     @ViewBuilder
     private var topicShareChart: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Topic share")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Topic share")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("their share / library share")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
 
             if page.topicShare.isEmpty {
                 Text("No saved videos yet")
@@ -1179,10 +1185,21 @@ struct CreatorDetailView: View {
                     )
                     .cornerRadius(3)
                     .annotation(position: .trailing, alignment: .leading) {
-                        Text(percentageString(share.percentage))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 4)
+                        // Two numbers: their slice of the page creator's saved videos,
+                        // and their slice of the topic across all creators in library.
+                        HStack(spacing: 4) {
+                            Text(percentageString(share.percentage))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Text("/")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            Text(percentageString(share.shareOfVoice))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(shareOfVoiceColor(share.shareOfVoice))
+                        }
+                        .padding(.leading, 4)
+                        .help("\(share.videoCount) of this creator's saved videos · \(share.videoCount) of \(share.topicTotalSavedCount) total \(share.topicName) videos in your library (\(percentageString(share.shareOfVoice)) share of voice)")
                     }
                 }
                 .chartXScale(domain: 0...max(1.0, page.topicShare.map(\.percentage).max() ?? 1.0))
@@ -1204,7 +1221,14 @@ struct CreatorDetailView: View {
                 .accessibilityLabel("Topic share for \(page.channelName)")
             }
         }
-        .frame(minWidth: 200, idealWidth: 280, alignment: .leading)
+        .frame(minWidth: 240, idealWidth: 320, alignment: .leading)
+    }
+
+    /// Highlight high share-of-voice with the accent color so users can spot which
+    /// topics this creator dominates in the library at a glance. >= 25% = accent,
+    /// otherwise secondary text color.
+    private func shareOfVoiceColor(_ share: Double) -> Color {
+        share >= 0.25 ? .accentColor : .secondary
     }
 
     @ViewBuilder

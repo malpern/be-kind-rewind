@@ -254,6 +254,13 @@ struct CreatorTopicShare: Identifiable, Equatable {
     let topicName: String
     let videoCount: Int
     let percentage: Double
+    /// Phase 3: this creator's saved videos as a fraction of ALL saved videos in
+    /// the topic across every creator the user has. 0.0–1.0. Tells you "how much of
+    /// this topic does this creator own?"
+    let shareOfVoice: Double
+    /// Total saved videos in the topic across all creators (denominator for shareOfVoice).
+    /// Surfaced for tooltips so the user can see the absolute numbers.
+    let topicTotalSavedCount: Int
 
     var id: Int64 { topicId }
 }
@@ -386,7 +393,7 @@ enum CreatorPageBuilder {
         let watchedCount = savedVideosFlat.compactMap { store.seenSummary(for: $0.videoId) }.count
 
         // 12. Topic share (only counts saved videos by topic — archive isn't topic-tagged).
-        let topicShare = makeTopicShare(savedByTopic: savedByTopic)
+        let topicShare = makeTopicShare(savedByTopic: savedByTopic, store: store)
 
         // 13. Monthly cadence (last 24 months) — use parseISO8601 dates from publishedAt.
         let monthlyCounts = makeMonthlyCounts(from: scoredCards)
@@ -527,18 +534,26 @@ enum CreatorPageBuilder {
 
     // MARK: - Topic share
 
+    @MainActor
     private static func makeTopicShare(
-        savedByTopic: [(topic: TopicViewModel, videos: [VideoViewModel])]
+        savedByTopic: [(topic: TopicViewModel, videos: [VideoViewModel])],
+        store: OrganizerStore
     ) -> [CreatorTopicShare] {
         let total = savedByTopic.reduce(0) { $0 + $1.videos.count }
         guard total > 0 else { return [] }
         return savedByTopic
             .map { entry in
-                CreatorTopicShare(
+                let topicTotal = store.videosForTopicIncludingSubtopics(entry.topic.id).count
+                let share = topicTotal > 0
+                    ? Double(entry.videos.count) / Double(topicTotal)
+                    : 0
+                return CreatorTopicShare(
                     topicId: entry.topic.id,
                     topicName: entry.topic.name,
                     videoCount: entry.videos.count,
-                    percentage: Double(entry.videos.count) / Double(total)
+                    percentage: Double(entry.videos.count) / Double(total),
+                    shareOfVoice: share,
+                    topicTotalSavedCount: topicTotal
                 )
             }
             .sorted { $0.videoCount > $1.videoCount }
