@@ -52,6 +52,7 @@ struct CreatorDetailView: View {
                 essentialsSection
                 themeCapsulesSection
                 allVideosSection
+                byThemeSection
                 playlistsSection
                 nichesAndCadenceSection
                 leaderboardSection
@@ -948,6 +949,107 @@ struct CreatorDetailView: View {
         guard page.channelMedianViews > 0 else { return "Outlier" }
         let multiplier = String(format: "%.1f×", card.outlierScore)
         return "\(multiplier) channel median (\(formatCompact(page.channelMedianViews)) views)"
+    }
+
+    // MARK: - By theme (LLM-driven browse)
+
+    @ViewBuilder
+    private var byThemeSection: some View {
+        if !page.themes.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("By theme")
+                    .font(.title3.weight(.semibold))
+
+                VStack(spacing: 0) {
+                    ForEach(Array(page.themes.enumerated()), id: \.element.label) { index, theme in
+                        DisclosureGroup {
+                            byThemeVideoList(for: theme)
+                        } label: {
+                            byThemeRowLabel(theme)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        if index < page.themes.count - 1 {
+                            Divider()
+                        }
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.background.secondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(.quaternary, lineWidth: 0.5)
+                )
+            }
+        }
+    }
+
+    private func byThemeRowLabel(_ theme: CreatorThemeRecord) -> some View {
+        HStack(spacing: 8) {
+            if theme.isSeries {
+                Image(systemName: "list.number")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tint)
+                    .help(theme.orderingSignal == "numeric" ? "Numbered series" :
+                          theme.orderingSignal == "date" ? "Date-ordered series" : "Recurring series")
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(theme.label)
+                    .font(.body.weight(.medium))
+                if let description = theme.description, !description.isEmpty {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            Text("\(theme.videoIds.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(.gray.opacity(0.15)))
+        }
+    }
+
+    @ViewBuilder
+    private func byThemeVideoList(for theme: CreatorThemeRecord) -> some View {
+        let allowed = Set(theme.videoIds)
+        let videosInTheme = page.allVideos.filter { allowed.contains($0.videoId) }
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(videosInTheme) { card in
+                Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
+                    HStack(spacing: 8) {
+                        Text(card.title)
+                            .font(.callout)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        if card.viewCountParsed > 0 {
+                            Text(card.viewCountFormatted)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        if let age = card.ageFormatted {
+                            Text(age)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    videoContextMenuItems(for: [card])
+                }
+            }
+        }
+        .padding(.top, 6)
+        .padding(.leading, 8)
     }
 
     // MARK: - In your playlists
