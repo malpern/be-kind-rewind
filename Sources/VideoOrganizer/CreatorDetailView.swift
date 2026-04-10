@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 import TaggingKit
 
@@ -27,6 +28,7 @@ struct CreatorDetailView: View {
                 essentialsSection
                 allVideosSection
                 playlistsSection
+                nichesAndCadenceSection
             }
             .padding(.horizontal, 24)
             .padding(.top, 16)
@@ -528,6 +530,101 @@ struct CreatorDetailView: View {
         }
         .buttonStyle(.plain)
         .help("Filter the topic grid to videos in \(entry.playlist.title)")
+    }
+
+    // MARK: - Niches & cadence (the 25% analytics block)
+
+    @ViewBuilder
+    private var nichesAndCadenceSection: some View {
+        if !page.topicShare.isEmpty || !page.monthlyVideoCounts.isEmpty {
+            GroupBox("Niches & cadence") {
+                HStack(alignment: .top, spacing: 24) {
+                    topicShareChart
+                    cadenceChart
+                }
+                .padding(.top, 6)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var topicShareChart: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Topic share")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if page.topicShare.isEmpty {
+                Text("No saved videos yet")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Chart(page.topicShare) { share in
+                    BarMark(
+                        x: .value("Share", share.percentage),
+                        y: .value("Topic", share.topicName)
+                    )
+                    .foregroundStyle(.tint)
+                    .annotation(position: .trailing, alignment: .leading) {
+                        Text(percentageString(share.percentage))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .chartXScale(domain: 0...max(1.0, page.topicShare.map(\.percentage).max() ?? 1.0))
+                .chartXAxis(.hidden)
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisValueLabel()
+                    }
+                }
+                .frame(height: max(60, CGFloat(page.topicShare.count) * 24))
+            }
+        }
+        .frame(minWidth: 200, idealWidth: 280, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var cadenceChart: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Videos / month (24mo)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            let totalDated = page.monthlyVideoCounts.reduce(0) { $0 + $1.count }
+            if totalDated == 0 {
+                Text("No dated videos available")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Chart(page.monthlyVideoCounts) { bucket in
+                    BarMark(
+                        x: .value("Month", bucket.month, unit: .month),
+                        y: .value("Videos", bucket.count)
+                    )
+                    .foregroundStyle(.tint.opacity(bucket.count == 0 ? 0.15 : 0.8))
+                }
+                .chartXAxis {
+                    AxisMarks(values: .stride(by: .month, count: 6)) { value in
+                        if value.as(Date.self) != nil {
+                            AxisValueLabel(format: .dateTime.month(.abbreviated).year(.twoDigits))
+                        }
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .frame(height: 100)
+            }
+        }
+        .frame(minWidth: 240, idealWidth: 320, alignment: .leading)
+    }
+
+    private func percentageString(_ value: Double) -> String {
+        if value >= 0.10 {
+            return String(format: "%.0f%%", value * 100)
+        }
+        return String(format: "%.1f%%", value * 100)
     }
 }
 
