@@ -5,6 +5,7 @@ import OSLog
 /// file log (for reliable debugging when os_log filtering drops messages).
 enum AppLogger {
     static let auth = Logger(subsystem: subsystem, category: "auth")
+    static let commands = Logger(subsystem: subsystem, category: "commands")
     static let discovery = Logger(subsystem: subsystem, category: "discovery")
     static let grid = Logger(subsystem: subsystem, category: "grid")
     static let sync = Logger(subsystem: subsystem, category: "sync")
@@ -18,7 +19,7 @@ enum AppLogger {
 }
 
 /// Simple append-only file logger for debugging.
-final class FileLogger: Sendable {
+actor FileLogger {
     let logFileURL: URL
 
     init() {
@@ -36,7 +37,13 @@ final class FileLogger: Sendable {
         }
     }
 
-    func log(_ message: String, category: String = "app") {
+    nonisolated func log(_ message: String, category: String = "app") {
+        Task {
+            await write(message, category: category)
+        }
+    }
+
+    private func write(_ message: String, category: String) {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let line = "\(timestamp) [\(category)] \(message)\n"
         guard let data = line.data(using: .utf8) else { return }

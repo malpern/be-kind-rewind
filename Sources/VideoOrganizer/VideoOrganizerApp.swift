@@ -12,7 +12,7 @@ struct VideoOrganizerApp: App {
     @State private var showCredentialOnboarding = false
 
     var body: some Scene {
-        WindowGroup {
+        Window("Be Kind, Rewind", id: "main") {
             Group {
                 if let store {
                     OrganizerView(
@@ -36,7 +36,9 @@ struct VideoOrganizerApp: App {
                 }
             }
             .task {
-                await initializeStore()
+                if store == nil && loadError == nil {
+                    await initializeStore()
+                }
             }
             .sheet(isPresented: $displaySettings.showQuickNavigator) {
                 if let store {
@@ -55,6 +57,7 @@ struct VideoOrganizerApp: App {
             }
         }
         .defaultSize(width: 1200, height: 800)
+        .defaultPosition(.center)
         .commands {
             AppMenuCommands(displaySettings: displaySettings, store: store)
         }
@@ -105,15 +108,19 @@ struct VideoOrganizerApp: App {
     }
 
     private func initializeStore() async {
-        AppLogger.file.log("App initializing, log file: \(AppLogger.file.logFileURL.path)", category: "app")
+        let logFileURL = AppLogger.file.logFileURL
+        AppLogger.app.info("Initializing app store")
+        AppLogger.file.log("App initializing, log file: \(logFileURL.path)", category: "app")
         do {
             let client = try? ClaudeClient()
             let dbPath = resolveDbPath()
             let newStore = try OrganizerStore(dbPath: dbPath, claudeClient: client)
             store = newStore
             evaluateCredentialOnboardingEligibility()
+            AppLogger.app.info("App store initialized")
         } catch {
             loadError = error.localizedDescription
+            AppLogger.app.error("Failed to initialize app store: \(error.localizedDescription, privacy: .public)")
         }
     }
 
