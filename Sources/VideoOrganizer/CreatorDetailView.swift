@@ -24,6 +24,22 @@ struct CreatorDetailView: View {
     /// Same enum used by both creator-page surfaces and any future per-section toggle.
     @AppStorage("creatorAllVideosViewMode") private var allVideosViewMode: AllVideosViewMode = .table
 
+    /// Hits sort preference. Sticky across navigations and app launches via UserDefaults.
+    /// "All time" surfaces the creator's biggest punching-above-weight videos regardless
+    /// of when they dropped (the research-oriented default). "Recent" applies the
+    /// OutlierAnalytics recency multiplier so newer work bubbles up — useful when the
+    /// user wants "what's their current best work" instead of all-time peaks.
+    @AppStorage("creatorHitsSortMode") private var hitsSortMode: HitsSortMode = .allTime
+
+    enum HitsSortMode: String, CaseIterable, Identifiable {
+        case allTime
+        case recent
+
+        var id: String { rawValue }
+        var label: String { self == .allTime ? "All time" : "Recent" }
+        var symbolName: String { self == .allTime ? "star" : "clock" }
+    }
+
     /// Per-creator search query. Local to the page, resets on navigation away. Filters
     /// the All Videos table/grid by case-insensitive title substring. Distinct from the
     /// main app search (which spans the whole library) — this only narrows the videos
@@ -54,8 +70,7 @@ struct CreatorDetailView: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 identityCard
                 whatsNewSection
-                essentialsSection
-                theirHitsSection
+                hitsSection
                 themeCapsulesSection
                 allVideosSection
                 byThemeSection
@@ -525,24 +540,40 @@ struct CreatorDetailView: View {
             .foregroundStyle(.secondary)
     }
 
-    // MARK: - Essentials
+    // MARK: - Hits (merged outlier shelf, sortable by All time vs Recent)
 
+    /// One outlier shelf, sortable. The previous version had two parallel sections
+    /// (Essentials = recency-weighted, Their hits = pure outlier rank) which were
+    /// nearly identical for most creators. Now it's a single section with a small
+    /// segmented Picker so the user can flip between the two perspectives.
     @ViewBuilder
-    private var essentialsSection: some View {
-        if !page.essentials.isEmpty {
+    private var hitsSection: some View {
+        let cards = hitsCards
+        if !cards.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Essentials")
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Hits")
                         .font(.title3.weight(.semibold))
-                    Spacer()
-                    Text(essentialsHelpText)
+                    Text(hitsHelpText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("", selection: $hitsSortMode) {
+                        ForEach(HitsSortMode.allCases) { mode in
+                            Image(systemName: mode.symbolName)
+                                .help(mode.label)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 88)
+                    .help("Sort by all-time outlier ranking or by recent work")
                 }
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHGrid(rows: [GridItem(.fixed(180))], spacing: 14) {
-                        ForEach(page.essentials) { card in
+                        ForEach(cards) { card in
                             essentialsCard(card)
                         }
                     }
@@ -552,13 +583,26 @@ struct CreatorDetailView: View {
         }
     }
 
-    private var essentialsHelpText: String {
-        // Surface the outlier baseline so the user understands "what counts as a hit
-        // for this creator". Hidden when the median is meaningless (no view counts).
-        guard page.channelMedianViews > 0 else {
-            return "ranked by views"
+    /// The list to display in the hits shelf. Both lists are pre-computed in the
+    /// builder so flipping the toggle is instant — no recompute, just a different
+    /// array reference. Empty when neither perspective has data (e.g. a creator
+    /// with no view counts at all).
+    private var hitsCards: [CreatorVideoCard] {
+        switch hitsSortMode {
+        case .allTime:
+            // Pure outlier ranking, no recency tilt — gated to outliers only.
+            return page.theirHits.filter { $0.outlierScore >= 1.5 }
+        case .recent:
+            return page.essentials
         }
-        return "ranked by outlier score · median ≈ \(formatCompact(page.channelMedianViews)) views"
+    }
+
+    private var hitsHelpText: String {
+        let perspective = hitsSortMode == .allTime ? "all time" : "recent"
+        guard page.channelMedianViews > 0 else {
+            return "ranked by views · \(perspective)"
+        }
+        return "ranked by outlier score · \(perspective) · median ≈ \(formatCompact(page.channelMedianViews)) views"
     }
 
     private func essentialsCard(_ card: CreatorVideoCard) -> some View {
@@ -644,35 +688,9 @@ struct CreatorDetailView: View {
         return "\(value)"
     }
 
-    // MARK: - Their hits (raw outlier ranking, no recency tilt)
-
-    @ViewBuilder
-    private var theirHitsSection: some View {
-        // Only show when at least one video meaningfully outperformed (>= 1.5× median)
-        // AND at least 2 outliers exist — a single hit is just luck, two is a pattern.
-        let outliers = page.theirHits.filter { $0.outlierScore >= 1.5 }
-        if outliers.count >= 2 {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Their hits")
-                        .font(.title3.weight(.semibold))
-                    Spacer()
-                    Text("ranked by outlier score · all-time")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHGrid(rows: [GridItem(.fixed(180))], spacing: 14) {
-                        ForEach(outliers) { card in
-                            essentialsCard(card)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
+    // (Phase 3 "Their hits" section was merged into hitsSection above with a
+    // sortable [All time | Recent] picker. Both perspectives still live in the
+    // page model — page.theirHits and page.essentials — so the toggle is instant.)
 
     // MARK: - Theme capsules (LLM-driven)
 
