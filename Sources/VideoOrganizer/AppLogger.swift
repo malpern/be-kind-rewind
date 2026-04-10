@@ -6,6 +6,7 @@ import OSLog
 enum AppLogger {
     static let auth = Logger(subsystem: subsystem, category: "auth")
     static let discovery = Logger(subsystem: subsystem, category: "discovery")
+    static let grid = Logger(subsystem: subsystem, category: "grid")
     static let sync = Logger(subsystem: subsystem, category: "sync")
     static let app = Logger(subsystem: subsystem, category: "app")
 

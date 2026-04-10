@@ -45,15 +45,21 @@ struct CollectionGridView: View {
             selectedVideoIds: store.selectedVideoIds,
             scrollToTopicRequested: displaySettings.scrollToTopicRequested,
             scrollToSectionRequested: displaySettings.scrollToSectionRequested,
+            focusGridRequested: displaySettings.focusGridRequested,
             onSelect: { videoId in
                 store.selectedVideoId = videoId
             },
             onSelectionChange: { primary, ids in
                 store.updateSelection(primary: primary, all: ids)
             },
-            onClearScrollRequest: {
+            onClearTopicScrollRequest: {
                 displaySettings.scrollToTopicRequested = nil
+            },
+            onClearSectionScrollRequest: {
                 displaySettings.scrollToSectionRequested = nil
+            },
+            onClearGridFocusRequest: {
+                displaySettings.focusGridRequested = false
             }
         )
         .task {
@@ -218,12 +224,21 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
     let selectedVideoIds: Set<String>
     let scrollToTopicRequested: Int64?
     let scrollToSectionRequested: String?
+    let focusGridRequested: Bool
     let onSelect: (String) -> Void
     let onSelectionChange: (String?, Set<String>) -> Void
-    let onClearScrollRequest: () -> Void
+    let onClearTopicScrollRequest: () -> Void
+    let onClearSectionScrollRequest: () -> Void
+    let onClearGridFocusRequest: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSelect: onSelect, onSelectionChange: onSelectionChange)
+        Coordinator(
+            onSelect: onSelect,
+            onSelectionChange: onSelectionChange,
+            onClearTopicScrollRequest: onClearTopicScrollRequest,
+            onClearSectionScrollRequest: onClearSectionScrollRequest,
+            onClearGridFocusRequest: onClearGridFocusRequest
+        )
     }
 
     func makeNSView(context: Context) -> CollectionGridContainerView {
@@ -249,16 +264,14 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
         if let topicId = scrollToTopicRequested {
             coordinator.enqueueScroll(to: topicId)
-            DispatchQueue.main.async {
-                onClearScrollRequest()
-            }
         }
 
         if let sectionId = scrollToSectionRequested {
             coordinator.enqueueScroll(toSectionId: sectionId)
-            DispatchQueue.main.async {
-                onClearScrollRequest()
-            }
+        }
+
+        if focusGridRequested {
+            coordinator.enqueueFocusRequest()
         }
 
         container.scheduleFlushIfReady()
@@ -285,6 +298,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private var needsLayoutInvalidation = false
         private var renderedContentWidth: CGFloat = 0
         private var isApplyingSelectionToCollectionView = false
+        private var pendingFocusGridRequest = false
         private var actionObservers: [NSObjectProtocol] = []
         private var scrollFeedbackUpdateScheduled = false
 
@@ -293,10 +307,22 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         var showMetadata: Bool = true
         var onSelect: (String) -> Void
         var onSelectionChange: (String?, Set<String>) -> Void
+        var onClearTopicScrollRequest: () -> Void
+        var onClearSectionScrollRequest: () -> Void
+        var onClearGridFocusRequest: () -> Void
 
-        init(onSelect: @escaping (String) -> Void, onSelectionChange: @escaping (String?, Set<String>) -> Void) {
+        init(
+            onSelect: @escaping (String) -> Void,
+            onSelectionChange: @escaping (String?, Set<String>) -> Void,
+            onClearTopicScrollRequest: @escaping () -> Void,
+            onClearSectionScrollRequest: @escaping () -> Void,
+            onClearGridFocusRequest: @escaping () -> Void
+        ) {
             self.onSelect = onSelect
             self.onSelectionChange = onSelectionChange
+            self.onClearTopicScrollRequest = onClearTopicScrollRequest
+            self.onClearSectionScrollRequest = onClearSectionScrollRequest
+            self.onClearGridFocusRequest = onClearGridFocusRequest
         }
 
         func attach(to container: CollectionGridContainerView) {
@@ -334,9 +360,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
             container.collectionView.onClearSelectionShortcut = { [weak self] in
                 self?.handleClearSelectionShortcut()
-            }
-            container.collectionView.onFavoritePlaylistShortcut = { [weak self] index in
-                self?.handleFavoritePlaylistShortcut(index: index)
             }
             container.onReadyForFlush = { [weak self] in
                 self?.flushIfReady()
@@ -378,11 +401,23 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         func enqueueScroll(to topicId: Int64) {
+            if pendingScrollTopicId != topicId {
+                AppLogger.grid.debug("Queued topic scroll request for topic \(topicId, privacy: .public)")
+            }
             pendingScrollTopicId = topicId
         }
 
         func enqueueScroll(toSectionId sectionId: String) {
+            if pendingScrollSectionId != sectionId {
+                AppLogger.grid.debug("Queued section scroll request for \(sectionId, privacy: .public)")
+            }
             pendingScrollSectionId = sectionId
+        }
+
+        func enqueueFocusRequest() {
+            guard !pendingFocusGridRequest else { return }
+            pendingFocusGridRequest = true
+            AppLogger.grid.debug("Queued focus request for collection grid")
         }
 
         func flushIfReady() {
@@ -411,13 +446,30 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
             var didApplyScroll = false
             if let topicId = pendingScrollTopicId {
-                pendingScrollTopicId = nil
-                didApplyScroll = scrollToTopic(topicId)
+                if scrollToTopic(topicId) {
+                    pendingScrollTopicId = nil
+                    didApplyScroll = true
+                    DispatchQueue.main.async { [onClearTopicScrollRequest] in
+                        onClearTopicScrollRequest()
+                    }
+                }
             }
 
             if let sectionId = pendingScrollSectionId {
-                pendingScrollSectionId = nil
-                didApplyScroll = scrollToSection(sectionId) || didApplyScroll
+                if scrollToSection(sectionId) {
+                    pendingScrollSectionId = nil
+                    didApplyScroll = true
+                    DispatchQueue.main.async { [onClearSectionScrollRequest] in
+                        onClearSectionScrollRequest()
+                    }
+                }
+            }
+
+            if pendingFocusGridRequest, applyFocusIfPossible() {
+                pendingFocusGridRequest = false
+                DispatchQueue.main.async { [onClearGridFocusRequest] in
+                    onClearGridFocusRequest()
+                }
             }
 
             if renderedSelectedVideoId != pendingSelectedVideoId || renderedSelectedVideoIds != pendingSelectedVideoIds || shouldReload || shouldInvalidateLayout || didApplyScroll {
@@ -636,12 +688,26 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
         }
 
+        private func applyFocusIfPossible() -> Bool {
+            guard let collectionView, let window = collectionView.window else { return false }
+            let accepted = window.makeFirstResponder(collectionView)
+            if accepted {
+                AppLogger.grid.debug("Focused collection grid")
+            } else {
+                AppLogger.grid.error("Failed to focus collection grid")
+            }
+            return accepted
+        }
+
         @discardableResult
         private func scrollToTopic(_ topicId: Int64) -> Bool {
             guard let collectionView,
                   collectionView.numberOfSections > 0,
                   let sectionIndex = renderedSections.firstIndex(where: { $0.topicId == topicId }),
-                  sectionIndex < collectionView.numberOfSections else { return false }
+                  sectionIndex < collectionView.numberOfSections else {
+                AppLogger.grid.debug("Deferring topic scroll for topic \(topicId, privacy: .public); section not ready")
+                return false
+            }
 
             return scrollToSectionIndex(sectionIndex)
         }
@@ -651,7 +717,10 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard let collectionView,
                   collectionView.numberOfSections > 0,
                   let sectionIndex = renderedSections.firstIndex(where: { $0.id == sectionId }),
-                  sectionIndex < collectionView.numberOfSections else { return false }
+                  sectionIndex < collectionView.numberOfSections else {
+                AppLogger.grid.debug("Deferring section scroll for \(sectionId, privacy: .public); section not ready")
+                return false
+            }
 
             return scrollToSectionIndex(sectionIndex)
         }
@@ -659,10 +728,14 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         @discardableResult
         private func scrollToSectionIndex(_ sectionIndex: Int) -> Bool {
             guard let collectionView else { return false }
+            let section = renderedSections[sectionIndex]
             let itemCount = collectionView.numberOfItems(inSection: sectionIndex)
             if itemCount > 0 {
                 let indexPath = IndexPath(item: 0, section: sectionIndex)
                 collectionView.scrollToItems(at: Set([indexPath]), scrollPosition: .top)
+                AppLogger.grid.info(
+                    "Scrolled to section \(section.id, privacy: .public) for topic \(section.topicId, privacy: .public)"
+                )
 
                 let video = renderedSections[sectionIndex].videos[0]
                 if !video.isPlaceholder {
@@ -683,6 +756,9 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             let origin = NSPoint(x: 0, y: max(attributes.frame.minY, 0))
             scrollView.contentView.scroll(to: origin)
             scrollView.reflectScrolledClipView(scrollView.contentView)
+            AppLogger.grid.info(
+                "Scrolled to header-only section \(section.id, privacy: .public) for topic \(section.topicId, privacy: .public)"
+            )
 
             if let nextVideoSection = renderedSections.dropFirst(sectionIndex + 1).first(where: { !$0.videos.isEmpty }),
                let video = nextVideoSection.videos.first {
@@ -1248,7 +1324,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 menu.addItem(.separator())
                 let saveToWatchLater = NSMenuItem(title: "Save to Watch Later", action: #selector(contextSaveToWatchLater(_:)), keyEquivalent: "")
                 saveToWatchLater.target = self
-                saveToWatchLater.keyEquivalent = "w"
+                saveToWatchLater.keyEquivalent = "l"
                 let watchLaterMembershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
                     if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == "WL" }) {
                         count += 1
@@ -1282,47 +1358,46 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                         menu.addItem(moveItem)
                     }
 
-                    let currentPlaylists = selectedVideoIds
-                        .flatMap { store.playlistsForVideo($0).map(\.playlistId) }
-                    let removablePlaylistIds = Set(currentPlaylists)
-
-                    let removeMenu = NSMenu(title: "Remove from Playlist")
-                    for playlist in store.knownPlaylists().filter({ removablePlaylistIds.contains($0.playlistId) }) {
-                        let item = NSMenuItem(title: playlist.title, action: #selector(contextRemoveFromPlaylist(_:)), keyEquivalent: "")
-                        item.representedObject = playlist
-                        item.target = self
-                        let membershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
-                            if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == playlist.playlistId }) {
-                                count += 1
-                            }
-                        }
-                        if membershipCount == selectionCount {
-                            item.state = .on
-                        } else if membershipCount > 0 {
-                            item.state = .mixed
-                        } else {
-                            item.state = .off
-                        }
-                        removeMenu.addItem(item)
-                    }
-                    let removeItem = NSMenuItem(title: "Remove from Playlist", action: nil, keyEquivalent: "")
-                    removeItem.submenu = removeMenu
-                    removeItem.isEnabled = !removeMenu.items.isEmpty
-                    menu.addItem(removeItem)
-
-                    if selectionCount == 1 {
-                        let showMenu = NSMenu(title: "Show in Playlists")
-                        for playlist in store.playlistsForVideo(selectedItems[0].id) {
-                            let item = NSMenuItem(title: playlist.title, action: #selector(contextShowInPlaylist(_:)), keyEquivalent: "")
+                    let removablePlaylists = removablePlaylists(for: selectedVideoIds)
+                    switch removablePlaylists.count {
+                    case 0:
+                        break
+                    case 1:
+                        let playlist = removablePlaylists[0]
+                        let removeItem = NSMenuItem(
+                            title: "Remove from \(playlist.title)",
+                            action: #selector(contextRemoveFromPlaylist(_:)),
+                            keyEquivalent: ""
+                        )
+                        removeItem.representedObject = playlist
+                        removeItem.target = self
+                        menu.addItem(removeItem)
+                    default:
+                        let removeMenu = NSMenu(title: "Remove from Playlist")
+                        for playlist in removablePlaylists {
+                            let item = NSMenuItem(title: playlist.title, action: #selector(contextRemoveFromPlaylist(_:)), keyEquivalent: "")
                             item.representedObject = playlist
                             item.target = self
-                            showMenu.addItem(item)
+                            let membershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
+                                if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == playlist.playlistId }) {
+                                    count += 1
+                                }
+                            }
+                            if membershipCount == selectionCount {
+                                item.state = .on
+                            } else if membershipCount > 0 {
+                                item.state = .mixed
+                            } else {
+                                item.state = .off
+                            }
+                            removeMenu.addItem(item)
                         }
-                        let showItem = NSMenuItem(title: "Show in Playlists", action: nil, keyEquivalent: "")
-                        showItem.submenu = showMenu
-                        showItem.isEnabled = !showMenu.items.isEmpty
-                        menu.addItem(showItem)
+                        let removeItem = NSMenuItem(title: "Remove from Playlist", action: nil, keyEquivalent: "")
+                        removeItem.submenu = removeMenu
+                        removeItem.isEnabled = !removeMenu.items.isEmpty
+                        menu.addItem(removeItem)
                     }
+
                 }
 
                 if allCandidates, store.selectedTopicId != nil {
@@ -1480,22 +1555,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             refreshVisibleItems()
         }
 
-        private func handleFavoritePlaylistShortcut(index: Int) {
-            guard let store, !renderedSelectedVideoIds.isEmpty else { return }
-            let favorites = Array(store.knownPlaylists().prefix(9))
-            guard favorites.indices.contains(index) else {
-                NSSound.beep()
-                return
-            }
-            let playlist = favorites[index]
-            if let topicId = store.selectedTopicId,
-               renderedSelectedVideoIds.allSatisfy(isCandidateVideo) {
-                store.saveCandidatesToPlaylist(topicId: topicId, videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
-            } else {
-                store.saveVideosToPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
-            }
-        }
-
         @objc private func contextSaveToPlaylist(_ sender: NSMenuItem) {
             guard let store,
                   let playlist = sender.representedObject as? PlaylistRecord else { return }
@@ -1522,12 +1581,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             guard let store,
                   let playlist = sender.representedObject as? PlaylistRecord else { return }
             store.removeVideosFromPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
-        }
-
-        @objc private func contextShowInPlaylist(_ sender: NSMenuItem) {
-            guard let store,
-                  let playlist = sender.representedObject as? PlaylistRecord else { return }
-            store.applyPlaylistFilter(playlist)
         }
 
         @objc private func contextNotInterested(_ sender: Any?) {
@@ -1614,6 +1667,14 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             return menu
         }
 
+        private func removablePlaylists(for selectedVideoIds: [String]) -> [PlaylistRecord] {
+            guard let store else { return [] }
+            let removablePlaylistIds = Set(
+                selectedVideoIds.flatMap { store.playlistsForVideo($0).map(\.playlistId) }
+            )
+            return store.knownPlaylists().filter { removablePlaylistIds.contains($0.playlistId) }
+        }
+
         private func installActionObserversIfNeeded() {
             guard actionObservers.isEmpty else { return }
             let center = NotificationCenter.default
@@ -1638,10 +1699,6 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 },
                 center.addObserver(forName: AppCommandBridge.clearSelection, object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor in self?.handleClearSelectionShortcut() }
-                },
-                center.addObserver(forName: AppCommandBridge.saveToFavoritePlaylist, object: nil, queue: .main) { [weak self] note in
-                    let index = note.userInfo?["index"] as? Int ?? -1
-                    Task { @MainActor in self?.handleFavoritePlaylistShortcut(index: index) }
                 }
             ]
         }

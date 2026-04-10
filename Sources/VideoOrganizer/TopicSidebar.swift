@@ -10,6 +10,8 @@ struct TopicSidebar: View {
     @State private var selectedCreatorSectionId: String?
     @State private var renamingTopicId: Int64?
     @State private var renameText: String = ""
+    @State private var searchBarHeight: CGFloat = 0
+    @State private var sidebarPullDistance: CGFloat = 0
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
     @FocusState private var renameFocused: Bool
@@ -49,10 +51,28 @@ struct TopicSidebar: View {
         expandedTopicId == topic.id || store.viewportTopicId == topic.id
     }
 
+    private var searchRevealThreshold: CGFloat {
+        max(searchBarHeight * 0.7, 28)
+    }
+
+    private var showsSearchField: Bool {
+        searchFocused || !store.searchText.isEmpty || sidebarPullDistance > searchRevealThreshold
+    }
+
+    private var collapsedSearchOffset: CGFloat {
+        showsSearchField ? 0 : -(searchBarHeight + 12)
+    }
+
     var body: some View {
         ScrollViewReader { scrollProxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(key: SidebarPullDistancePreferenceKey.self, value: max(0, proxy.frame(in: .named("sidebarScroll")).minY))
+                    }
+                    .frame(height: 0)
+
                     VStack(spacing: 4) {
                         HStack(spacing: 0) {
                             Image(systemName: "magnifyingglass")
@@ -81,6 +101,17 @@ struct TopicSidebar: View {
                                 .help("Clear search")
                             }
                         }
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear
+                                    .onAppear {
+                                        searchBarHeight = proxy.size.height
+                                    }
+                                    .onChange(of: proxy.size.height) { _, newValue in
+                                        searchBarHeight = newValue
+                                    }
+                            }
+                        )
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(Capsule().fill(Color(nsColor: .controlBackgroundColor)))
@@ -94,6 +125,8 @@ struct TopicSidebar: View {
                         }
                     }
                     .id("search-field")
+                    .offset(y: collapsedSearchOffset)
+                    .padding(.bottom, collapsedSearchOffset)
 
                     HStack(spacing: 6) {
                         if store.watchRefreshTotalTopics > 0 {
@@ -235,8 +268,10 @@ struct TopicSidebar: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
             }
+            .coordinateSpace(name: "sidebarScroll")
             .focusable()
             .focused($listFocused)
+            .onPreferenceChange(SidebarPullDistancePreferenceKey.self) { sidebarPullDistance = $0 }
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     scrollProxy.scrollTo(filteredTopics.first?.id, anchor: .top)
@@ -304,23 +339,6 @@ struct TopicSidebar: View {
             }
             .navigationTitle("")
             .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Button {
-                        withAnimation {
-                            scrollProxy.scrollTo("search-field", anchor: .top)
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            searchFocused = true
-                        }
-                        displaySettings.toast.show("Search", icon: "magnifyingglass")
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                    .help("Show search field")
-                    .accessibilityIdentifier("showSearch")
-                    .accessibilityLabel("Show search field")
-                }
-
                 ToolbarItem(placement: .automatic) {
                     Button {
                         showingSettings.toggle()
@@ -524,6 +542,14 @@ struct TopicSidebar: View {
             }
             return false
         }.count
+    }
+}
+
+private struct SidebarPullDistancePreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

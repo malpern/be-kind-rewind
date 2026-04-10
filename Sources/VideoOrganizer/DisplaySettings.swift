@@ -69,6 +69,7 @@ final class DisplaySettings {
     var sortAscending: Bool = false
     var toast = ActionToastState()
     var searchRequested = false
+    var showQuickNavigator = false
     var focusSidebarRequested = false
     var focusGridRequested = false
     var scrollToTopicRequested: Int64?

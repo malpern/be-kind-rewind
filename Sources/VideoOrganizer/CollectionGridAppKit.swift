@@ -407,7 +407,6 @@ final class ClickableCollectionView: NSCollectionView {
     var onNotInterestedShortcut: (() -> Void)?
     var onOpenSelectedShortcut: (() -> Void)?
     var onClearSelectionShortcut: (() -> Void)?
-    var onFavoritePlaylistShortcut: ((Int) -> Void)?
 
     private let marqueeLayer = CAShapeLayer()
     private var marqueeStartPoint: NSPoint?
@@ -458,7 +457,7 @@ final class ClickableCollectionView: NSCollectionView {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
         if modifiers.isEmpty,
-           key == "w" {
+           key == "l" {
             onSaveToWatchLaterShortcut?()
             return
         }
@@ -490,13 +489,6 @@ final class ClickableCollectionView: NSCollectionView {
         if modifiers.isEmpty,
            event.keyCode == 53 {
             onClearSelectionShortcut?()
-            return
-        }
-        if modifiers.isEmpty,
-           let key,
-           let digit = Int(key),
-           (1...9).contains(digit) {
-            onFavoritePlaylistShortcut?(digit - 1)
             return
         }
         super.keyDown(with: event)

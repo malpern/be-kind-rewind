@@ -15,6 +15,15 @@ enum TopicDisplayMode: String, CaseIterable, Sendable {
             return "Watch"
         }
     }
+
+    var symbolName: String {
+        switch self {
+        case .saved:
+            return "square.stack"
+        case .watchCandidates:
+            return "sparkles.tv"
+        }
+    }
 }
 
 enum WatchPresentationMode: String, CaseIterable, Sendable {
@@ -27,6 +36,15 @@ enum WatchPresentationMode: String, CaseIterable, Sendable {
             return "By Topic"
         case .allTogether:
             return "Show All"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .byTopic:
+            return "square.grid.3x3.topleft.filled"
+        case .allTogether:
+            return "rectangle.stack"
         }
     }
 }
@@ -65,6 +83,63 @@ struct TypeaheadSuggestion: Identifiable {
             return "\(text) — \(parent)"
         }
         return text
+    }
+}
+
+struct QuickNavigatorItem: Identifiable, Hashable {
+    enum Kind: String, Hashable {
+        case topic
+        case subtopic
+        case playlist
+    }
+
+    let kind: Kind
+    let title: String
+    let subtitle: String?
+    let countText: String?
+    let topicId: Int64?
+    let parentTopicId: Int64?
+    let playlist: PlaylistRecord?
+
+    var id: String {
+        switch kind {
+        case .topic:
+            return "topic:\(topicId ?? -1)"
+        case .subtopic:
+            return "subtopic:\(topicId ?? -1)"
+        case .playlist:
+            return "playlist:\(playlist?.playlistId ?? title)"
+        }
+    }
+
+    var iconName: String {
+        switch kind {
+        case .topic:
+            return TopicTheme.iconName(for: title)
+        case .subtopic:
+            return "arrow.turn.down.right"
+        case .playlist:
+            return "music.note.list"
+        }
+    }
+
+    var sectionTitle: String {
+        switch kind {
+        case .topic:
+            return "Topics"
+        case .subtopic:
+            return "Subtopics"
+        case .playlist:
+            return "Playlists"
+        }
+    }
+
+    static func == (lhs: QuickNavigatorItem, rhs: QuickNavigatorItem) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }
 

@@ -38,6 +38,15 @@ struct VideoOrganizerApp: App {
             .task {
                 await initializeStore()
             }
+            .sheet(isPresented: $displaySettings.showQuickNavigator) {
+                if let store {
+                    QuickNavigatorView(
+                        store: store,
+                        displaySettings: displaySettings,
+                        isPresented: $displaySettings.showQuickNavigator
+                    )
+                }
+            }
             .sheet(isPresented: $showCredentialOnboarding) {
                 FirstRunCredentialOnboardingView {
                     hasSeenCredentialOnboarding = true
@@ -245,120 +254,125 @@ private struct AppMenuCommands: Commands {
         }
 
         CommandGroup(after: .appSettings) {
-            Button("Save to Watch Later") {
-                AppCommandBridge.post(AppCommandBridge.saveToWatchLater)
+            Button("Open Quickly…") {
+                displaySettings.showQuickNavigator = true
             }
-            .keyboardShortcut("w", modifiers: [])
-
-            Button("Save to Playlist…") {
-                AppCommandBridge.post(AppCommandBridge.saveToPlaylist)
-            }
-            .keyboardShortcut("p", modifiers: [])
-
-            Button("Move to Playlist…") {
-                AppCommandBridge.post(AppCommandBridge.moveToPlaylist)
-            }
-            .keyboardShortcut("p", modifiers: [.shift])
-
-            Button("Dismiss") {
-                AppCommandBridge.post(AppCommandBridge.dismissCandidates)
-            }
-            .keyboardShortcut("d", modifiers: [])
-
-            Button("Not Interested") {
-                AppCommandBridge.post(AppCommandBridge.notInterested)
-            }
-            .keyboardShortcut("n", modifiers: [])
-
-            Divider()
-
-            Button("Open on YouTube") {
-                AppCommandBridge.post(AppCommandBridge.openOnYouTube)
-            }
-            .keyboardShortcut(.return, modifiers: [])
-
-            Button("Clear Selection") {
-                AppCommandBridge.post(AppCommandBridge.clearSelection)
-            }
-            .keyboardShortcut(.escape, modifiers: [])
-        }
-
-        CommandMenu("Favorites") {
-            if let store {
-                ForEach(Array(store.knownPlaylists().prefix(9).enumerated()), id: \.element.id) { index, playlist in
-                    Button("\(index + 1). \(playlist.title)") {
-                        AppCommandBridge.post(AppCommandBridge.saveToFavoritePlaylist, userInfo: ["index": index])
-                    }
-                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [])
-                }
-            } else {
-                Button("No Favorite Playlists Available") {}
-                    .disabled(true)
-            }
+            .keyboardShortcut("k", modifiers: .command)
+            .disabled(store == nil)
         }
 
         CommandMenu("View") {
-            Button("Toggle Inspector") {
+            Picker("Page Mode", selection: Binding(
+                get: { store?.pageDisplayMode ?? .saved },
+                set: { newMode in
+                    Task { @MainActor in
+                        await store?.activatePageDisplayMode(newMode)
+                    }
+                }
+            )) {
+                ForEach(TopicDisplayMode.allCases, id: \.self) { mode in
+                    Label(mode.label, systemImage: mode.symbolName)
+                        .tag(mode)
+                }
+            }
+
+            if store?.pageDisplayMode == .watchCandidates {
+                Picker("Watch Layout", selection: Binding(
+                    get: { store?.watchPresentationMode ?? .byTopic },
+                    set: { store?.setWatchPresentationMode($0) }
+                )) {
+                    ForEach(WatchPresentationMode.allCases, id: \.self) { mode in
+                        Label(mode.label, systemImage: mode.symbolName)
+                            .tag(mode)
+                    }
+                }
+            }
+
+            Divider()
+
+            Button {
                 displaySettings.showInspector.toggle()
+            } label: {
+                Label("Toggle Inspector", systemImage: "sidebar.trailing")
             }
             .keyboardShortcut("i", modifiers: .command)
 
             Divider()
 
-            Button("Focus Topics") {
+            Button {
                 displaySettings.focusSidebarRequested = true
+            } label: {
+                Label("Focus Topics", systemImage: "sidebar.leading")
             }
             .keyboardShortcut("[", modifiers: .command)
 
-            Button("Focus Videos") {
+            Button {
                 displaySettings.focusGridRequested = true
+            } label: {
+                Label("Focus Videos", systemImage: "square.grid.3x3")
             }
             .keyboardShortcut("]", modifiers: .command)
 
             Divider()
 
-            Button("Sort by Views") {
+            Button {
                 toggleSort(.views)
+            } label: {
+                Label("Sort by Views", systemImage: SortOrder.views.sfSymbol)
             }
             .keyboardShortcut("1", modifiers: .command)
 
-            Button("Sort by Date") {
+            Button {
                 toggleSort(.date)
+            } label: {
+                Label("Sort by Date", systemImage: SortOrder.date.sfSymbol)
             }
             .keyboardShortcut("2", modifiers: .command)
 
-            Button("Sort by Length") {
+            Button {
                 toggleSort(.duration)
+            } label: {
+                Label("Sort by Length", systemImage: SortOrder.duration.sfSymbol)
             }
             .keyboardShortcut("3", modifiers: .command)
 
-            Button("Sort by Creator") {
+            Button {
                 toggleSort(.creator)
+            } label: {
+                Label("Sort by Creator", systemImage: SortOrder.creator.sfSymbol)
             }
             .keyboardShortcut("4", modifiers: .command)
 
-            Button("Sort A-Z") {
+            Button {
                 toggleSort(.alphabetical)
+            } label: {
+                Label("Sort A-Z", systemImage: SortOrder.alphabetical.sfSymbol)
             }
             .keyboardShortcut("5", modifiers: .command)
 
-            Button("Shuffle") {
+            Button {
                 toggleSort(.shuffle)
+            } label: {
+                Label("Shuffle", systemImage: SortOrder.shuffle.sfSymbol)
             }
             .keyboardShortcut("6", modifiers: .command)
 
             Divider()
 
-            Button("Clear Sort") {
+            Button {
                 displaySettings.sortOrder = nil
+            } label: {
+                Label("Clear Sort", systemImage: "line.3.horizontal.decrease.circle")
             }
             .keyboardShortcut("0", modifiers: .command)
             .disabled(displaySettings.sortOrder == nil)
 
             Divider()
 
-            Button("Compressed Layout") {
+            Button {
                 displaySettings.showMetadata.toggle()
+            } label: {
+                Label("Compressed Layout", systemImage: "rectangle.compress.vertical")
             }
             .keyboardShortcut("l", modifiers: [.command, .shift])
         }
@@ -367,7 +381,7 @@ private struct AppMenuCommands: Commands {
             Button("Save to Watch Later") {
                 AppCommandBridge.post(AppCommandBridge.saveToWatchLater)
             }
-            .keyboardShortcut("w", modifiers: [])
+            .keyboardShortcut("l", modifiers: [])
 
             Button("Save to Playlist…") {
                 AppCommandBridge.post(AppCommandBridge.saveToPlaylist)

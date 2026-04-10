@@ -31,14 +31,14 @@ struct OrganizerView: View {
                     }
 
                     ToolbarItemGroup(placement: .automatic) {
-                        sortButtons
+                        sortMenu
                     }
 
                     ToolbarItemGroup(placement: .automatic) {
                         statusIndicators
                     }
 
-                    ToolbarItem(placement: .primaryAction) {
+                    ToolbarItemGroup(placement: .primaryAction) {
                         Button {
                             displaySettings.showInspector.toggle()
                             displaySettings.toast.show(
@@ -114,49 +114,54 @@ struct OrganizerView: View {
     }
 
     @ViewBuilder
-    private var sortButtons: some View {
-        if store.pageDisplayMode == .watchCandidates {
-            Picker("Watch Layout", selection: Binding(
-                get: { store.watchPresentationMode },
-                set: { store.setWatchPresentationMode($0) }
-            )) {
-                ForEach(WatchPresentationMode.allCases, id: \.self) { mode in
-                    Text(mode.label).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 180)
-            .help("Choose how Watch videos are shown")
-        }
-
-        ForEach(SortOrder.allCases, id: \.self) { order in
-            Button {
-                if store.selectedChannelId != nil {
-                    store.clearChannelFilter()
-                    displaySettings.toast.show("Creator Filter Cleared", icon: "person.crop.circle.badge.xmark")
-                }
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    if displaySettings.sortOrder == order {
-                        if order == .shuffle {
-                            displaySettings.sortAscending.toggle()
-                        } else {
-                            displaySettings.sortOrder = nil
+    private var sortMenu: some View {
+        Menu {
+            if store.pageDisplayMode == .watchCandidates {
+                Section("Watch Layout") {
+                    ForEach(WatchPresentationMode.allCases, id: \.self) { mode in
+                        Button {
+                            store.setWatchPresentationMode(mode)
+                        } label: {
+                            if store.watchPresentationMode == mode {
+                                Label(mode.label, systemImage: "checkmark")
+                            } else {
+                                Text(mode.label)
+                            }
                         }
-                    } else {
-                        displaySettings.sortOrder = order
-                        displaySettings.sortAscending = false
                     }
                 }
-                displaySettings.toast.show(order.helpText, icon: order.sfSymbol)
-            } label: {
-                Label(order.label, systemImage: order.sfSymbol)
+
+                Divider()
             }
-            .foregroundStyle(displaySettings.sortOrder == order ? Color.accentColor : .secondary)
-            .help(order.helpText)
-            .accessibilityIdentifier("sort\(order.label)")
-            .accessibilityLabel(order.accessibilityLabel)
-            .accessibilityValue(displaySettings.sortOrder == order ? "Active" : "Inactive")
+
+            Section("Sort") {
+                ForEach(SortOrder.allCases, id: \.self) { order in
+                    Button {
+                        toggleSort(order)
+                    } label: {
+                        if displaySettings.sortOrder == order {
+                            Label(order.label, systemImage: "checkmark")
+                        } else {
+                            Label(order.label, systemImage: order.sfSymbol)
+                        }
+                    }
+                    .accessibilityIdentifier("sort\(order.label)")
+                    .accessibilityLabel(order.accessibilityLabel)
+                    .accessibilityValue(displaySettings.sortOrder == order ? "Active" : "Inactive")
+                }
+
+                Button {
+                    displaySettings.sortOrder = nil
+                } label: {
+                    Label("Clear Sort", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .disabled(displaySettings.sortOrder == nil)
+            }
+        } label: {
+            Label(sortMenuLabel, systemImage: sortMenuSymbol)
         }
+        .help(sortMenuHelpText)
+        .accessibilityIdentifier("sortMenu")
     }
 
     @ViewBuilder
@@ -254,6 +259,41 @@ struct OrganizerView: View {
         guard !videoIds.isEmpty else { return }
         await thumbnailCache.prefetch(videoIds: videoIds)
     }
+
+    private var sortMenuLabel: String {
+        displaySettings.sortOrder?.label ?? "Sort"
+    }
+
+    private var sortMenuSymbol: String {
+        displaySettings.sortOrder?.sfSymbol ?? "line.3.horizontal.decrease.circle"
+    }
+
+    private var sortMenuHelpText: String {
+        if store.pageDisplayMode == .watchCandidates {
+            return "Sort videos or choose the Watch layout"
+        }
+        return "Sort videos"
+    }
+
+    private func toggleSort(_ order: SortOrder) {
+        if store.selectedChannelId != nil {
+            store.clearChannelFilter()
+            displaySettings.toast.show("Creator Filter Cleared", icon: "person.crop.circle.badge.xmark")
+        }
+        withAnimation(.easeInOut(duration: 0.3)) {
+            if displaySettings.sortOrder == order {
+                if order == .shuffle {
+                    displaySettings.sortAscending.toggle()
+                } else {
+                    displaySettings.sortOrder = nil
+                }
+            } else {
+                displaySettings.sortOrder = order
+                displaySettings.sortAscending = false
+            }
+        }
+        displaySettings.toast.show(order.helpText, icon: order.sfSymbol)
+    }
 }
 
 private struct TopicScrollProgressBar: View {
@@ -277,5 +317,3 @@ private struct TopicScrollProgressBar: View {
         .accessibilityValue("\(Int((min(max(progress, 0), 1) * 100).rounded())) percent")
     }
 }
-
-
