@@ -277,6 +277,10 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         container.scheduleFlushIfReady()
     }
 
+    static func dismantleNSView(_ nsView: CollectionGridContainerView, coordinator: Coordinator) {
+        coordinator.teardown()
+    }
+
     // MARK: - Coordinator
 
     @MainActor
@@ -327,6 +331,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
         func attach(to container: CollectionGridContainerView) {
             guard self.container !== container else { return }
+            detachFromContainer()
             self.container = container
             self.collectionView = container.collectionView
             container.collectionView.dataSource = self
@@ -368,6 +373,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 self?.scheduleScrollFeedbackUpdate()
             }
             installActionObserversIfNeeded()
+        }
+
+        func teardown() {
+            removeActionObservers()
+            detachFromContainer()
         }
 
         func applySnapshot(
@@ -1729,6 +1739,22 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     Task { @MainActor in self?.handleClearSelectionShortcut() }
                 }
             ]
+        }
+
+        private func removeActionObservers() {
+            guard !actionObservers.isEmpty else { return }
+            let center = NotificationCenter.default
+            actionObservers.forEach(center.removeObserver)
+            actionObservers.removeAll()
+        }
+
+        private func detachFromContainer() {
+            collectionView?.dataSource = nil
+            collectionView?.delegate = nil
+            container?.onReadyForFlush = nil
+            container?.onBoundsChanged = nil
+            container = nil
+            collectionView = nil
         }
     }
 }

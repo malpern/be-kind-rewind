@@ -152,11 +152,17 @@ public struct YouTubeOAuthTokenStore: Sendable {
         let status = SecItemCopyMatching(baseQuery as CFDictionary, nil)
         if status == errSecSuccess {
             let attrs: [String: Any] = [kSecValueData as String: data]
-            SecItemUpdate(baseQuery as CFDictionary, attrs as CFDictionary)
+            try Self.checkKeychainStatus(
+                SecItemUpdate(baseQuery as CFDictionary, attrs as CFDictionary),
+                operation: "update OAuth tokens"
+            )
         } else {
             var query = baseQuery
             query[kSecValueData as String] = data
-            SecItemAdd(query as CFDictionary, nil)
+            try Self.checkKeychainStatus(
+                SecItemAdd(query as CFDictionary, nil),
+                operation: "save OAuth tokens"
+            )
         }
     }
 
@@ -167,6 +173,17 @@ public struct YouTubeOAuthTokenStore: Sendable {
             kSecAttrAccount as String: Self.account
         ]
         SecItemDelete(query as CFDictionary)
+    }
+
+    static func checkKeychainStatus(_ status: OSStatus, operation: String) throws {
+        guard status == errSecSuccess else {
+            let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            throw NSError(
+                domain: "YouTubeOAuthTokenStore",
+                code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: "Could not \(operation): \(message)"]
+            )
+        }
     }
 }
 
