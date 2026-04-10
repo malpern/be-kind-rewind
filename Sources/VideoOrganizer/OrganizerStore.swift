@@ -83,9 +83,17 @@ final class OrganizerStore {
     var parsedQuery: SearchQuery { SearchQuery(searchText) }
     var searchResultCount: Int = 0
 
-    // Page-level center-pane mode
-    var pageDisplayMode: TopicDisplayMode = .saved
-    var watchPresentationMode: WatchPresentationMode = .byTopic
+    // Page-level center-pane mode (persisted across launches)
+    var pageDisplayMode: TopicDisplayMode = {
+        TopicDisplayMode(rawValue: UserDefaults.standard.string(forKey: "pageDisplayMode") ?? "") ?? .saved
+    }() {
+        didSet { UserDefaults.standard.set(pageDisplayMode.rawValue, forKey: "pageDisplayMode") }
+    }
+    var watchPresentationMode: WatchPresentationMode = {
+        WatchPresentationMode(rawValue: UserDefaults.standard.string(forKey: "watchPresentationMode") ?? "") ?? .byTopic
+    }() {
+        didSet { UserDefaults.standard.set(watchPresentationMode.rawValue, forKey: "watchPresentationMode") }
+    }
     var candidateErrors: [Int64: String] = [:]
     var candidateLoadingTopics: Set<Int64> = []
     var candidateProgressByTopic: [Int64: Double] = [:]
