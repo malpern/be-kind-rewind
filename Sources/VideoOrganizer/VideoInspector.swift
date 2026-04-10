@@ -17,7 +17,22 @@ struct VideoInspector: View {
     var body: some View {
         Group {
             if let creatorName = store.inspectedCreatorName {
-                creatorInspectorContent(store.creatorDetail(channelName: creatorName))
+                // Phase 1 retirement of the legacy in-inspector creator panel: when a
+                // creator gets "inspected" by the existing navigateToCreator flow, we
+                // resolve its channelId and forward to the new full creator detail page
+                // instead of rendering the cramped inspector panel. The legacy
+                // creatorInspectorContent renderer remains as a fallback for the rare
+                // case where no channelId can be resolved (very old saved videos).
+                let detail = store.creatorDetail(channelName: creatorName)
+                if let channelId = detail.channelId {
+                    Color.clear
+                        .onAppear {
+                            store.inspectedCreatorName = nil
+                            store.openCreatorDetail(channelId: channelId)
+                        }
+                } else {
+                    creatorInspectorContent(detail)
+                }
             } else if let inspectedItem {
                 inspectorContent(inspectedItem)
             } else {

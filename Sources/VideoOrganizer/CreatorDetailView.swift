@@ -39,9 +39,87 @@ struct CreatorDetailView: View {
         .background(.background)
         .navigationTitle(page.channelName)
         .navigationSubtitle(page.subtitle ?? "")
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                pinButton
+                filterButton
+                excludeButton
+                openInYouTubeButton
+            }
+        }
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
         }
+        .onChange(of: store.favoriteCreators.map(\.channelId)) { _, _ in
+            // Reflect Pin/Unpin and Exclude/Restore actions immediately in the page model.
+            page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+        }
+        .onChange(of: store.excludedCreators.map(\.channelId)) { _, _ in
+            page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+        }
+    }
+
+    // MARK: - Toolbar buttons
+
+    @ViewBuilder
+    private var pinButton: some View {
+        Button {
+            store.toggleFavoriteCreator(
+                channelId: channelId,
+                channelName: page.channelName,
+                iconUrl: page.avatarUrl?.absoluteString
+            )
+        } label: {
+            Label(page.isFavorite ? "Unpin" : "Pin", systemImage: page.isFavorite ? "pin.fill" : "pin")
+        }
+        .help(page.isFavorite ? "Remove from favorite creators" : "Pin as favorite creator")
+        .accessibilityIdentifier("creatorPinButton")
+    }
+
+    @ViewBuilder
+    private var filterButton: some View {
+        Button {
+            // Pop back to the topic grid and apply this creator as a channel filter.
+            // Use the existing navigateToCreator helper which finds a topic the creator
+            // appears in and selects it before applying the filter.
+            store.popToRootDetail()
+            _ = store.navigateToCreator(channelId: channelId, channelName: page.channelName)
+        } label: {
+            Label("Filter saved", systemImage: "line.3.horizontal.decrease.circle")
+        }
+        .help("Filter the topic grid to this creator's saved videos")
+        .accessibilityIdentifier("creatorFilterButton")
+    }
+
+    @ViewBuilder
+    private var excludeButton: some View {
+        Button {
+            if page.isExcluded {
+                store.restoreExcludedCreator(channelId: channelId)
+            } else {
+                store.excludeCreatorFromWatch(
+                    channelId: channelId,
+                    channelName: page.channelName,
+                    channelIconUrl: page.avatarUrl?.absoluteString
+                )
+            }
+        } label: {
+            Label(
+                page.isExcluded ? "Restore" : "Exclude",
+                systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
+            )
+        }
+        .help(page.isExcluded ? "Restore this creator to Watch discovery" : "Hide this creator from Watch discovery")
+        .accessibilityIdentifier("creatorExcludeButton")
+    }
+
+    @ViewBuilder
+    private var openInYouTubeButton: some View {
+        Link(destination: page.youtubeURL) {
+            Label("YouTube", systemImage: "arrow.up.right.square")
+        }
+        .help("Open this channel on YouTube")
+        .accessibilityIdentifier("creatorYouTubeButton")
     }
 
     // MARK: - Identity card
