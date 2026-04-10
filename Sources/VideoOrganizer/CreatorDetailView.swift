@@ -14,6 +14,10 @@ struct CreatorDetailView: View {
     let channelId: String
 
     @State private var page: CreatorPageViewModel = .placeholderEmpty
+    @State private var allVideosSort: [KeyPathComparator<CreatorVideoCard>] = [
+        KeyPathComparator(\CreatorVideoCard.ageDays, order: .forward)
+    ]
+    @State private var allVideosSelection: CreatorVideoCard.ID?
 
     var body: some View {
         ScrollView {
@@ -21,6 +25,7 @@ struct CreatorDetailView: View {
                 identityCard
                 whatsNewSection
                 essentialsSection
+                allVideosSection
             }
             .padding(.horizontal, 24)
             .padding(.top, 16)
@@ -346,5 +351,131 @@ struct CreatorDetailView: View {
             return String(format: "%.0fK", Double(value) / 1_000)
         }
         return "\(value)"
+    }
+
+    // MARK: - All videos
+
+    @ViewBuilder
+    private var allVideosSection: some View {
+        if !page.allVideos.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("All videos")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
+                    Text("\(page.allVideos.count) total")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Table(sortedAllVideos, selection: $allVideosSelection, sortOrder: $allVideosSort) {
+                    TableColumn("Title", value: \.title) { card in
+                        HStack(spacing: 8) {
+                            tableThumbnail(for: card)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(card.title)
+                                        .font(.body)
+                                        .lineLimit(1)
+                                    if card.isOutlier {
+                                        Image(systemName: "arrow.up")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(.tint)
+                                            .help(outlierTooltip(card))
+                                            .accessibilityLabel("Outlier")
+                                    }
+                                }
+                                if let topic = card.topicName {
+                                    Text(topic)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .width(min: 240, ideal: 360)
+
+                    TableColumn("Views", value: \.viewCountParsed) { card in
+                        Text(card.viewCountParsed > 0 ? card.viewCountFormatted : "—")
+                            .font(.body.monospacedDigit())
+                            .foregroundStyle(card.viewCountParsed > 0 ? .primary : .secondary)
+                    }
+                    .width(min: 70, ideal: 90, max: 120)
+
+                    TableColumn("Runtime") { card in
+                        Text(card.runtimeFormatted ?? "—")
+                            .font(.body.monospacedDigit())
+                            .foregroundStyle(card.runtimeFormatted != nil ? .primary : .secondary)
+                    }
+                    .width(min: 60, ideal: 70, max: 100)
+
+                    TableColumn("Age", value: \.ageDaysSortKey) { card in
+                        Text(card.ageFormatted ?? "—")
+                            .font(.body)
+                            .foregroundStyle(card.ageFormatted != nil ? .primary : .secondary)
+                    }
+                    .width(min: 80, ideal: 100, max: 140)
+
+                    TableColumn("Saved") { card in
+                        if card.isSaved {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.tint)
+                                .accessibilityLabel("Saved in your library")
+                        } else {
+                            Text("")
+                        }
+                    }
+                    .width(min: 40, ideal: 50, max: 70)
+                }
+                .frame(minHeight: 240, idealHeight: 380, maxHeight: 520)
+                .tableStyle(.inset(alternatesRowBackgrounds: true))
+
+                Text("↑ marks videos punching above this creator's median view count")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var sortedAllVideos: [CreatorVideoCard] {
+        page.allVideos.sorted(using: allVideosSort)
+    }
+
+    @ViewBuilder
+    private func tableThumbnail(for card: CreatorVideoCard) -> some View {
+        Group {
+            if let url = card.thumbnailUrl {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    default:
+                        Color.clear
+                    }
+                }
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 56, height: 32)
+        .background(.quaternary)
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
+
+    private func outlierTooltip(_ card: CreatorVideoCard) -> String {
+        guard page.channelMedianViews > 0 else { return "Outlier" }
+        let multiplier = String(format: "%.1f×", card.outlierScore)
+        return "\(multiplier) channel median (\(formatCompact(page.channelMedianViews)) views)"
+    }
+}
+
+// MARK: - Sort key helpers
+
+private extension CreatorVideoCard {
+    /// `Table` sort needs a non-optional, totally ordered key. Use a large sentinel for
+    /// unknown ages so they sort last regardless of direction (consistent with the rest
+    /// of the app's "—" treatment).
+    var ageDaysSortKey: Int {
+        ageDays ?? Int.max
     }
 }
