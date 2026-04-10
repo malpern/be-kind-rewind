@@ -209,6 +209,7 @@ private struct FirstRunCredentialOnboardingView: View {
 
                 Button("Open Settings") {
                     complete()
+                    AppLogger.app.info("Opening settings from credential onboarding")
                     openSettings()
                     dismiss()
                 }
@@ -249,12 +250,14 @@ private struct AppMenuCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
             Button("About Be Kind, Rewind") {
+                AppLogger.app.info("Opening About window")
                 openWindow(id: "about")
             }
         }
 
         CommandGroup(after: .textEditing) {
             Button("Find...") {
+                AppLogger.commands.info("Requesting sidebar search focus")
                 displaySettings.searchRequested = true
             }
             .keyboardShortcut("f", modifiers: .command)
@@ -262,6 +265,7 @@ private struct AppMenuCommands: Commands {
 
         CommandGroup(after: .appSettings) {
             Button("Open Quickly…") {
+                AppLogger.commands.info("Opening quick navigator")
                 displaySettings.showQuickNavigator = true
             }
             .keyboardShortcut("k", modifiers: .command)
@@ -299,6 +303,7 @@ private struct AppMenuCommands: Commands {
 
             Button {
                 displaySettings.showInspector.toggle()
+                AppLogger.commands.info("Toggled inspector from menu: \(displaySettings.showInspector, privacy: .public)")
             } label: {
                 Label("Toggle Inspector", systemImage: "sidebar.trailing")
             }
@@ -307,6 +312,7 @@ private struct AppMenuCommands: Commands {
             Divider()
 
             Button {
+                AppLogger.commands.info("Requesting sidebar focus")
                 displaySettings.focusSidebarRequested = true
             } label: {
                 Label("Focus Topics", systemImage: "sidebar.leading")
@@ -314,6 +320,7 @@ private struct AppMenuCommands: Commands {
             .keyboardShortcut("[", modifiers: .command)
 
             Button {
+                AppLogger.commands.info("Requesting grid focus")
                 displaySettings.focusGridRequested = true
             } label: {
                 Label("Focus Videos", systemImage: "square.grid.3x3")

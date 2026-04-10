@@ -325,11 +325,13 @@ struct TopicSidebar: View {
             .onChange(of: displaySettings.focusSidebarRequested) { _, requested in
                 guard requested else { return }
                 displaySettings.focusSidebarRequested = false
+                AppLogger.commands.info("Focusing topic sidebar")
                 listFocused = true
             }
             .onChange(of: displaySettings.searchRequested) { _, requested in
                 guard requested else { return }
                 displaySettings.searchRequested = false
+                AppLogger.commands.info("Revealing sidebar search field")
                 withAnimation {
                     scrollProxy.scrollTo("search-field", anchor: .top)
                 }
@@ -342,6 +344,7 @@ struct TopicSidebar: View {
                 ToolbarItem(placement: .automatic) {
                     Button {
                         showingSettings.toggle()
+                        AppLogger.app.info("Toggled view options popover: \(showingSettings, privacy: .public)")
                         displaySettings.toast.show("View Options", icon: "gearshape")
                     } label: {
                         Image(systemName: "gearshape")
@@ -352,6 +355,7 @@ struct TopicSidebar: View {
                     .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
                         DisplayPopover(displaySettings: displaySettings, openSettings: {
                             showingSettings = false
+                            AppLogger.app.info("Opening settings from sidebar view options")
                             openSettings()
                         })
                     }

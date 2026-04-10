@@ -1509,41 +1509,69 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func handleSaveToWatchLaterShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else { return }
+            guard !renderedSelectedVideoIds.isEmpty else {
+                AppLogger.commands.debug("Ignored saveToWatchLater command: no selected videos")
+                return
+            }
+            AppLogger.commands.info("Handling saveToWatchLater for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
             contextSaveToWatchLater(nil)
         }
 
         private func handleSaveToPlaylistShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else { return }
+            guard !renderedSelectedVideoIds.isEmpty else {
+                AppLogger.commands.debug("Ignored saveToPlaylist command: no selected videos")
+                return
+            }
+            AppLogger.commands.info("Handling saveToPlaylist for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
             showPlaylistPopup(mode: .save)
         }
 
         private func handleMoveToPlaylistShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else { return }
+            guard !renderedSelectedVideoIds.isEmpty else {
+                AppLogger.commands.debug("Ignored moveToPlaylist command: no selected videos")
+                return
+            }
+            AppLogger.commands.info("Handling moveToPlaylist for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
             showPlaylistPopup(mode: .move)
         }
 
         private func handleDismissShortcut() {
             guard let store, store.selectedTopicId != nil,
                   !renderedSelectedVideoIds.isEmpty,
-                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else { return }
+                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else {
+                AppLogger.commands.debug("Ignored dismissCandidates command: selection not eligible")
+                return
+            }
+            AppLogger.commands.info("Handling dismissCandidates for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
             contextDismissCandidates(nil)
         }
 
         private func handleNotInterestedShortcut() {
             guard let store, store.selectedTopicId != nil,
                   !renderedSelectedVideoIds.isEmpty,
-                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else { return }
+                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else {
+                AppLogger.commands.debug("Ignored notInterested command: selection not eligible")
+                return
+            }
+            AppLogger.commands.info("Handling notInterested for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
             contextNotInterested(nil)
         }
 
         private func handleOpenSelectedShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else { return }
+            guard !renderedSelectedVideoIds.isEmpty else {
+                AppLogger.commands.debug("Ignored openOnYouTube command: no selected videos")
+                return
+            }
+            AppLogger.commands.info("Handling openOnYouTube for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
             contextOpenOnYouTube(nil)
         }
 
         private func handleClearSelectionShortcut() {
-            guard let collectionView else { return }
+            guard let collectionView else {
+                AppLogger.commands.debug("Ignored clearSelection command: collection view unavailable")
+                return
+            }
+            AppLogger.commands.info("Handling clearSelection for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
             pendingSelectedVideoId = nil
             pendingSelectedVideoIds = []
             renderedSelectedVideoId = nil

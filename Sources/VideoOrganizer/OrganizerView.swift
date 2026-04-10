@@ -86,6 +86,12 @@ struct OrganizerView: View {
             ActionToast(state: displaySettings.toast)
                 .padding(.top, 4)
         }
+        .onAppear {
+            AppLogger.app.info("Main organizer view appeared")
+        }
+        .onChange(of: displaySettings.showInspector) { _, isPresented in
+            AppLogger.app.info("Inspector visibility changed: \(isPresented, privacy: .public)")
+        }
         .alert(
             store.alert?.title ?? "",
             isPresented: Binding(
