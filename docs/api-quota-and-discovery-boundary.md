@@ -59,6 +59,7 @@ The app uses estimated YouTube units per request type:
 - `search.list`: 100
 - `videos.list`: 1
 - `channels.list`: 1
+- channel archive refresh fallback prompt: 6
 - `playlistItems.list`: 1
 - `playlistItems.insert`: 50
 - `playlistItems.delete`: 50
@@ -72,6 +73,16 @@ Approval is currently required before these Watch discovery fallbacks:
 - search fallback from scrape to API
 - channel archive fallback from scrape/RSS to API
 - channel icon fallback from scrape to API
+
+Additional current controls:
+
+- search API fallback is disabled by default and must be enabled in Settings
+- each Watch refresh pass has a configurable aggregate API budget ceiling
+- approvals can be remembered for the rest of the current refresh pass
+
+For multi-step fallback flows, prompts should use a conservative estimate rather than the cost
+of only the first request. Channel archive refresh now uses a 6-unit estimate to account for the
+initial uploads lookup plus likely playlist and metadata follow-up calls.
 
 ## Follow-Up Work
 

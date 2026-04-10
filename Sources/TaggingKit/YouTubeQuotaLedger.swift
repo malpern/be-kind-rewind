@@ -16,10 +16,10 @@ public enum YouTubeAPIOperation: String, Codable, Sendable, CaseIterable {
         switch self {
         case .searchList:
             return 100
+        case .channelArchiveRefresh:
+            return 6
         case .playlistItemsInsert, .playlistItemsDelete:
             return 50
-        case .channelArchiveRefresh:
-            return 5
         case .videosList, .channelsListSnippet, .channelsListContentDetails, .channelsListStatistics, .playlistItemsList, .unknown:
             return 1
         }
@@ -159,6 +159,10 @@ public actor YouTubeQuotaLedger {
         let calendar = Calendar(identifier: .gregorian)
         self.pacificCalendar = calendar
 
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .iso8601
+
         let initialStore: YouTubeQuotaLedgerStore
         if let data = try? Data(contentsOf: fileURL),
            let decoded = try? decoder.decode(YouTubeQuotaLedgerStore.self, from: data) {
@@ -167,9 +171,6 @@ public actor YouTubeQuotaLedger {
             initialStore = YouTubeQuotaLedgerStore()
         }
 
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        decoder.dateDecodingStrategy = .iso8601
         let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? Date()
         var prunedStore = initialStore
         prunedStore.apiEvents.removeAll { $0.timestamp < cutoff }
