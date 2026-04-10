@@ -20,6 +20,7 @@ struct CreatorDetailView: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 identityCard
                 whatsNewSection
+                essentialsSection
             }
             .padding(.horizontal, 24)
             .padding(.top, 16)
@@ -235,5 +236,115 @@ struct CreatorDetailView: View {
         return Text(pieces.joined(separator: " · "))
             .font(.subheadline)
             .foregroundStyle(.secondary)
+    }
+
+    // MARK: - Essentials
+
+    @ViewBuilder
+    private var essentialsSection: some View {
+        if !page.essentials.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Essentials")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
+                    Text(essentialsHelpText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHGrid(rows: [GridItem(.fixed(180))], spacing: 14) {
+                        ForEach(page.essentials) { card in
+                            essentialsCard(card)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    private var essentialsHelpText: String {
+        // Surface the outlier baseline so the user understands "what counts as a hit
+        // for this creator". Hidden when the median is meaningless (no view counts).
+        guard page.channelMedianViews > 0 else {
+            return "ranked by views"
+        }
+        return "ranked by outlier score · median ≈ \(formatCompact(page.channelMedianViews)) views"
+    }
+
+    private func essentialsCard(_ card: CreatorVideoCard) -> some View {
+        Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
+            VStack(alignment: .leading, spacing: 6) {
+                ZStack(alignment: .topTrailing) {
+                    thumbnail(for: card)
+                        .frame(width: 200, height: 112)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    if card.isOutlier {
+                        outlierBadge(card)
+                            .padding(6)
+                    }
+                }
+
+                Text(card.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(width: 200, alignment: .leading)
+
+                if card.viewCountParsed > 0 {
+                    Text(card.viewCountFormatted)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help(essentialsCardTooltip(card))
+    }
+
+    private func outlierBadge(_ card: CreatorVideoCard) -> some View {
+        let multiplier = card.outlierScore
+        let label = multiplier >= 10
+            ? String(format: "%.0f×", multiplier)
+            : String(format: "%.1f×", multiplier)
+        return HStack(spacing: 4) {
+            Image(systemName: "arrow.up")
+            Text(label)
+        }
+        .font(.caption2.weight(.semibold))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(.thinMaterial, in: Capsule())
+        .foregroundStyle(.primary)
+        .accessibilityLabel("Outlier: \(label) the channel median")
+    }
+
+    private func essentialsCardTooltip(_ card: CreatorVideoCard) -> String {
+        var parts: [String] = [card.title]
+        if card.viewCountParsed > 0 {
+            parts.append(card.viewCountFormatted)
+        }
+        if let age = card.ageFormatted {
+            parts.append(age)
+        }
+        if card.isOutlier && page.channelMedianViews > 0 {
+            let multiplier = String(format: "%.1f×", card.outlierScore)
+            parts.append("\(multiplier) channel median (\(formatCompact(page.channelMedianViews)) views)")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func formatCompact(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000)
+        }
+        if value >= 1_000 {
+            return String(format: "%.0fK", Double(value) / 1_000)
+        }
+        return "\(value)"
     }
 }
