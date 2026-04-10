@@ -94,6 +94,10 @@ struct CreatorPageViewModel {
     // State
     let isFavorite: Bool
     let isExcluded: Bool
+    /// Phase 3: free-text notes the user has saved on this creator. nil when not
+    /// favorited or when no notes have been written. Stored in the favorite_channels
+    /// table (column existed since Phase 1 #3, surfaced in UI now in Phase 3).
+    let notes: String?
 
     init(
         channelId: String,
@@ -131,7 +135,8 @@ struct CreatorPageViewModel {
         lastRefreshedAt: Date?,
         youtubeURL: URL,
         isFavorite: Bool,
-        isExcluded: Bool
+        isExcluded: Bool,
+        notes: String?
     ) {
         self.channelId = channelId
         self.channelName = channelName
@@ -169,6 +174,7 @@ struct CreatorPageViewModel {
         self.youtubeURL = youtubeURL
         self.isFavorite = isFavorite
         self.isExcluded = isExcluded
+        self.notes = notes
     }
 
     static let placeholderEmpty = CreatorPageViewModel(
@@ -207,7 +213,8 @@ struct CreatorPageViewModel {
         lastRefreshedAt: nil,
         youtubeURL: URL(string: "https://www.youtube.com")!,
         isFavorite: false,
-        isExcluded: false
+        isExcluded: false,
+        notes: nil
     )
 }
 
@@ -484,7 +491,8 @@ enum CreatorPageBuilder {
             lastRefreshedAt: archive.compactMap(\.fetchedAt).compactMap(CreatorAnalytics.parseISO8601Date).max(),
             youtubeURL: youtubeURL,
             isFavorite: store.isCreatorFavorited(channelId),
-            isExcluded: store.isExcludedCreator(channelId)
+            isExcluded: store.isExcludedCreator(channelId),
+            notes: store.favoriteCreators.first(where: { $0.channelId == channelId })?.notes
         )
     }
 

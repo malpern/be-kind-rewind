@@ -35,6 +35,11 @@ struct CreatorDetailView: View {
     /// Local to the page, resets on navigation away.
     @State private var selectedThemeLabel: String? = nil
 
+    /// Local edit buffer for the per-creator notes field. Mirrors the persisted
+    /// notes from the favorite_channels row; commits on blur via .onChange below.
+    @State private var notesDraft: String = ""
+    @FocusState private var notesFocused: Bool
+
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
         case table
         case grid
@@ -57,6 +62,7 @@ struct CreatorDetailView: View {
                 playlistsSection
                 nichesAndCadenceSection
                 leaderboardSection
+                notesSection
                 channelInformationSection
             }
             .padding(.horizontal, 24)
@@ -72,11 +78,28 @@ struct CreatorDetailView: View {
         // its "Get" button — actions adjacent to the entity, not in the toolbar.
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+            notesDraft = page.notes ?? ""
             // Kick off Claude theme classification + about generation in the background
             // if the toggle is on and the cache is empty. The store inserts this channel
             // into classifyingThemeChannels, which we observe below to rebuild the page
             // when classification finishes.
             store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
+        }
+        .onChange(of: notesFocused) { wasFocused, isFocused in
+            // Commit on blur — when focus leaves the notes editor, persist the draft.
+            // Editing while focused stays purely local until the user clicks elsewhere.
+            if wasFocused && !isFocused {
+                let trimmed = notesDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                let persisted = page.notes ?? ""
+                if trimmed != persisted {
+                    store.setNotesForCreator(
+                        channelId: channelId,
+                        channelName: page.channelName,
+                        iconUrl: page.avatarUrl?.absoluteString,
+                        notes: trimmed.isEmpty ? nil : trimmed
+                    )
+                }
+            }
         }
         .onChange(of: store.favoriteCreators.map(\.channelId)) { _, _ in
             // Reflect Pin/Unpin and Exclude/Restore actions immediately in the page model.
@@ -1445,6 +1468,54 @@ struct CreatorDetailView: View {
             parts.append("1 shared topic")
         }
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: - Notes (per-creator scratch pad)
+
+    @ViewBuilder
+    private var notesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Notes")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                if notesFocused {
+                    Button("Done") {
+                        notesFocused = false
+                    }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut(.return, modifiers: .command)
+                }
+            }
+
+            TextEditor(text: $notesDraft)
+                .font(.body)
+                .focused($notesFocused)
+                .frame(minHeight: 80, idealHeight: 100)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(.background.secondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(notesFocused ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: notesFocused ? 1.5 : 0.5)
+                )
+                .overlay(alignment: .topLeading) {
+                    if notesDraft.isEmpty && !notesFocused {
+                        Text("Why are you tracking this creator? What patterns have you noticed? Click to add notes…")
+                            .font(.body)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 14)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            Text("Notes are saved when you click outside the field or press ⌘↩. Saving notes implicitly pins this creator.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
     }
 
     // MARK: - Channel information

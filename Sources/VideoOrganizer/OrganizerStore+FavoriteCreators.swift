@@ -71,4 +71,24 @@ extension OrganizerStore {
     func popToRootDetail() {
         detailPath.removeAll()
     }
+
+    /// Save free-text notes for a creator. If the creator isn't yet favorited, this
+    /// implicitly favorites them — notes only persist on rows in favorite_channels.
+    /// Pass nil or empty to clear notes (the row stays favorited).
+    func setNotesForCreator(channelId: String, channelName: String, iconUrl: String? = nil, notes: String?) {
+        do {
+            // Ensure the row exists.
+            if !isCreatorFavorited(channelId) {
+                try store.favoriteChannel(
+                    channelId: channelId,
+                    channelName: channelName,
+                    iconUrl: iconUrl
+                )
+            }
+            try store.updateFavoriteChannelNotes(channelId: channelId, notes: notes?.isEmpty == true ? nil : notes)
+            refreshFavoriteCreators()
+        } catch {
+            AppLogger.app.error("Failed to update notes for \(channelId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
 }
