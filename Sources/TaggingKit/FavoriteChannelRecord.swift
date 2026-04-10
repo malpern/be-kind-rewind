@@ -14,6 +14,9 @@ public struct FavoriteChannelRecord: Sendable, Identifiable, Hashable {
     public let iconUrl: String?
     public let favoritedAt: String
     public let notes: String?
+    /// Phase 3: ISO8601 timestamp of the last time the user opened this creator's
+    /// detail page. nil for rows that predate the migration or were never visited.
+    public let lastVisitedAt: String?
 
     public var id: String { channelId }
 
@@ -22,12 +25,14 @@ public struct FavoriteChannelRecord: Sendable, Identifiable, Hashable {
         channelName: String,
         iconUrl: String? = nil,
         favoritedAt: String,
-        notes: String? = nil
+        notes: String? = nil,
+        lastVisitedAt: String? = nil
     ) {
         self.channelId = channelId
         self.channelName = channelName
         self.iconUrl = iconUrl
         self.favoritedAt = favoritedAt
         self.notes = notes
+        self.lastVisitedAt = lastVisitedAt
     }
 }

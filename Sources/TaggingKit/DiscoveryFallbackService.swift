@@ -43,6 +43,9 @@ public struct DiscoveryFallbackService: Sendable {
     }
 
     public func fetchRecentChannelUploads(channelId: String, maxResults: Int = 16) async throws -> [DiscoveryFallbackVideo] {
+        // Cap raised from 50 to 200 in Phase 3 to support the "Load full upload
+        // history" button on the creator detail page. The default for incremental
+        // discovery (16) and the existing refresh callers are unchanged.
         await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
             kind: .channelArchive,
             backend: .scrape,
@@ -54,7 +57,7 @@ public struct DiscoveryFallbackService: Sendable {
             pythonExecutable.path,
             scriptURL.path,
             "--channel-id", channelId,
-            "--max-results", String(max(1, min(maxResults, 50)))
+            "--max-results", String(max(1, min(maxResults, 200)))
         ]
         let execution = try await runProcess(arguments: arguments)
 
@@ -139,7 +142,7 @@ public struct DiscoveryFallbackService: Sendable {
         }
     }
 
-    private func runProcess(arguments: [String], timeout: Duration = .seconds(30)) async throws -> ProcessExecutionResult {
+    private func runProcess(arguments: [String], timeout: Duration = .seconds(60)) async throws -> ProcessExecutionResult {
         let process = Process()
         process.currentDirectoryURL = environment.repoRoot()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

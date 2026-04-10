@@ -57,6 +57,20 @@ extension OrganizerStore {
         favoriteCreators.contains(where: { $0.channelId == channelId })
     }
 
+    /// Phase 3: stamp the last_visited_at timestamp for a favorited creator. Called
+    /// from the creator detail page on every navigation. No-op for non-favorited
+    /// creators (visit tracking is scoped to favorites since they have the row).
+    /// Refreshes the in-memory cache so the new timestamp is visible immediately.
+    func markCreatorVisited(channelId: String) {
+        guard isCreatorFavorited(channelId) else { return }
+        do {
+            try store.markChannelVisited(channelId: channelId)
+            refreshFavoriteCreators()
+        } catch {
+            AppLogger.app.error("Failed to mark creator visited \(channelId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// Push the creator detail page onto the detail-column NavigationStack. Idempotent —
     /// if the topmost route is already this creator, the call is a no-op so repeated
     /// clicks don't stack the same page.

@@ -168,6 +168,17 @@ final class OrganizerStore {
     /// indicator and prevent duplicate concurrent runs for the same creator.
     var classifyingThemeChannels: Set<String> = []
 
+    /// Phase 3: channels currently mid "Load full upload history" scrape, so the
+    /// creator detail page can show a progress indicator and prevent duplicate
+    /// concurrent runs for the same creator.
+    var loadingFullHistoryChannels: Set<String> = []
+
+    /// Phase 3: result of the most recent full-history load per channel — count
+    /// of NEW videos added on top of whatever was already in the archive. nil
+    /// when no run has completed yet for this session. The view reads this to
+    /// show "loaded N more videos" feedback after the spinner clears.
+    var lastFullHistoryLoadCount: [String: Int] = [:]
+
     init(dbPath: String, claudeClient: ClaudeClient? = nil, startBackgroundTasks: Bool = true) throws {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }

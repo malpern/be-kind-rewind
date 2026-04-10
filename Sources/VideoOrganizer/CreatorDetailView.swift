@@ -100,6 +100,21 @@ struct CreatorDetailView: View {
     /// value mark — when the value is 0 the bar has no height/width.
     @State private var chartsAnimationProgress: Double = 0
 
+    /// Phase 3: topic share window preference. Sticky across launches via
+    /// @AppStorage. "All time" uses every saved video; "Last 12 months" filters
+    /// to videos published in the last 365 days so the user can see if the
+    /// creator's niche mix has shifted recently.
+    @AppStorage("creatorTopicShareWindow") private var topicShareWindow: TopicShareWindow = .allTime
+
+    enum TopicShareWindow: String, CaseIterable, Identifiable {
+        case allTime
+        case last12Months
+
+        var id: String { rawValue }
+        var label: String { self == .allTime ? "All time" : "Last 12 months" }
+        var symbolName: String { self == .allTime ? "infinity" : "clock.arrow.circlepath" }
+    }
+
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
         case table
         case grid
@@ -149,6 +164,10 @@ struct CreatorDetailView: View {
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
             notesDraft = page.notes ?? ""
+            // Phase 3: stamp last_visited_at AFTER the page model has been built
+            // (the builder reads the previous timestamp to compute "new since
+            // last visit"). Bumping it before the build would always yield 0.
+            store.markCreatorVisited(channelId: channelId)
             // Reset leaderboard scope to the page creator's primary topic on every
             // navigation. The user can flip the picker to look at other topics, but
             // navigating to a new creator should always start at THEIR primary topic.
@@ -490,6 +509,7 @@ struct CreatorDetailView: View {
         if !page.recentVideos.isEmpty {
             // Multiple videos in the last 14 days → grid layout, "Recent uploads" header.
             VStack(alignment: .leading, spacing: 8) {
+                sinceLastVisitBanner
                 HStack(alignment: .firstTextBaseline) {
                     if page.recentVideos.count == 1 {
                         Text("What's new")
@@ -523,12 +543,54 @@ struct CreatorDetailView: View {
             // Window was empty (creator hasn't posted in the last 14 days), but we
             // still want to surface their most recent upload as a fallback.
             VStack(alignment: .leading, spacing: 8) {
+                sinceLastVisitBanner
                 Text("What's new")
                     .font(.title3.weight(.semibold))
 
                 whatsNewRow(latest)
             }
         }
+    }
+
+    /// Phase 3: small "N new since your last visit · X days ago" banner shown
+    /// above the What's new section when the user has previously visited this
+    /// favorited creator and there are uploads after that timestamp. Hidden on
+    /// first visits, for non-favorited creators, and when nothing is new.
+    @ViewBuilder
+    private var sinceLastVisitBanner: some View {
+        if page.newSinceLastVisitCount > 0, let prevDate = page.previousVisitDate {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tint)
+                Text("\(page.newSinceLastVisitCount) new since your last visit")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text("·")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Text(relativeVisitDate(prevDate))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 0.5)
+            )
+        }
+    }
+
+    private func relativeVisitDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return "last visited \(formatter.localizedString(for: date, relativeTo: Date()))"
     }
 
     @ViewBuilder
@@ -1319,7 +1381,7 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private var nichesAndCadenceSection: some View {
-        if !page.topicShare.isEmpty || !page.monthlyVideoCounts.isEmpty {
+        if !page.topicShare.isEmpty || !page.topicShareLast12Months.isEmpty || !page.monthlyVideoCounts.isEmpty {
             GroupBox("Niches & cadence") {
                 HStack(alignment: .top, spacing: 24) {
                     topicShareChart
@@ -1327,6 +1389,20 @@ struct CreatorDetailView: View {
                 }
                 .padding(.top, 6)
             }
+        }
+    }
+
+    /// Active topic share slice based on the user's window preference. Falls back
+    /// to all-time when "Last 12 months" is selected but the creator has no recent
+    /// dated videos, so the chart is never empty just because of the toggle.
+    private var activeTopicShare: [CreatorTopicShare] {
+        switch topicShareWindow {
+        case .allTime:
+            return page.topicShare
+        case .last12Months:
+            return page.topicShareLast12Months.isEmpty
+                ? page.topicShare
+                : page.topicShareLast12Months
         }
     }
 
@@ -1338,13 +1414,15 @@ struct CreatorDetailView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                 Spacer()
-                Text("their share · library share")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                topicShareWindowPicker
             }
 
-            if page.topicShare.isEmpty {
-                Text("No saved videos yet")
+            if activeTopicShare.isEmpty {
+                Text(
+                    topicShareWindow == .last12Months
+                        ? "No dated videos in the last 12 months"
+                        : "No saved videos yet"
+                )
                     .font(.callout)
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1355,19 +1433,53 @@ struct CreatorDetailView: View {
                 // Chart's auto-styled axis labels) and lets the user scan creator
                 // niches at a glance.
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(page.topicShare) { share in
+                    ForEach(activeTopicShare) { share in
                         topicShareRow(share)
                     }
                 }
                 .accessibilityLabel("Topic share for \(page.channelName)")
+
+                Text("their share · library share")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
             }
         }
         .frame(minWidth: 260, idealWidth: 340, alignment: .leading)
     }
 
+    /// Compact menu picker for the topic share time window. Only shown when the
+    /// creator actually has recent videos to flip to — otherwise the menu would
+    /// always fall back to "All time" anyway and the picker is noise.
+    @ViewBuilder
+    private var topicShareWindowPicker: some View {
+        if !page.topicShareLast12Months.isEmpty {
+            Menu {
+                Picker("Window", selection: $topicShareWindow) {
+                    ForEach(TopicShareWindow.allCases) { window in
+                        Label(window.label, systemImage: window.symbolName).tag(window)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: topicShareWindow.symbolName)
+                    Text(topicShareWindow.label)
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Switch between all-time and last-12-month topic share")
+        }
+    }
+
     @ViewBuilder
     private func topicShareRow(_ share: CreatorTopicShare) -> some View {
-        let domainMax = max(1.0, page.topicShare.map(\.percentage).max() ?? 1.0)
+        let domainMax = max(1.0, activeTopicShare.map(\.percentage).max() ?? 1.0)
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(share.topicName)
@@ -1839,8 +1951,12 @@ struct CreatorDetailView: View {
     @ViewBuilder
     private var channelInformationSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Channel information")
-                .font(.title3.weight(.semibold))
+            HStack(alignment: .firstTextBaseline) {
+                Text("Channel information")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                loadFullHistoryButton
+            }
 
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 if let subs = page.subscriberCountFormatted {
@@ -1858,7 +1974,7 @@ struct CreatorDetailView: View {
                     infoRow("Country", value: country)
                 }
                 if let refreshed = page.lastRefreshedAt {
-                    infoRow("Last refreshed", value: formatRefreshTime(refreshed))
+                    infoRow("Last refreshed", value: refreshedRowValue(date: refreshed))
                 }
                 infoRowLink("YouTube", url: page.youtubeURL)
             }
@@ -1872,6 +1988,63 @@ struct CreatorDetailView: View {
                     .strokeBorder(.quaternary, lineWidth: 0.5)
             )
         }
+    }
+
+    /// Phase 3: "Load full upload history" button. Triggers a deeper one-shot
+    /// scrape (max 200 videos vs the default 16) and shows a small spinner +
+    /// result count next to itself. Disabled while a load is in flight for this
+    /// channel; once a load completes, the result count persists for the
+    /// remainder of the session as quiet feedback.
+    @ViewBuilder
+    private var loadFullHistoryButton: some View {
+        let isLoading = store.loadingFullHistoryChannels.contains(channelId)
+        let lastCount = store.lastFullHistoryLoadCount[channelId]
+        HStack(spacing: 8) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let lastCount {
+                Text(lastCount == 0 ? "No new videos" : "Loaded \(lastCount) more")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+            }
+
+            Button {
+                store.loadFullChannelHistory(
+                    channelId: channelId,
+                    channelName: page.channelName
+                )
+            } label: {
+                Label("Load full history", systemImage: "arrow.down.circle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isLoading)
+            .help("Scrape this creator's last 200 uploads into your archive (one-shot, no API quota)")
+        }
+        .onChange(of: store.lastFullHistoryLoadCount[channelId]) { _, _ in
+            // Rebuild the page model after a load completes so totalUploadsKnown,
+            // allVideos, monthlyVideoCounts and downstream stats reflect the new
+            // archive rows immediately.
+            if !store.loadingFullHistoryChannels.contains(channelId) {
+                page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+            }
+        }
+    }
+
+    /// Build the value displayed for the "Last refreshed" row, including the
+    /// stale-warning suffix when the cache is more than 7 days old.
+    private func refreshedRowValue(date: Date) -> String {
+        let formatted = formatRefreshTime(date)
+        let ageDays = Int(Date().timeIntervalSince(date) / 86_400)
+        if ageDays >= 7 {
+            return "\(formatted) · \(ageDays) days old"
+        }
+        return formatted
     }
 
     private var libraryCoverageString: String {

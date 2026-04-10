@@ -124,6 +124,11 @@ public final class TopicStore: Sendable {
     private let favoriteChannelIconUrl = SQLite.Expression<String?>("icon_url")
     private let favoriteChannelFavoritedAt = SQLite.Expression<String>("favorited_at")
     private let favoriteChannelNotes = SQLite.Expression<String?>("notes")
+    /// Phase 3: ISO8601 timestamp of the last time the user opened this creator's
+    /// detail page. Nil for rows that predate this feature or were favorited but
+    /// never visited. Used to compute "N new uploads since your last visit" on the
+    /// creator detail page.
+    private let favoriteChannelLastVisitedAt = SQLite.Expression<String?>("last_visited_at")
 
     // creator_themes columns — composite PK on (channel_id, theme_label).
     // Stores LLM-generated theme clusters from CreatorThemeClassifier.
@@ -365,7 +370,16 @@ public final class TopicStore: Sendable {
             t.column(favoriteChannelIconUrl)
             t.column(favoriteChannelFavoritedAt, defaultValue: ISO8601DateFormatter().string(from: Date()))
             t.column(favoriteChannelNotes)
+            t.column(favoriteChannelLastVisitedAt)
         })
+
+        // Migrate: add last_visited_at to favorite_channels for older databases
+        // (the column was introduced in Phase 3 for "new uploads since last visit").
+        let favoriteInfo = try db.prepare("PRAGMA table_info(favorite_channels)")
+        let favoriteColumns = try Set(favoriteInfo.map { try requiredValue($0, at: 1, as: String.self, context: "favorite_channels schema") })
+        if !favoriteColumns.contains("last_visited_at") {
+            try db.run("ALTER TABLE favorite_channels ADD COLUMN last_visited_at TEXT")
+        }
 
         try db.run(creatorThemes.create(ifNotExists: true) { t in
             t.column(creatorThemeChannelId)
@@ -707,6 +721,10 @@ public final class TopicStore: Sendable {
     /// Insert or update a favorite channel record. The user has explicitly pinned this
     /// creator. Used by the creator detail page Pin toolbar action and consumed in Phase 3
     /// by Watch refresh ranking to boost favorited creators.
+    ///
+    /// On re-favorite of an existing row, preserves the previously stored `notes` and
+    /// `last_visited_at` fields so a Pin click doesn't clobber data the user (or other
+    /// code paths) wrote earlier. The favoritedAt timestamp is always refreshed.
     public func favoriteChannel(
         channelId id: String,
         channelName name: String,
@@ -714,13 +732,37 @@ public final class TopicStore: Sendable {
         notes: String? = nil
     ) throws {
         let now = ISO8601DateFormatter().string(from: Date())
+        let existing = try db.pluck(favoriteChannels.filter(favoriteChannelId == id))
+        let preservedNotes = notes ?? existing?[favoriteChannelNotes]
+        let preservedLastVisited = existing?[favoriteChannelLastVisitedAt]
         try db.run(favoriteChannels.insert(or: .replace,
             favoriteChannelId <- id,
             favoriteChannelName <- name,
             favoriteChannelIconUrl <- iconUrl,
             favoriteChannelFavoritedAt <- now,
-            favoriteChannelNotes <- notes
+            favoriteChannelNotes <- preservedNotes,
+            favoriteChannelLastVisitedAt <- preservedLastVisited
         ))
+    }
+
+    /// Phase 3: stamp the last_visited_at column for the given channel. Idempotent —
+    /// updates the timestamp on each call. No-op if the channel is not favorited
+    /// (visit tracking is scoped to favorited creators since they have the row).
+    public func markChannelVisited(channelId id: String) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try db.run(favoriteChannels
+            .filter(favoriteChannelId == id)
+            .update(favoriteChannelLastVisitedAt <- now))
+    }
+
+    /// Phase 3: read the previous last_visited_at for a channel without updating it.
+    /// Used by the creator page builder to compute "new uploads since last visit"
+    /// before the page-open then bumps the timestamp.
+    public func lastVisitedAt(channelId id: String) throws -> String? {
+        guard let row = try db.pluck(favoriteChannels.filter(favoriteChannelId == id)) else {
+            return nil
+        }
+        return row[favoriteChannelLastVisitedAt]
     }
 
     /// Remove a favorite channel by ID. No-op if the channel was not favorited.
@@ -744,7 +786,8 @@ public final class TopicStore: Sendable {
                 channelName: row[favoriteChannelName],
                 iconUrl: row[favoriteChannelIconUrl],
                 favoritedAt: row[favoriteChannelFavoritedAt],
-                notes: row[favoriteChannelNotes]
+                notes: row[favoriteChannelNotes],
+                lastVisitedAt: row[favoriteChannelLastVisitedAt]
             )
         }
     }

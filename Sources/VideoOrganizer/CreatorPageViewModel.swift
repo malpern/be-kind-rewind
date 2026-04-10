@@ -63,6 +63,11 @@ struct CreatorPageViewModel {
 
     // Niche fingerprint
     let topicShare: [CreatorTopicShare]
+    /// Phase 3: same shape as `topicShare` but computed only over saved videos
+    /// published in the last 365 days. Lets the user flip the topic share chart
+    /// between "all time" and "last 12 months" to see if the niche has shifted.
+    /// Empty when the creator has no recent saved videos with parseable dates.
+    let topicShareLast12Months: [CreatorTopicShare]
 
     // Top creators in this niche — pre-computed per-topic dominance leaderboard.
     // The view picks one scope topic at a time (default = leaderboardDefaultTopicId)
@@ -102,6 +107,17 @@ struct CreatorPageViewModel {
     /// table (column existed since Phase 1 #3, surfaced in UI now in Phase 3).
     let notes: String?
 
+    /// Phase 3: count of uploads (saved + archive) published after the user's
+    /// previous visit to this creator's detail page. Computed from the
+    /// `favorite_channels.last_visited_at` timestamp captured BEFORE the current
+    /// visit bumped it. Always 0 for non-favorited creators (no row to read from)
+    /// and for first visits where there's no prior timestamp.
+    let newSinceLastVisitCount: Int
+
+    /// Phase 3: ISO8601 timestamp of the previous visit (the value of
+    /// last_visited_at before this page open bumped it). nil on first visit.
+    let previousVisitDate: Date?
+
     init(
         channelId: String,
         channelName: String,
@@ -125,6 +141,7 @@ struct CreatorPageViewModel {
         allVideos: [CreatorVideoCard],
         playlists: [CreatorPlaylistEntry],
         topicShare: [CreatorTopicShare],
+        topicShareLast12Months: [CreatorTopicShare],
         leaderboardScopes: [CreatorLeaderboardScope],
         leaderboardByTopic: [Int64: [CreatorLeaderboardEntry]],
         leaderboardDefaultTopicId: Int64?,
@@ -141,7 +158,9 @@ struct CreatorPageViewModel {
         youtubeURL: URL,
         isFavorite: Bool,
         isExcluded: Bool,
-        notes: String?
+        notes: String?,
+        newSinceLastVisitCount: Int = 0,
+        previousVisitDate: Date? = nil
     ) {
         self.channelId = channelId
         self.channelName = channelName
@@ -165,6 +184,7 @@ struct CreatorPageViewModel {
         self.allVideos = allVideos
         self.playlists = playlists
         self.topicShare = topicShare
+        self.topicShareLast12Months = topicShareLast12Months
         self.leaderboardScopes = leaderboardScopes
         self.leaderboardByTopic = leaderboardByTopic
         self.leaderboardDefaultTopicId = leaderboardDefaultTopicId
@@ -182,6 +202,8 @@ struct CreatorPageViewModel {
         self.isFavorite = isFavorite
         self.isExcluded = isExcluded
         self.notes = notes
+        self.newSinceLastVisitCount = newSinceLastVisitCount
+        self.previousVisitDate = previousVisitDate
     }
 
     static let placeholderEmpty = CreatorPageViewModel(
@@ -207,6 +229,7 @@ struct CreatorPageViewModel {
         allVideos: [],
         playlists: [],
         topicShare: [],
+        topicShareLast12Months: [],
         leaderboardScopes: [],
         leaderboardByTopic: [:],
         leaderboardDefaultTopicId: nil,
@@ -460,6 +483,13 @@ enum CreatorPageBuilder {
 
         // 12. Topic share (only counts saved videos by topic — archive isn't topic-tagged).
         let topicShare = makeTopicShare(savedByTopic: savedByTopic, store: store)
+        // 12b. Recency-weighted variant: same shape, but only counts videos
+        // published in the last 365 days. Used by the topic share toggle so the
+        // user can see if the creator's niche mix has shifted recently.
+        let topicShareLast12Months = makeTopicShare(
+            savedByTopic: filterSavedByTopicToRecentYear(savedByTopic),
+            store: store
+        )
 
         // 13. Monthly cadence (last 24 months) — use parseISO8601 dates from publishedAt.
         let monthlyCounts = makeMonthlyCounts(from: scoredCards)
@@ -513,6 +543,7 @@ enum CreatorPageBuilder {
             allVideos: allVideos,
             playlists: playlists,
             topicShare: topicShare,
+            topicShareLast12Months: topicShareLast12Months,
             leaderboardScopes: makeLeaderboardScopes(forChannelId: channelId, in: store),
             leaderboardByTopic: makeLeaderboardByTopic(forChannelId: channelId, in: store),
             leaderboardDefaultTopicId: makeLeaderboardDefaultTopicId(forChannelId: channelId, savedByTopic: savedByTopic),
@@ -529,8 +560,49 @@ enum CreatorPageBuilder {
             youtubeURL: youtubeURL,
             isFavorite: store.isCreatorFavorited(channelId),
             isExcluded: store.isExcludedCreator(channelId),
-            notes: store.favoriteCreators.first(where: { $0.channelId == channelId })?.notes
+            notes: store.favoriteCreators.first(where: { $0.channelId == channelId })?.notes,
+            newSinceLastVisitCount: makeNewSinceLastVisitCount(
+                channelId: channelId,
+                allCards: scoredCards,
+                store: store
+            ),
+            previousVisitDate: previousVisitDate(channelId: channelId, store: store)
         )
+    }
+
+    /// Phase 3: read the favorite_channels.last_visited_at value (BEFORE bumping
+    /// it for the current visit) and parse it. nil for non-favorited creators or
+    /// rows with no prior visit. Used twice in the builder so it's a small helper.
+    @MainActor
+    private static func previousVisitDate(channelId: String, store: OrganizerStore) -> Date? {
+        // try? on a throws -> String? function flattens to String?, so the
+        // outer optional means "either the call threw or the column was null".
+        guard let raw = (try? store.store.lastVisitedAt(channelId: channelId)) ?? nil else {
+            return nil
+        }
+        return CreatorAnalytics.parseISO8601Date(raw)
+    }
+
+    /// Phase 3: count uploads (saved + archive merged into `allCards`) whose
+    /// publishedAt is strictly after the previous visit timestamp. 0 when there's
+    /// no prior visit on record. Used by the "What's new" banner so the user can
+    /// see at a glance how much has happened since they last looked.
+    @MainActor
+    private static func makeNewSinceLastVisitCount(
+        channelId: String,
+        allCards: [CreatorVideoCard],
+        store: OrganizerStore
+    ) -> Int {
+        guard let cutoff = previousVisitDate(channelId: channelId, store: store) else {
+            return 0
+        }
+        return allCards.reduce(0) { acc, card in
+            guard let publishedAt = card.publishedAt,
+                  let date = CreatorAnalytics.parseISO8601Date(publishedAt) else {
+                return acc
+            }
+            return date > cutoff ? acc + 1 : acc
+        }
     }
 
     // MARK: - Card construction
@@ -603,6 +675,27 @@ enum CreatorPageBuilder {
     }
 
     // MARK: - Topic share
+
+    /// Phase 3: filter the savedByTopic groupings to only include videos published
+    /// in the last 365 days. Videos with no parseable publishedAt are dropped from
+    /// the recent slice (we err on the side of "if we don't know when, we can't
+    /// claim it's recent"). Topics that have no recent videos are dropped entirely.
+    private static func filterSavedByTopicToRecentYear(
+        _ savedByTopic: [(topic: TopicViewModel, videos: [VideoViewModel])]
+    ) -> [(topic: TopicViewModel, videos: [VideoViewModel])] {
+        let cutoff = Calendar(identifier: .gregorian)
+            .date(byAdding: .day, value: -365, to: Date()) ?? Date()
+        return savedByTopic.compactMap { entry in
+            let recentVideos = entry.videos.filter { video in
+                guard let publishedAt = video.publishedAt,
+                      let date = CreatorAnalytics.parseISO8601Date(publishedAt) else {
+                    return false
+                }
+                return date >= cutoff
+            }
+            return recentVideos.isEmpty ? nil : (topic: entry.topic, videos: recentVideos)
+        }
+    }
 
     @MainActor
     private static func makeTopicShare(
