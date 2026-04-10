@@ -64,11 +64,14 @@ struct CreatorPageViewModel {
     // Niche fingerprint
     let topicShare: [CreatorTopicShare]
 
-    // Top creators in this niche — other creators in the user's library who publish
-    // in topics that overlap with this creator's. Ranked by saved video count by
-    // default. Excludes self. Capped at 10. Empty when this creator only appears
-    // in topics where no one else has videos.
-    let leaderboardEntries: [CreatorLeaderboardEntry]
+    // Top creators in this niche — pre-computed per-topic dominance leaderboard.
+    // The view picks one scope topic at a time (default = leaderboardDefaultTopicId)
+    // and one ranking metric (saved / outliers / views) and reads the matching entries.
+    // Capped at 10 entries per topic. Includes the page creator themselves so they
+    // can see where they rank.
+    let leaderboardScopes: [CreatorLeaderboardScope]
+    let leaderboardByTopic: [Int64: [CreatorLeaderboardEntry]]
+    let leaderboardDefaultTopicId: Int64?
 
     // Phase 2 LLM-cached enrichments. Empty when the toggle is off OR cache is empty.
     let themes: [CreatorThemeRecord]
@@ -122,7 +125,9 @@ struct CreatorPageViewModel {
         allVideos: [CreatorVideoCard],
         playlists: [CreatorPlaylistEntry],
         topicShare: [CreatorTopicShare],
-        leaderboardEntries: [CreatorLeaderboardEntry],
+        leaderboardScopes: [CreatorLeaderboardScope],
+        leaderboardByTopic: [Int64: [CreatorLeaderboardEntry]],
+        leaderboardDefaultTopicId: Int64?,
         themes: [CreatorThemeRecord],
         aboutParagraph: String?,
         isClassifyingThemes: Bool,
@@ -160,7 +165,9 @@ struct CreatorPageViewModel {
         self.allVideos = allVideos
         self.playlists = playlists
         self.topicShare = topicShare
-        self.leaderboardEntries = leaderboardEntries
+        self.leaderboardScopes = leaderboardScopes
+        self.leaderboardByTopic = leaderboardByTopic
+        self.leaderboardDefaultTopicId = leaderboardDefaultTopicId
         self.themes = themes
         self.aboutParagraph = aboutParagraph
         self.isClassifyingThemes = isClassifyingThemes
@@ -200,7 +207,9 @@ struct CreatorPageViewModel {
         allVideos: [],
         playlists: [],
         topicShare: [],
-        leaderboardEntries: [],
+        leaderboardScopes: [],
+        leaderboardByTopic: [:],
+        leaderboardDefaultTopicId: nil,
         themes: [],
         aboutParagraph: nil,
         isClassifyingThemes: false,
@@ -288,28 +297,44 @@ struct CreatorMonthlyCount: Identifiable, Equatable {
     var id: Date { month }
 }
 
+/// One creator's row in the niche dominance leaderboard for a single TOPIC scope.
+/// All counts and totals are scoped to one topic at a time — switching the scope
+/// rebuilds the entries from `leaderboardByTopic`. The leaderboard shows
+/// "who dominates this niche" via three pre-computed metrics the user can rank by.
 struct CreatorLeaderboardEntry: Identifiable, Equatable {
     let channelId: String
     let channelName: String
     let channelIconUrl: URL?
-    /// Number of topics this creator shares with the page's creator (1+).
-    let sharedTopicCount: Int
-    /// Total saved videos this creator has in shared topics. Kept as a secondary
-    /// signal — exposes the bias toward what the user happens to have saved.
+    /// Number of saved videos this creator has IN THE SCOPE TOPIC.
     let savedVideoCount: Int
-    /// Parsed subscriber count from the channel record. The PRIMARY ranking signal —
-    /// it's the most honest "niche dominance" proxy because it's external to the
-    /// user's library and reflects what the rest of YouTube has voted on with their
-    /// subscriptions. nil only when the channel record is missing it.
-    let subscriberCount: Int?
-    /// Subscriber count formatted for display ("1.2M", "410K", "9K").
+    /// Number of videos in the scope topic that qualify as outliers — `views >= 3×`
+    /// this creator's own channel median across all known videos. Reuses the Phase 1
+    /// OutlierAnalytics primitive.
+    let outlierVideoCount: Int
+    /// Sum of parsed view counts of this creator's videos in the scope topic.
+    let totalViewsInTopic: Int
+    /// Subscriber count formatted for the secondary subtitle line. NOT used for ranking
+    /// (the plan explicitly rejected global subscriber-count framing — see Appendix B).
     let subscriberCountFormatted: String?
     /// True for the row representing the creator whose page is currently shown.
-    /// The leaderboard renders this row with a highlight so the user can see where
-    /// the page creator sits in the ranking, not just who else is in the niche.
+    /// Drives the highlight so the user can see where the page creator sits.
     let isPageCreator: Bool
 
     var id: String { channelId }
+}
+
+/// Eligible scope option for the leaderboard topic picker. One of the page creator's
+/// topics. The default scope is the topic with the most of the page creator's saved
+/// videos (their primary topic).
+struct CreatorLeaderboardScope: Identifiable, Equatable {
+    let topicId: Int64
+    let topicName: String
+    /// Number of distinct creators in the user's library who publish in this topic
+    /// (including the page creator). Surfaced in the picker label so the user knows
+    /// which topics actually have a meaningful leaderboard.
+    let creatorCount: Int
+
+    var id: Int64 { topicId }
 }
 
 // MARK: - Builder
@@ -488,7 +513,9 @@ enum CreatorPageBuilder {
             allVideos: allVideos,
             playlists: playlists,
             topicShare: topicShare,
-            leaderboardEntries: makeLeaderboard(forChannelId: channelId, in: store),
+            leaderboardScopes: makeLeaderboardScopes(forChannelId: channelId, in: store),
+            leaderboardByTopic: makeLeaderboardByTopic(forChannelId: channelId, in: store),
+            leaderboardDefaultTopicId: makeLeaderboardDefaultTopicId(forChannelId: channelId, savedByTopic: savedByTopic),
             themes: cachedThemes,
             aboutParagraph: (try? store.store.creatorAbout(channelId: channelId))?.summary,
             isClassifyingThemes: store.classifyingThemeChannels.contains(channelId),
@@ -680,109 +707,172 @@ enum CreatorPageBuilder {
         return result
     }
 
-    /// Builds the niche dominance leaderboard — every creator in the user's library
-    /// who publishes in topics that overlap with the page creator, INCLUDING the page
-    /// creator themselves so the user can see where they sit in the ranking.
-    ///
-    /// Ranking signal: **subscriber count**. This is the most honest "niche dominance"
-    /// proxy because it's external to the user's library — it reflects what the rest
-    /// of YouTube has voted on with their subscriptions, not what the user happens to
-    /// have saved. The earlier version ranked by saved video count, which was biased
-    /// toward whatever the user had bothered to save and didn't actually answer "who
-    /// dominates this niche".
-    ///
-    /// Algorithm:
-    /// 1. Find every topic the page creator appears in (their topic footprint).
-    /// 2. For each shared topic, gather every channelId that also appears there.
-    ///    Self is INCLUDED in the result so we can highlight where they sit.
-    /// 3. For each candidate, count their videos in shared topics (secondary signal)
-    ///    and resolve their subscriber count from the channel record.
-    /// 4. Rank by parsed subscriber count desc. Tiebreaker by saved video count desc,
-    ///    then by name. Creators with no subscriber count sort last.
-    /// 5. Return top 10.
+    /// Returns the eligible scope topics for the leaderboard picker — every topic
+    /// the page creator publishes in. Each scope tracks how many distinct creators
+    /// publish in that topic so the picker can show "Mech Kbds (12 creators)".
     @MainActor
-    private static func makeLeaderboard(
+    private static func makeLeaderboardScopes(
         forChannelId channelId: String,
         in store: OrganizerStore
-    ) -> [CreatorLeaderboardEntry] {
-        // Step 1: find topics this creator publishes in.
-        let sharedTopicIds = store.topicChannels
-            .filter { _, channels in channels.contains { $0.channelId == channelId } }
-            .map { $0.key }
-
-        guard !sharedTopicIds.isEmpty else { return [] }
-
-        // Step 2-3: tally creators (including self) by video count across shared topics.
-        var tally: [String: (sharedTopicCount: Int, savedVideoCount: Int, record: ChannelRecord)] = [:]
-
-        for topicId in sharedTopicIds {
-            let topicVideos = store.videosForTopicIncludingSubtopics(topicId)
-            var perChannelInTopic: [String: Int] = [:]
-            for video in topicVideos {
-                guard let cid = video.channelId, !cid.isEmpty else { continue }
-                perChannelInTopic[cid, default: 0] += 1
-            }
-
-            for (cid, countInTopic) in perChannelInTopic {
-                guard let record = store.topicChannels[topicId]?.first(where: { $0.channelId == cid }) else {
-                    continue
-                }
-                if var existing = tally[cid] {
-                    existing.sharedTopicCount += 1
-                    existing.savedVideoCount += countInTopic
-                    tally[cid] = existing
-                } else {
-                    tally[cid] = (sharedTopicCount: 1, savedVideoCount: countInTopic, record: record)
-                }
-            }
-        }
-
-        // Step 4-5: rank by subscriber count, build entries.
-        let entries = tally.values
-            .map { entry -> CreatorLeaderboardEntry in
-                let subs = parseSubscriberCount(entry.record.subscriberCount)
-                return CreatorLeaderboardEntry(
-                    channelId: entry.record.channelId,
-                    channelName: entry.record.name,
-                    channelIconUrl: entry.record.iconUrl
-                        .map(upscaledAvatarURL)
-                        .flatMap(URL.init(string:)),
-                    sharedTopicCount: entry.sharedTopicCount,
-                    savedVideoCount: entry.savedVideoCount,
-                    subscriberCount: subs,
-                    subscriberCountFormatted: formatSubscriberCount(entry.record.subscriberCount),
-                    isPageCreator: entry.record.channelId == channelId
+    ) -> [CreatorLeaderboardScope] {
+        let topicLookup = Dictionary(uniqueKeysWithValues: store.topics.map { ($0.id, $0.name) })
+        let scopes = store.topicChannels
+            .compactMap { topicId, channels -> CreatorLeaderboardScope? in
+                guard channels.contains(where: { $0.channelId == channelId }) else { return nil }
+                let topicName = topicLookup[topicId] ?? "Unknown"
+                let creatorIds = Set(channels.map(\.channelId))
+                return CreatorLeaderboardScope(
+                    topicId: topicId,
+                    topicName: topicName,
+                    creatorCount: creatorIds.count
                 )
             }
-            .sorted { lhs, rhs in
-                // Subscriber count is the primary signal. nil sorts last.
-                switch (lhs.subscriberCount, rhs.subscriberCount) {
-                case let (l?, r?) where l != r:
-                    return l > r
-                case (_?, nil):
-                    return true
-                case (nil, _?):
-                    return false
-                default:
-                    break
+            .sorted { $0.topicName.localizedStandardCompare($1.topicName) == .orderedAscending }
+        return scopes
+    }
+
+    /// Default scope = the topic with the most of the page creator's saved videos
+    /// (their primary topic). nil when the creator has no topics.
+    private static func makeLeaderboardDefaultTopicId(
+        forChannelId channelId: String,
+        savedByTopic: [(topic: TopicViewModel, videos: [VideoViewModel])]
+    ) -> Int64? {
+        savedByTopic
+            .max(by: { $0.videos.count < $1.videos.count })?
+            .topic.id
+    }
+
+    /// Builds the per-topic dominance leaderboard. For each topic the page creator
+    /// publishes in, computes the top 10 creators in that topic with three pre-computed
+    /// metrics: saved count, outlier count, total views. The view picks one topic +
+    /// one metric and sorts the entries on the fly — switching is instant because all
+    /// three numbers are stored on the entry.
+    ///
+    /// Per the plan (Appendix B): the framing is *library-scoped dominance*, not
+    /// global subscriber count. We rank by what the user has actually saved and how
+    /// videos in that topic perform — not by external follower counts that don't
+    /// answer "who's doing the work in this niche."
+    ///
+    /// Outlier count uses the Phase 1 OutlierAnalytics primitive against each
+    /// creator's CHANNEL median (not the topic median), so an outlier is "this video
+    /// punched above this creator's normal performance," consistent with the rest of
+    /// the app.
+    @MainActor
+    private static func makeLeaderboardByTopic(
+        forChannelId channelId: String,
+        in store: OrganizerStore
+    ) -> [Int64: [CreatorLeaderboardEntry]] {
+        // Find topics the page creator publishes in.
+        let scopeTopicIds = store.topicChannels
+            .filter { _, channels in channels.contains { $0.channelId == channelId } }
+            .map { $0.key }
+        guard !scopeTopicIds.isEmpty else { return [:] }
+
+        // Pre-compute each candidate creator's channel median, cached so we don't
+        // walk their full video list repeatedly. Built lazily as we encounter
+        // creators across the scope topics.
+        var medianCache: [String: Int] = [:]
+
+        var result: [Int64: [CreatorLeaderboardEntry]] = [:]
+        for topicId in scopeTopicIds {
+            let topicVideos = store.videosForTopicIncludingSubtopics(topicId)
+
+            // Group this topic's videos by channelId so we have one bucket per creator.
+            var byCreator: [String: [VideoViewModel]] = [:]
+            for video in topicVideos {
+                guard let cid = video.channelId, !cid.isEmpty else { continue }
+                byCreator[cid, default: []].append(video)
+            }
+
+            var entries: [CreatorLeaderboardEntry] = []
+            for (creatorId, videosInTopic) in byCreator {
+                guard let record = store.topicChannels[topicId]?.first(where: { $0.channelId == creatorId }) else {
+                    continue
                 }
-                // Tiebreakers: saved video count desc, then name asc.
+
+                // Lazily compute the channel median across ALL their known videos
+                // (across every topic the user has saved them in).
+                let channelMedian: Int
+                if let cached = medianCache[creatorId] {
+                    channelMedian = cached
+                } else {
+                    let allVideos = store.topics
+                        .flatMap { store.videosForTopicIncludingSubtopics($0.id) }
+                        .filter { $0.channelId == creatorId }
+                    let proxies = allVideos.map { LeaderboardOutlierProxy(video: $0) }
+                    channelMedian = OutlierAnalytics.channelMedianViews(proxies)
+                    medianCache[creatorId] = channelMedian
+                }
+
+                // Three metrics for THIS topic only.
+                let savedCount = videosInTopic.count
+
+                let outlierCount: Int
+                let totalViewsInTopic: Int
+                if channelMedian > 0 {
+                    var outlierTally = 0
+                    var viewSum = 0
+                    for video in videosInTopic {
+                        let parsedViews = video.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
+                        viewSum += parsedViews
+                        if parsedViews >= channelMedian * Int(OutlierAnalytics.defaultOutlierThreshold) {
+                            outlierTally += 1
+                        }
+                    }
+                    outlierCount = outlierTally
+                    totalViewsInTopic = viewSum
+                } else {
+                    outlierCount = 0
+                    totalViewsInTopic = videosInTopic.reduce(0) { acc, v in
+                        acc + (v.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0)
+                    }
+                }
+
+                entries.append(CreatorLeaderboardEntry(
+                    channelId: creatorId,
+                    channelName: record.name,
+                    channelIconUrl: record.iconUrl
+                        .map(upscaledAvatarURL)
+                        .flatMap(URL.init(string:)),
+                    savedVideoCount: savedCount,
+                    outlierVideoCount: outlierCount,
+                    totalViewsInTopic: totalViewsInTopic,
+                    subscriberCountFormatted: formatSubscriberCount(record.subscriberCount),
+                    isPageCreator: creatorId == channelId
+                ))
+            }
+
+            // Sort by saved video count desc as the default storage order; the view
+            // re-sorts in-place on the (small) array when the user picks a different
+            // metric, so storage order is just a sensible default.
+            let sorted = entries.sorted { lhs, rhs in
                 if lhs.savedVideoCount != rhs.savedVideoCount {
                     return lhs.savedVideoCount > rhs.savedVideoCount
                 }
                 return lhs.channelName.localizedStandardCompare(rhs.channelName) == .orderedAscending
             }
-
-        return Array(entries.prefix(10))
+            result[topicId] = Array(sorted.prefix(10))
+        }
+        return result
     }
+}
 
-    /// Parse the channel record's subscriber count string ("1200000", "150000") to Int.
-    /// Returns nil for empty / unparseable / negative values. Strict parsing only —
-    /// no "1.2M" handling needed since the YouTube API returns raw integer strings.
-    private static func parseSubscriberCount(_ raw: String?) -> Int? {
-        guard let raw, let value = Int(raw), value > 0 else { return nil }
-        return value
+/// Tiny adapter so OutlierAnalytics.channelMedianViews can consume VideoViewModel.
+private struct LeaderboardOutlierProxy: OutlierAnalyzable {
+    let video: VideoViewModel
+    var outlierViewCount: Int? {
+        let parsed = video.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
+        return parsed > 0 ? parsed : nil
     }
+    var outlierAgeDays: Int? {
+        video.publishedAt.map { CreatorAnalytics.parseAge($0) }
+    }
+}
+
+/// Continuation of CreatorPageBuilder helpers. The leaderboard helpers above
+/// closed the main enum scope; the remaining helpers (playlists, topic share,
+/// monthly cadence, etc.) live in this extension.
+extension CreatorPageBuilder {
 
     @MainActor
     private static func makePlaylists(

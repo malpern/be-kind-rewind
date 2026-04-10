@@ -40,6 +40,40 @@ struct CreatorDetailView: View {
         var symbolName: String { self == .allTime ? "star" : "clock" }
     }
 
+    /// Leaderboard topic scope. Defaults to the page creator's primary topic but the
+    /// user can flip the menu to look at any other topic the creator publishes in.
+    /// Resets on navigation away (per page, not sticky across creators).
+    @State private var leaderboardScopeTopicId: Int64?
+
+    /// Leaderboard ranking metric. Sticky across navigations + app launches via
+    /// @AppStorage. The plan specifies three options ranking by what the user has
+    /// actually saved or the videos' performance — never by global subscriber count.
+    @AppStorage("creatorLeaderboardMetric") private var leaderboardMetric: LeaderboardMetric = .savedCount
+
+    enum LeaderboardMetric: String, CaseIterable, Identifiable {
+        case savedCount
+        case outlierCount
+        case totalViews
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .savedCount: return "Saved"
+            case .outlierCount: return "Outliers"
+            case .totalViews: return "Views"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .savedCount: return "tray.full"
+            case .outlierCount: return "arrow.up.right"
+            case .totalViews: return "eye"
+            }
+        }
+    }
+
     /// Per-creator search query. Local to the page, resets on navigation away. Filters
     /// the All Videos table/grid by case-insensitive title substring. Distinct from the
     /// main app search (which spans the whole library) — this only narrows the videos
@@ -94,6 +128,10 @@ struct CreatorDetailView: View {
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
             notesDraft = page.notes ?? ""
+            // Reset leaderboard scope to the page creator's primary topic on every
+            // navigation. The user can flip the picker to look at other topics, but
+            // navigating to a new creator should always start at THEIR primary topic.
+            leaderboardScopeTopicId = page.leaderboardDefaultTopicId
             // Kick off Claude theme classification + about generation in the background
             // if the toggle is on and the cache is empty. The store inserts this channel
             // into classifyingThemeChannels, which we observe below to rebuild the page
@@ -1376,23 +1414,27 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private var leaderboardSection: some View {
-        if !page.leaderboardEntries.isEmpty {
+        let entries = currentLeaderboardEntries
+        if !entries.isEmpty, let scope = currentLeaderboardScope {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("Top creators in this niche")
                         .font(.title3.weight(.semibold))
                     Spacer()
-                    Text("ranked by subscribers · across \(sharedTopicsRangeText) shared with this creator")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    leaderboardScopePicker
+                    leaderboardMetricPicker
                 }
 
+                Text("\(scope.creatorCount) creators publish \(scope.topicName) videos in your library — ranked by \(metricDescription)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 2)
+
                 VStack(spacing: 0) {
-                    ForEach(Array(page.leaderboardEntries.enumerated()), id: \.element.id) { index, entry in
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         leaderboardRow(rank: index + 1, entry: entry)
-                        if index < page.leaderboardEntries.count - 1 {
-                            Divider()
-                                .padding(.leading, 56)
+                        if index < entries.count - 1 {
+                            Divider().padding(.leading, 56)
                         }
                     }
                 }
@@ -1408,18 +1450,90 @@ struct CreatorDetailView: View {
         }
     }
 
-    private var sharedTopicsRangeText: String {
-        let counts = page.leaderboardEntries.map(\.sharedTopicCount)
-        let max = counts.max() ?? 0
-        if max == 1 {
-            return "1 topic"
+    /// The active scope object — looks up the chosen topicId in the page's scope list.
+    private var currentLeaderboardScope: CreatorLeaderboardScope? {
+        guard let topicId = leaderboardScopeTopicId ?? page.leaderboardDefaultTopicId else {
+            return nil
         }
-        return "up to \(max) topics"
+        return page.leaderboardScopes.first(where: { $0.topicId == topicId })
+    }
+
+    /// Entries for the current scope, re-sorted by the selected metric. Both data
+    /// pieces are pre-computed in the builder so this is a free in-memory sort.
+    private var currentLeaderboardEntries: [CreatorLeaderboardEntry] {
+        guard let topicId = leaderboardScopeTopicId ?? page.leaderboardDefaultTopicId,
+              let raw = page.leaderboardByTopic[topicId] else {
+            return []
+        }
+        return raw.sorted { lhs, rhs in
+            switch leaderboardMetric {
+            case .savedCount:
+                if lhs.savedVideoCount != rhs.savedVideoCount {
+                    return lhs.savedVideoCount > rhs.savedVideoCount
+                }
+            case .outlierCount:
+                if lhs.outlierVideoCount != rhs.outlierVideoCount {
+                    return lhs.outlierVideoCount > rhs.outlierVideoCount
+                }
+            case .totalViews:
+                if lhs.totalViewsInTopic != rhs.totalViewsInTopic {
+                    return lhs.totalViewsInTopic > rhs.totalViewsInTopic
+                }
+            }
+            return lhs.channelName.localizedStandardCompare(rhs.channelName) == .orderedAscending
+        }
+    }
+
+    private var metricDescription: String {
+        switch leaderboardMetric {
+        case .savedCount: return "saved video count"
+        case .outlierCount: return "outlier count (videos punching above their channel median)"
+        case .totalViews: return "total views in this topic"
+        }
+    }
+
+    /// Topic scope picker — Menu of every topic the page creator publishes in.
+    @ViewBuilder
+    private var leaderboardScopePicker: some View {
+        if page.leaderboardScopes.count > 1 {
+            Menu {
+                ForEach(page.leaderboardScopes) { scope in
+                    Button {
+                        leaderboardScopeTopicId = scope.topicId
+                    } label: {
+                        if scope.topicId == (leaderboardScopeTopicId ?? page.leaderboardDefaultTopicId) {
+                            Label(scope.topicName, systemImage: "checkmark")
+                        } else {
+                            Text(scope.topicName)
+                        }
+                    }
+                }
+            } label: {
+                Label(currentLeaderboardScope?.topicName ?? "Topic", systemImage: "rectangle.stack")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Pick which topic to compute the leaderboard against")
+        }
+    }
+
+    /// Metric picker — segmented Picker for [Saved | Outliers | Views].
+    private var leaderboardMetricPicker: some View {
+        Picker("", selection: $leaderboardMetric) {
+            ForEach(LeaderboardMetric.allCases) { metric in
+                Image(systemName: metric.symbolName)
+                    .help(metric.label)
+                    .tag(metric)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 110)
+        .help("Rank by saved video count, outlier count, or total views")
     }
 
     private func leaderboardRow(rank: Int, entry: CreatorLeaderboardEntry) -> some View {
         Button {
-            // Don't navigate to self — just no-op (already viewing this page).
             if !entry.isPageCreator {
                 store.openCreatorDetail(channelId: entry.channelId)
             }
@@ -1456,14 +1570,13 @@ struct CreatorDetailView: View {
 
                 Spacer(minLength: 0)
 
-                // Subscriber count is the prominent right-aligned figure — the
-                // user wants to see "who dominates" at a glance, and external
-                // subscriber count is the most honest dominance signal.
+                // Prominent right-aligned figure: whatever metric the user picked.
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(entry.subscriberCountFormatted ?? "—")
+                    Text(metricValueText(for: entry))
                         .font(.body.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(entry.subscriberCount == nil ? .tertiary : .primary)
-                    Text("subscribers")
+                        .foregroundStyle(.primary)
+                        .contentTransition(.numericText())
+                    Text(metricUnitText)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -1473,7 +1586,6 @@ struct CreatorDetailView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 } else {
-                    // Same horizontal slot, no chevron when this row is the page creator.
                     Color.clear.frame(width: 7)
                 }
             }
@@ -1490,6 +1602,28 @@ struct CreatorDetailView: View {
         .help(entry.isPageCreator
               ? "This is the creator whose page you're viewing"
               : "Open \(entry.channelName)'s creator page")
+    }
+
+    /// The big right-aligned figure for one row, formatted for the active metric.
+    private func metricValueText(for entry: CreatorLeaderboardEntry) -> String {
+        switch leaderboardMetric {
+        case .savedCount:
+            return "\(entry.savedVideoCount)"
+        case .outlierCount:
+            return "\(entry.outlierVideoCount)"
+        case .totalViews:
+            return formatCompact(entry.totalViewsInTopic)
+        }
+    }
+
+    /// Caption beneath the prominent figure (e.g. "saved · in Mech Kbds").
+    private var metricUnitText: String {
+        let topicName = currentLeaderboardScope?.topicName ?? ""
+        switch leaderboardMetric {
+        case .savedCount: return "saved · in \(topicName)"
+        case .outlierCount: return "outliers · in \(topicName)"
+        case .totalViews: return "views · in \(topicName)"
+        }
     }
 
     @ViewBuilder
@@ -1522,15 +1656,30 @@ struct CreatorDetailView: View {
     }
 
     private func leaderboardSubtitle(for entry: CreatorLeaderboardEntry) -> String {
-        // Sub count is the prominent figure (right side); subtitle line shows the
-        // secondary library-bound signals: how many of THIS user's videos by this
-        // creator exist in shared topics, plus the topic overlap.
+        // Subtitle line shows supporting context — the metrics OTHER than the
+        // currently-prominent one, plus subscriber count for external scale.
         var parts: [String] = []
-        let topicLabel = entry.sharedTopicCount == 1 ? "1 shared topic" : "\(entry.sharedTopicCount) shared topics"
-        parts.append(topicLabel)
-        if entry.savedVideoCount > 0 {
-            let savedLabel = entry.savedVideoCount == 1 ? "1 saved" : "\(entry.savedVideoCount) saved"
-            parts.append(savedLabel)
+        switch leaderboardMetric {
+        case .savedCount:
+            if entry.outlierVideoCount > 0 {
+                parts.append("\(entry.outlierVideoCount) outlier\(entry.outlierVideoCount == 1 ? "" : "s")")
+            }
+            if entry.totalViewsInTopic > 0 {
+                parts.append("\(formatCompact(entry.totalViewsInTopic)) views")
+            }
+        case .outlierCount:
+            parts.append("\(entry.savedVideoCount) saved")
+            if entry.totalViewsInTopic > 0 {
+                parts.append("\(formatCompact(entry.totalViewsInTopic)) views")
+            }
+        case .totalViews:
+            parts.append("\(entry.savedVideoCount) saved")
+            if entry.outlierVideoCount > 0 {
+                parts.append("\(entry.outlierVideoCount) outlier\(entry.outlierVideoCount == 1 ? "" : "s")")
+            }
+        }
+        if let subs = entry.subscriberCountFormatted {
+            parts.append(subs)
         }
         return parts.joined(separator: " · ")
     }

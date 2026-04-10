@@ -235,7 +235,7 @@ struct CreatorPageBuilderTests {
     }
 
     @MainActor
-    @Test("makePage builds a leaderboard including the page creator themselves")
+    @Test("makePage builds per-topic leaderboards including the page creator themselves")
     func leaderboardIncludesPageCreator() throws {
         try withFileBackedOrganizerFixture { fixture in
             let store = try fixture.makeOrganizerStore()
@@ -247,37 +247,52 @@ struct CreatorPageBuilderTests {
             // chan-alpha is the only creator in their topics, so the leaderboard
             // should contain exactly one entry — themselves.
             let alphaPage = CreatorPageBuilder.makePage(forChannelId: "chan-alpha", in: store)
-            #expect(alphaPage.leaderboardEntries.count == 1)
-            #expect(alphaPage.leaderboardEntries[0].channelId == "chan-alpha")
-            #expect(alphaPage.leaderboardEntries[0].isPageCreator == true)
+            // Default scope = the page creator's primary topic (the one with the most
+            // of their saved videos). For chan-alpha that's the alpha topic.
+            #expect(alphaPage.leaderboardDefaultTopicId != nil)
+            #expect(!alphaPage.leaderboardScopes.isEmpty)
+            let defaultEntries = alphaPage.leaderboardByTopic[alphaPage.leaderboardDefaultTopicId!] ?? []
+            #expect(defaultEntries.count == 1)
+            #expect(defaultEntries[0].channelId == "chan-alpha")
+            #expect(defaultEntries[0].isPageCreator == true)
         }
     }
 
     @MainActor
-    @Test("makePage leaderboard marks the page creator's row with isPageCreator")
-    func leaderboardMarksPageCreator() throws {
+    @Test("makePage leaderboard entry exposes all three pre-computed metrics")
+    func leaderboardEntryExposesAllMetrics() throws {
         try withFileBackedOrganizerFixture { fixture in
             let store = try fixture.makeOrganizerStore()
 
             let page = CreatorPageBuilder.makePage(forChannelId: "chan-alpha", in: store)
-            let selfRow = page.leaderboardEntries.first { $0.channelId == "chan-alpha" }
-            #expect(selfRow != nil)
-            #expect(selfRow?.isPageCreator == true)
-            // Other rows (if any) must NOT be marked as the page creator.
-            for entry in page.leaderboardEntries where entry.channelId != "chan-alpha" {
-                #expect(entry.isPageCreator == false)
+            guard let topicId = page.leaderboardDefaultTopicId,
+                  let entry = page.leaderboardByTopic[topicId]?.first(where: { $0.channelId == "chan-alpha" }) else {
+                Issue.record("expected at least one leaderboard entry for chan-alpha")
+                return
             }
+
+            // savedVideoCount should be the count of chan-alpha videos in the topic.
+            // chan-alpha has vid-0 and vid-1 saved across the alpha topic + subtopic.
+            #expect(entry.savedVideoCount >= 1)
+            // outlierVideoCount and totalViewsInTopic are computed from view counts.
+            // The fixture has both videos with parsed view counts (1.2M and 340K),
+            // so totalViewsInTopic should be > 0.
+            #expect(entry.totalViewsInTopic > 0)
+            // The page creator marker is set.
+            #expect(entry.isPageCreator == true)
         }
     }
 
     @MainActor
-    @Test("makePage leaderboard returns empty for an unknown channel id")
+    @Test("makePage leaderboard returns empty maps for an unknown channel id")
     func leaderboardEmptyForUnknownChannel() throws {
         try withFileBackedOrganizerFixture { fixture in
             let store = try fixture.makeOrganizerStore()
 
             let page = CreatorPageBuilder.makePage(forChannelId: "chan-does-not-exist", in: store)
-            #expect(page.leaderboardEntries.isEmpty)
+            #expect(page.leaderboardScopes.isEmpty)
+            #expect(page.leaderboardByTopic.isEmpty)
+            #expect(page.leaderboardDefaultTopicId == nil)
         }
     }
 
