@@ -191,7 +191,10 @@ struct GridSectionBuilder {
 
         var filteredSections: [TopicSection] = []
         for section in sections {
-            if query.matches(fields: [section.topicName]) {
+            // Section-name shortcut only applies when there's no `from:` operator —
+            // a from: filter must always reach the per-video check so non-matching
+            // creators in a matching topic are still filtered out.
+            if query.fromCreator == nil, query.matches(fields: [section.topicName]) {
                 filteredSections.append(
                     TopicSection(
                         topicId: section.topicId,
@@ -206,7 +209,10 @@ struct GridSectionBuilder {
             }
 
             let matchingVideos = section.videos.filter { video in
-                query.matches(fields: [video.title, video.channelName ?? "", video.topicName ?? section.topicName])
+                query.matches(
+                    fields: [video.title, video.channelName ?? "", video.topicName ?? section.topicName],
+                    channelName: video.channelName
+                )
             }
             if !matchingVideos.isEmpty {
                 filteredSections.append(
