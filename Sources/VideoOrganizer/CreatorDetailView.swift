@@ -26,6 +26,7 @@ struct CreatorDetailView: View {
                 whatsNewSection
                 essentialsSection
                 allVideosSection
+                playlistsSection
             }
             .padding(.horizontal, 24)
             .padding(.top, 16)
@@ -466,6 +467,67 @@ struct CreatorDetailView: View {
         guard page.channelMedianViews > 0 else { return "Outlier" }
         let multiplier = String(format: "%.1f×", card.outlierScore)
         return "\(multiplier) channel median (\(formatCompact(page.channelMedianViews)) views)"
+    }
+
+    // MARK: - In your playlists
+
+    @ViewBuilder
+    private var playlistsSection: some View {
+        if !page.playlists.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("In your playlists")
+                    .font(.title3.weight(.semibold))
+
+                VStack(spacing: 0) {
+                    ForEach(Array(page.playlists.enumerated()), id: \.element.id) { index, entry in
+                        playlistRow(entry)
+                        if index < page.playlists.count - 1 {
+                            Divider()
+                                .padding(.leading, 36)
+                        }
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.background.secondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(.quaternary, lineWidth: 0.5)
+                )
+            }
+        }
+    }
+
+    private func playlistRow(_ entry: CreatorPlaylistEntry) -> some View {
+        Button {
+            store.applyPlaylistFilter(entry.playlist)
+            store.popToRootDetail()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "music.note.list")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.playlist.title)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                    Text("\(entry.creatorVideoCount) video\(entry.creatorVideoCount == 1 ? "" : "s") from this creator")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Filter the topic grid to videos in \(entry.playlist.title)")
     }
 }
 
