@@ -1,12 +1,82 @@
 import Foundation
 
 extension OrganizerStore {
+    /// Looks up a creator detail view model by stable channel ID. Preferred entry point —
+    /// `channelId` is the canonical identifier and survives channel renames.
+    func creatorDetail(channelId: String) -> CreatorDetailViewModel {
+        CreatorAnalytics.makeCreatorDetail(forChannelId: channelId, in: self)
+    }
+
+    /// Legacy entry point keyed by display name. Retained for back-compat with the existing
+    /// inspector flow; new code should prefer `creatorDetail(channelId:)`. Will be removed
+    /// once the inspector creator panel is retired by the creator detail page.
     func creatorDetail(channelName: String) -> CreatorDetailViewModel {
         CreatorAnalytics.makeCreatorDetail(for: channelName, in: self)
     }
 }
 
 enum CreatorAnalytics {
+    /// Builds a creator detail view model keyed by stable channel ID. Filters every topic's
+    /// videos by `channelId == id` and resolves the display name from the matched videos
+    /// (or from the channel record cache if no videos are found). This is the canonical
+    /// entry point for the creator detail page.
+    @MainActor
+    static func makeCreatorDetail(forChannelId channelId: String, in store: OrganizerStore) -> CreatorDetailViewModel {
+        var videosByTopic: [(topicName: String, videos: [VideoViewModel])] = []
+        var totalViews = 0
+        var oldestDays = 0
+        var newestDays = Int.max
+        var recentCount = 0
+        var resolvedName: String?
+
+        for topic in store.topics {
+            let videos = store.videosForTopicIncludingSubtopics(topic.id).filter { $0.channelId == channelId }
+            if !videos.isEmpty {
+                videosByTopic.append((topicName: topic.name, videos: videos))
+                if resolvedName == nil {
+                    resolvedName = videos.first?.channelName
+                }
+                for video in videos {
+                    if let viewCount = video.viewCount {
+                        totalViews += parseViewCount(viewCount)
+                    }
+                    if let publishedAt = video.publishedAt {
+                        let days = parseAge(publishedAt)
+                        oldestDays = max(oldestDays, days)
+                        newestDays = min(newestDays, days)
+                        if days <= 30 {
+                            recentCount += 1
+                        }
+                    }
+                }
+            }
+        }
+
+        let channelRecord = store.topicChannels.values
+            .flatMap { $0 }
+            .first(where: { $0.channelId == channelId })
+        let channelIconURL = videosByTopic.flatMap(\.videos).first(where: { $0.channelIconUrl != nil })?.channelIconUrl
+            ?? channelRecord?.iconUrl
+        let totalCount = videosByTopic.reduce(0) { $0 + $1.videos.count }
+
+        return CreatorDetailViewModel(
+            channelName: resolvedName ?? channelRecord?.name ?? "Unknown",
+            channelIconUrl: channelIconURL,
+            channelIconData: channelRecord?.iconData,
+            totalVideoCount: totalCount,
+            totalViews: totalViews,
+            newestAge: newestDays == Int.max ? nil : formatAge(newestDays),
+            oldestAge: oldestDays == 0 ? nil : formatAge(oldestDays),
+            recentCount: recentCount,
+            subscriberCount: channelRecord?.subscriberCount.flatMap(Int.init),
+            totalUploads: channelRecord?.videoCountTotal,
+            videosByTopic: videosByTopic
+        )
+    }
+
+    /// Legacy name-keyed builder. Filters by `channelName == name`, which is fragile under
+    /// channel renames and name collisions. Retained for back-compat with the existing
+    /// inspector creator panel; new code should call `makeCreatorDetail(forChannelId:in:)`.
     @MainActor
     static func makeCreatorDetail(for channelName: String, in store: OrganizerStore) -> CreatorDetailViewModel {
         var videosByTopic: [(topicName: String, videos: [VideoViewModel])] = []
