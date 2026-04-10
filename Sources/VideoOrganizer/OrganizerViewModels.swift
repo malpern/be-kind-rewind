@@ -354,6 +354,8 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
 // MARK: - Creator Detail
 
 struct CreatorDetailViewModel {
+    let channelId: String?         // canonical key when known; nil for the legacy
+                                   // name-keyed builder when no video exposes a channelId
     let channelName: String
     let channelIconUrl: String?
     let channelIconData: Data?

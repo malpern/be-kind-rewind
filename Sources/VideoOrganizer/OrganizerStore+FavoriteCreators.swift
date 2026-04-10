@@ -56,4 +56,19 @@ extension OrganizerStore {
     func isCreatorFavorited(_ channelId: String) -> Bool {
         favoriteCreators.contains(where: { $0.channelId == channelId })
     }
+
+    /// Push the creator detail page onto the detail-column NavigationStack. Idempotent —
+    /// if the topmost route is already this creator, the call is a no-op so repeated
+    /// clicks don't stack the same page.
+    func openCreatorDetail(channelId: String) {
+        if case .creator(let topId) = detailPath.last, topId == channelId {
+            return
+        }
+        detailPath.append(.creator(channelId: channelId))
+    }
+
+    /// Clear the entire detail-column navigation path back to the topic grid root.
+    func popToRootDetail() {
+        detailPath.removeAll()
+    }
 }

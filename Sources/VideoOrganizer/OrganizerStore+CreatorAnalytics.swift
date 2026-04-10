@@ -60,6 +60,7 @@ enum CreatorAnalytics {
         let totalCount = videosByTopic.reduce(0) { $0 + $1.videos.count }
 
         return CreatorDetailViewModel(
+            channelId: channelId,
             channelName: resolvedName ?? channelRecord?.name ?? "Unknown",
             channelIconUrl: channelIconURL,
             channelIconData: channelRecord?.iconData,
@@ -113,6 +114,7 @@ enum CreatorAnalytics {
         }
 
         return CreatorDetailViewModel(
+            channelId: channelId,
             channelName: channelName,
             channelIconUrl: channelIconURL,
             channelIconData: channelRecord?.iconData,

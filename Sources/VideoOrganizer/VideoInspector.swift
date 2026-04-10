@@ -335,11 +335,25 @@ struct VideoInspector: View {
                 .padding(.top, 20)
 
                 VStack(alignment: .leading, spacing: 16) {
-                    // Name + tier
+                    // Name + tier — name doubles as the entry point for the new
+                    // creator detail page when we know the channelId.
                     VStack(spacing: 4) {
-                        Text(detail.channelName)
-                            .font(.title2.weight(.semibold))
-                            .textSelection(.enabled)
+                        if let channelId = detail.channelId {
+                            Button {
+                                store.openCreatorDetail(channelId: channelId)
+                            } label: {
+                                Text(detail.channelName)
+                                    .font(.title2.weight(.semibold))
+                                    .underline()
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open creator detail page")
+                            .accessibilityIdentifier("openCreatorDetailFromInspector")
+                        } else {
+                            Text(detail.channelName)
+                                .font(.title2.weight(.semibold))
+                                .textSelection(.enabled)
+                        }
 
                         if let subs = detail.formattedSubscribers, let tier = detail.subscriberTier {
                             Text("\(subs) · \(tier)")

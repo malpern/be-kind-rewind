@@ -1,22 +1,10 @@
 import SwiftUI
 
-/// Identifies a deep-link destination inside the detail-column NavigationStack. Phase 1
-/// only supports the creator detail route; future phases will add topic detail and library
-/// insights routes.
-enum DetailRoute: Hashable {
-    case creator(channelId: String)
-}
-
 /// Root three-column layout: topic sidebar, collection grid, and optional inspector.
 struct OrganizerView: View {
     @Bindable var store: OrganizerStore
     let thumbnailCache: ThumbnailCache
     @Bindable var displaySettings: DisplaySettings
-
-    /// NavigationStack push path for the detail column. Empty when the grid is the visible
-    /// content; non-empty when a creator (or future destination) detail page is pushed on
-    /// top of the grid. Drives auto-collapse of the sidebar via `columnVisibility`.
-    @State private var detailPath: [DetailRoute] = []
 
     /// Bound directly to `NavigationSplitView(columnVisibility:)`. Auto-collapses to
     /// `.detailOnly` when a detail route is pushed (Photos.app / Music.app pattern) and
@@ -29,7 +17,7 @@ struct OrganizerView: View {
             TopicSidebar(store: store, displaySettings: displaySettings)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         } detail: {
-            NavigationStack(path: $detailPath) {
+            NavigationStack(path: $store.detailPath) {
                 CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                     .navigationTitle("")
                     .safeAreaInset(edge: .top, spacing: 0) {
@@ -75,14 +63,11 @@ struct OrganizerView: View {
                     .navigationDestination(for: DetailRoute.self) { route in
                         switch route {
                         case .creator(let channelId):
-                            // Real CreatorDetailView arrives in commit #6. Phase 1
-                            // commit #5 lands only the navigation primitives so the
-                            // structural risk is isolated.
-                            CreatorDetailPagePlaceholder(channelId: channelId)
+                            CreatorDetailView(store: store, channelId: channelId)
                         }
                     }
             }
-            .onChange(of: detailPath) { _, newPath in
+            .onChange(of: store.detailPath) { _, newPath in
                 // Auto-collapse the sidebar when entering a detail route, restore when
                 // popping back to the grid root. The user's manual toggles via ⌘0 still
                 // work — we only flip on path transitions, not on every render.

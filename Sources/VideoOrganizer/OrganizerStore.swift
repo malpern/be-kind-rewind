@@ -35,6 +35,11 @@ final class OrganizerStore {
     var seenHistoryCount = 0
     var excludedCreators: [ExcludedChannelRecord] = []
     var favoriteCreators: [FavoriteChannelRecord] = []
+    /// Push path for the detail-column NavigationStack. Empty when the topic grid is the
+    /// visible content; non-empty when a creator (or future destination) detail page is
+    /// pushed on top of the grid. Mutated by `openCreatorDetail(channelId:)` and the
+    /// NavigationStack back button.
+    var detailPath: [DetailRoute] = []
     var browserExecutorReady = false
     var browserExecutorStatusMessage = "Checking browser executor status…"
     var topicScrollProgress = 0.0
