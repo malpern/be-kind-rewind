@@ -20,7 +20,9 @@ struct CreatorDetailView: View {
         KeyPathComparator(\CreatorVideoCard.ageDays, order: .forward)
     ]
     @State private var allVideosSelection: CreatorVideoCard.ID?
-    @State private var allVideosViewMode: AllVideosViewMode = .table
+    /// View-mode preference is sticky across navigations and app launches via UserDefaults.
+    /// Same enum used by both creator-page surfaces and any future per-section toggle.
+    @AppStorage("creatorAllVideosViewMode") private var allVideosViewMode: AllVideosViewMode = .table
 
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
         case table
@@ -48,18 +50,11 @@ struct CreatorDetailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background)
-        // Deliberately no navigationTitle or navigationSubtitle here — the page body
-        // owns the title display via the largeTitle in the identity card. Mac App
-        // Store and Apple Podcasts both follow this pattern: the toolbar has the
-        // back button + actions, and the entity name lives in the page header only.
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                pinButton
-                filterButton
-                excludeButton
-                openInYouTubeButton
-            }
-        }
+        // Deliberately no navigationTitle / navigationSubtitle / toolbar action items
+        // here. The page body owns the title via the largeTitle in the identity card,
+        // and the action buttons live inline in the header next to the avatar
+        // (Apple Music artist hero pattern). Mac App Store does the same thing with
+        // its "Get" button — actions adjacent to the entity, not in the toolbar.
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
         }
@@ -70,69 +65,6 @@ struct CreatorDetailView: View {
         .onChange(of: store.excludedCreators.map(\.channelId)) { _, _ in
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
         }
-    }
-
-    // MARK: - Toolbar buttons
-
-    @ViewBuilder
-    private var pinButton: some View {
-        Button {
-            store.toggleFavoriteCreator(
-                channelId: channelId,
-                channelName: page.channelName,
-                iconUrl: page.avatarUrl?.absoluteString
-            )
-        } label: {
-            Label(page.isFavorite ? "Unpin" : "Pin", systemImage: page.isFavorite ? "pin.fill" : "pin")
-        }
-        .help(page.isFavorite ? "Remove from favorite creators" : "Pin as favorite creator")
-        .accessibilityIdentifier("creatorPinButton")
-    }
-
-    @ViewBuilder
-    private var filterButton: some View {
-        Button {
-            // Pop back to the topic grid and apply this creator as a channel filter.
-            // Use the existing navigateToCreator helper which finds a topic the creator
-            // appears in and selects it before applying the filter.
-            store.popToRootDetail()
-            _ = store.navigateToCreator(channelId: channelId, channelName: page.channelName)
-        } label: {
-            Label("Filter saved", systemImage: "line.3.horizontal.decrease.circle")
-        }
-        .help("Filter the topic grid to this creator's saved videos")
-        .accessibilityIdentifier("creatorFilterButton")
-    }
-
-    @ViewBuilder
-    private var excludeButton: some View {
-        Button {
-            if page.isExcluded {
-                store.restoreExcludedCreator(channelId: channelId)
-            } else {
-                store.excludeCreatorFromWatch(
-                    channelId: channelId,
-                    channelName: page.channelName,
-                    channelIconUrl: page.avatarUrl?.absoluteString
-                )
-            }
-        } label: {
-            Label(
-                page.isExcluded ? "Restore" : "Exclude",
-                systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
-            )
-        }
-        .help(page.isExcluded ? "Restore this creator to Watch discovery" : "Hide this creator from Watch discovery")
-        .accessibilityIdentifier("creatorExcludeButton")
-    }
-
-    @ViewBuilder
-    private var openInYouTubeButton: some View {
-        Link(destination: page.youtubeURL) {
-            Label("YouTube", systemImage: "arrow.up.right.square")
-        }
-        .help("Open this channel on YouTube")
-        .accessibilityIdentifier("creatorYouTubeButton")
     }
 
     // MARK: - Identity card
@@ -168,6 +100,8 @@ struct CreatorDetailView: View {
 
                     tierLine
                     statsLine
+                    headerActionButtons
+                        .padding(.top, 8)
                 }
                 .padding(.top, 4)
 
@@ -179,6 +113,72 @@ struct CreatorDetailView: View {
             }
 
             Divider()
+        }
+    }
+
+    /// Inline action buttons that live in the header next to the avatar/title, the
+    /// way Apple Music's artist hero (Play / Shuffle / ...) and the Mac App Store
+    /// product page (Get button) put primary actions adjacent to the entity. macOS
+    /// users grab these faster than reaching for the toolbar.
+    @ViewBuilder
+    private var headerActionButtons: some View {
+        HStack(spacing: 8) {
+            Button {
+                store.toggleFavoriteCreator(
+                    channelId: channelId,
+                    channelName: page.channelName,
+                    iconUrl: page.avatarUrl?.absoluteString
+                )
+            } label: {
+                Label(
+                    page.isFavorite ? "Pinned" : "Pin",
+                    systemImage: page.isFavorite ? "pin.fill" : "pin"
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .help(page.isFavorite ? "Remove from favorite creators" : "Pin as favorite creator")
+            .accessibilityIdentifier("creatorHeaderPinButton")
+
+            Button {
+                store.popToRootDetail()
+                _ = store.navigateToCreator(channelId: channelId, channelName: page.channelName)
+            } label: {
+                Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .help("Filter the topic grid to this creator's saved videos")
+            .accessibilityIdentifier("creatorHeaderFilterButton")
+
+            Button(role: page.isExcluded ? nil : .destructive) {
+                if page.isExcluded {
+                    store.restoreExcludedCreator(channelId: channelId)
+                } else {
+                    store.excludeCreatorFromWatch(
+                        channelId: channelId,
+                        channelName: page.channelName,
+                        channelIconUrl: page.avatarUrl?.absoluteString
+                    )
+                }
+            } label: {
+                Label(
+                    page.isExcluded ? "Excluded" : "Exclude",
+                    systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .help(page.isExcluded ? "Restore this creator to Watch discovery" : "Hide this creator from Watch discovery")
+            .accessibilityIdentifier("creatorHeaderExcludeButton")
+
+            Link(destination: page.youtubeURL) {
+                Label("YouTube", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .help("Open this channel on YouTube")
+            .accessibilityIdentifier("creatorHeaderYouTubeButton")
         }
     }
 
@@ -295,38 +295,45 @@ struct CreatorDetailView: View {
     }
 
     private func whatsNewRow(_ card: CreatorVideoCard) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            thumbnail(for: card)
-                .frame(width: 160, height: 90)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(card.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                metadataLine(for: card)
-            }
-
-            Spacer(minLength: 0)
-
-            if let url = card.youtubeUrl {
-                Link(destination: url) {
-                    Label("Play", systemImage: "play.fill")
+        Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    thumbnail(for: card)
+                        .frame(width: 160, height: 90)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    // Visual play affordance — the wrapping Link handles the actual click,
+                    // so this is just an iconographic hint that the row is playable.
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 36, weight: .semibold))
+                        .foregroundStyle(.white, .black.opacity(0.5))
+                        .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-                .help("Open this video on YouTube")
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(card.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    metadataLine(for: card)
+                }
+
+                Spacer(minLength: 0)
             }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.background.secondary)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(.quaternary, lineWidth: 0.5)
+            )
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.background.secondary)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.quaternary, lineWidth: 0.5)
-        )
+        .buttonStyle(.plain)
+        .help("Open this video on YouTube")
         .contextMenu {
             videoContextMenuItems(for: [card])
         }
@@ -498,7 +505,7 @@ struct CreatorDetailView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Picker("View as", selection: $allVideosViewMode) {
+                    Picker("", selection: $allVideosViewMode) {
                         ForEach(AllVideosViewMode.allCases) { mode in
                             Image(systemName: mode.symbolName)
                                 .help(mode.label)
@@ -506,6 +513,7 @@ struct CreatorDetailView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .labelsHidden()
                     .frame(width: 88)
                     .help("Switch between table and grid views")
                 }
