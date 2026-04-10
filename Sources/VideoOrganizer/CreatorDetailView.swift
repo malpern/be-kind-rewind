@@ -90,6 +90,16 @@ struct CreatorDetailView: View {
     @State private var notesDraft: String = ""
     @FocusState private var notesFocused: Bool
 
+    /// Environment hook for opening the standard macOS Settings scene from in-app
+    /// affordances (e.g., the "Manage excluded creators" link in the identity menu).
+    @Environment(\.openSettings) private var openSettings
+
+    /// Drives the entrance animation for the Niches & cadence charts. Starts at 0
+    /// and ramps to 1 on first appear (and on every channel switch) so the bars
+    /// grow into place instead of popping in. Used as a multiplier on every bar's
+    /// value mark — when the value is 0 the bar has no height/width.
+    @State private var chartsAnimationProgress: Double = 0
+
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
         case table
         case grid
@@ -99,24 +109,35 @@ struct CreatorDetailView: View {
         var symbolName: String { self == .table ? "tablecells" : "square.grid.2x2" }
     }
 
+    /// Section anchors for ⌘1–⌘0 jump shortcuts. The order matches the visual order
+    /// of sections in the page body and the keyboard shortcuts in `sectionShortcuts`.
+    /// `notes` is the 10th section so it gets ⌘0 (matches the macOS convention of
+    /// ⌘0 = "tenth" in tab/window pickers).
+    enum SectionAnchor: Hashable {
+        case identity, whatsNew, hits, themes, allVideos, byTheme, playlists, niches, leaderboard, notes
+    }
+
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
-                identityCard
-                whatsNewSection
-                hitsSection
-                themeCapsulesSection
-                allVideosSection
-                byThemeSection
-                playlistsSection
-                nichesAndCadenceSection
-                leaderboardSection
-                notesSection
-                channelInformationSection
+        ScrollViewReader { scroller in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 24) {
+                    identityCard.id(SectionAnchor.identity)
+                    whatsNewSection.id(SectionAnchor.whatsNew)
+                    hitsSection.id(SectionAnchor.hits)
+                    themeCapsulesSection.id(SectionAnchor.themes)
+                    allVideosSection.id(SectionAnchor.allVideos)
+                    byThemeSection.id(SectionAnchor.byTheme)
+                    playlistsSection.id(SectionAnchor.playlists)
+                    nichesAndCadenceSection.id(SectionAnchor.niches)
+                    leaderboardSection.id(SectionAnchor.leaderboard)
+                    notesSection.id(SectionAnchor.notes)
+                    channelInformationSection
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .padding(.bottom, 32)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .padding(.bottom, 32)
+            .background(sectionShortcuts(scroller: scroller))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background)
@@ -132,6 +153,12 @@ struct CreatorDetailView: View {
             // navigation. The user can flip the picker to look at other topics, but
             // navigating to a new creator should always start at THEIR primary topic.
             leaderboardScopeTopicId = page.leaderboardDefaultTopicId
+            // Replay the chart entrance animation on every navigation. Reset to 0
+            // synchronously, then let SwiftUI animate the ramp to 1 over ~0.7s.
+            chartsAnimationProgress = 0
+            withAnimation(.easeOut(duration: 0.7).delay(0.1)) {
+                chartsAnimationProgress = 1
+            }
             // Kick off Claude theme classification + about generation in the background
             // if the toggle is on and the cache is empty. The store inserts this channel
             // into classifyingThemeChannels, which we observe below to rebuild the page
@@ -169,6 +196,42 @@ struct CreatorDetailView: View {
             } else if !wasClassifying && isClassifying {
                 // Rebuild once at the start so the loading indicator appears.
                 page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+            }
+        }
+    }
+
+    // MARK: - Section jump shortcuts (⌘1–⌘0)
+
+    /// Hidden button stack hosting ⌘1–⌘0 keyboard shortcuts. Each button scrolls
+    /// the page to its anchor via the `ScrollViewReader` proxy. We place this in
+    /// the ScrollView's `.background` so the buttons are non-interactive visually
+    /// but still respond to the key equivalents while the detail view has focus.
+    /// Tenth section (notes) gets ⌘0, matching macOS tab/window picker convention.
+    @ViewBuilder
+    private func sectionShortcuts(scroller: ScrollViewProxy) -> some View {
+        let bindings: [(String, SectionAnchor)] = [
+            ("1", .identity),
+            ("2", .whatsNew),
+            ("3", .hits),
+            ("4", .themes),
+            ("5", .allVideos),
+            ("6", .byTheme),
+            ("7", .playlists),
+            ("8", .niches),
+            ("9", .leaderboard),
+            ("0", .notes),
+        ]
+        ZStack {
+            ForEach(bindings, id: \.1) { key, anchor in
+                Button("Jump to section") {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        scroller.scrollTo(anchor, anchor: .top)
+                    }
+                }
+                .keyboardShortcut(KeyEquivalent(Character(key)), modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
             }
         }
     }
@@ -711,7 +774,9 @@ struct CreatorDetailView: View {
         }
         if card.isOutlier && page.channelMedianViews > 0 {
             let multiplier = String(format: "%.1f×", card.outlierScore)
-            parts.append("\(multiplier) channel median (\(formatCompact(page.channelMedianViews)) views)")
+            let actual = formatCompact(card.viewCountParsed)
+            let median = formatCompact(page.channelMedianViews)
+            parts.append("\(multiplier) channel median (\(actual) vs \(median) median)")
         }
         return parts.joined(separator: " · ")
     }
@@ -1076,7 +1141,9 @@ struct CreatorDetailView: View {
     private func outlierTooltip(_ card: CreatorVideoCard) -> String {
         guard page.channelMedianViews > 0 else { return "Outlier" }
         let multiplier = String(format: "%.1f×", card.outlierScore)
-        return "\(multiplier) channel median (\(formatCompact(page.channelMedianViews)) views)"
+        let actual = formatCompact(card.viewCountParsed)
+        let median = formatCompact(page.channelMedianViews)
+        return "View count is \(multiplier) this creator's median (\(actual) vs \(median) median)"
     }
 
     // MARK: - By theme (LLM-driven browse)
@@ -1265,73 +1332,90 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private var topicShareChart: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Topic share")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
                 Spacer()
-                Text("their share / library share")
+                Text("their share · library share")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
 
             if page.topicShare.isEmpty {
                 Text("No saved videos yet")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
             } else {
-                Chart(page.topicShare) { share in
-                    BarMark(
-                        x: .value("Share", share.percentage),
-                        y: .value("Topic", share.topicName)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color.accentColor.opacity(0.85), Color.accentColor],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .cornerRadius(3)
-                    .annotation(position: .trailing, alignment: .leading) {
-                        // Two numbers: their slice of the page creator's saved videos,
-                        // and their slice of the topic across all creators in library.
-                        HStack(spacing: 4) {
-                            Text(percentageString(share.percentage))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                            Text("/")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            Text(percentageString(share.shareOfVoice))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(shareOfVoiceColor(share.shareOfVoice))
-                        }
-                        .padding(.leading, 4)
-                        .help("\(share.videoCount) of this creator's saved videos · \(share.videoCount) of \(share.topicTotalSavedCount) total \(share.topicName) videos in your library (\(percentageString(share.shareOfVoice)) share of voice)")
+                // Render each topic as a labeled row with the bar beneath. This gives
+                // the topic names primary-text contrast (instead of fighting with
+                // Chart's auto-styled axis labels) and lets the user scan creator
+                // niches at a glance.
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(page.topicShare) { share in
+                        topicShareRow(share)
                     }
                 }
-                .chartXScale(domain: 0...max(1.0, page.topicShare.map(\.percentage).max() ?? 1.0))
-                .chartXAxis(.hidden)
-                .chartYAxis {
-                    AxisMarks(position: .leading) { _ in
-                        AxisValueLabel()
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .chartPlotStyle { plotArea in
-                    plotArea
-                        .background(Color.gray.opacity(0.04))
-                        .border(Color.gray.opacity(0.1), width: 0.5)
-                }
-                .frame(height: max(60, CGFloat(page.topicShare.count) * 26))
-                .animation(.easeInOut(duration: 0.35), value: page.topicShare.map(\.percentage))
                 .accessibilityLabel("Topic share for \(page.channelName)")
             }
         }
-        .frame(minWidth: 240, idealWidth: 320, alignment: .leading)
+        .frame(minWidth: 260, idealWidth: 340, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func topicShareRow(_ share: CreatorTopicShare) -> some View {
+        let domainMax = max(1.0, page.topicShare.map(\.percentage).max() ?? 1.0)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(share.topicName)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                HStack(spacing: 4) {
+                    Text(percentageString(share.percentage))
+                        .font(.callout.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .contentTransition(.numericText())
+                    Text("·")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text(percentageString(share.shareOfVoice))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(shareOfVoiceColor(share.shareOfVoice))
+                }
+                .help("\(share.videoCount) of this creator's saved videos · \(share.videoCount) of \(share.topicTotalSavedCount) total \(share.topicName) videos in your library (\(percentageString(share.shareOfVoice)) share of voice)")
+            }
+            Chart {
+                BarMark(
+                    x: .value("Share", share.percentage * chartsAnimationProgress),
+                    y: .value("Topic", share.topicName)
+                )
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [Color.accentColor.opacity(0.7), Color.accentColor],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .cornerRadius(4)
+            }
+            .chartXScale(domain: 0...domainMax)
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .chartPlotStyle { plotArea in
+                plotArea
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color.primary.opacity(0.06))
+                    )
+            }
+            .frame(height: 10)
+        }
     }
 
     /// Highlight high share-of-voice with the accent color so users can spot which
@@ -1343,64 +1427,82 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private var cadenceChart: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Videos / month (24mo)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
+        VStack(alignment: .leading, spacing: 10) {
             let totalDated = page.monthlyVideoCounts.reduce(0) { $0 + $1.count }
             let maxCount = page.monthlyVideoCounts.map(\.count).max() ?? 0
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("Videos per month")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("last 24 months")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             if totalDated == 0 {
                 Text("No dated videos available")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
             } else {
                 Chart(page.monthlyVideoCounts) { bucket in
                     BarMark(
                         x: .value("Month", bucket.month, unit: .month),
-                        y: .value("Videos", bucket.count),
-                        width: .fixed(8)
+                        yStart: .value("Start", 0),
+                        yEnd: .value("Videos", Double(bucket.count) * chartsAnimationProgress),
+                        width: .ratio(0.65)
                     )
                     .foregroundStyle(
-                        bucket.count == 0
-                        ? Color.accentColor.opacity(0.15)
-                        : Color.accentColor.opacity(0.85)
+                        LinearGradient(
+                            colors: [Color.accentColor.opacity(0.55), Color.accentColor],
+                            startPoint: .bottom,
+                            endPoint: .top
+                        )
                     )
-                    .cornerRadius(2)
+                    .cornerRadius(3)
                 }
+                .chartYScale(domain: 0...Double(max(1, maxCount)))
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .month, count: 6)) { value in
-                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2]))
-                            .foregroundStyle(.gray.opacity(0.2))
-                        AxisTick(length: 4)
-                            .foregroundStyle(.gray.opacity(0.4))
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                            .foregroundStyle(Color.primary.opacity(0.12))
+                        AxisTick(length: 3, stroke: StrokeStyle(lineWidth: 0.5))
+                            .foregroundStyle(Color.primary.opacity(0.25))
                         if value.as(Date.self) != nil {
                             AxisValueLabel(format: .dateTime.month(.abbreviated).year(.twoDigits))
-                                .font(.caption2)
+                                .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
                 .chartYAxis {
                     AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
-                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2]))
-                            .foregroundStyle(.gray.opacity(0.2))
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                            .foregroundStyle(Color.primary.opacity(0.12))
                         AxisValueLabel()
-                            .font(.caption2.monospacedDigit())
+                            .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
                 .chartPlotStyle { plotArea in
                     plotArea
-                        .background(Color.gray.opacity(0.04))
-                        .border(Color.gray.opacity(0.1), width: 0.5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.04))
+                        )
                 }
-                .frame(height: 100)
-                .animation(.easeInOut(duration: 0.35), value: page.monthlyVideoCounts.map(\.count))
+                .frame(height: 140)
                 .accessibilityLabel("Monthly upload cadence for \(page.channelName), peak \(maxCount) in a single month")
+
+                Text("\(totalDated) videos · peak \(maxCount) in a single month")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
             }
         }
-        .frame(minWidth: 240, idealWidth: 320, alignment: .leading)
+        .frame(minWidth: 280, idealWidth: 360, alignment: .leading)
     }
 
     private func percentageString(_ value: Double) -> String {
@@ -1924,6 +2026,17 @@ struct CreatorDetailView: View {
             Label(
                 page.isExcluded ? "Restore from Watch" : "Exclude from Watch",
                 systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
+            )
+        }
+
+        Button {
+            openSettings()
+        } label: {
+            Label(
+                store.excludedCreators.isEmpty
+                    ? "Manage Excluded Creators…"
+                    : "Manage Excluded Creators (\(store.excludedCreators.count))…",
+                systemImage: "person.crop.circle.badge.xmark"
             )
         }
     }
