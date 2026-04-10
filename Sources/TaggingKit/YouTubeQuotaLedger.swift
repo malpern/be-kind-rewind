@@ -3,6 +3,7 @@ import Foundation
 public enum YouTubeAPIOperation: String, Codable, Sendable, CaseIterable {
     case searchList
     case videosList
+    case channelArchiveRefresh
     case channelsListSnippet
     case channelsListContentDetails
     case channelsListStatistics
@@ -17,6 +18,8 @@ public enum YouTubeAPIOperation: String, Codable, Sendable, CaseIterable {
             return 100
         case .playlistItemsInsert, .playlistItemsDelete:
             return 50
+        case .channelArchiveRefresh:
+            return 5
         case .videosList, .channelsListSnippet, .channelsListContentDetails, .channelsListStatistics, .playlistItemsList, .unknown:
             return 1
         }
@@ -28,6 +31,8 @@ public enum YouTubeAPIOperation: String, Codable, Sendable, CaseIterable {
             return "Search discovery"
         case .videosList:
             return "Video metadata"
+        case .channelArchiveRefresh:
+            return "Channel archive refresh"
         case .channelsListSnippet:
             return "Channel thumbnails"
         case .channelsListContentDetails:
