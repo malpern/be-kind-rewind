@@ -282,16 +282,75 @@ struct CreatorDetailView: View {
         return chips
     }
 
-    // MARK: - What's new
+    // MARK: - What's new / Recent uploads
 
     @ViewBuilder
     private var whatsNewSection: some View {
-        if let latest = page.latestVideo {
+        if !page.recentVideos.isEmpty {
+            // Multiple videos in the last 14 days → grid layout, "Recent uploads" header.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    if page.recentVideos.count == 1 {
+                        Text("What's new")
+                            .font(.title3.weight(.semibold))
+                    } else {
+                        Text("Recent uploads")
+                            .font(.title3.weight(.semibold))
+                        Text("last 14 days")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if page.recentVideosTotalInWindow > page.recentVideos.count {
+                        Text("+ \(page.recentVideosTotalInWindow - page.recentVideos.count) more")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if page.recentVideos.count == 1 {
+                    // Single video — keep the wide tap-target row treatment with the
+                    // play.circle.fill overlay (more visual presence than a single grid card).
+                    whatsNewRow(page.recentVideos[0])
+                } else {
+                    // 2-5 videos — same VideoGridItem cards as the All Videos grid view,
+                    // so the visual treatment matches the rest of the app.
+                    recentUploadsGrid
+                }
+            }
+        } else if let latest = page.latestVideo {
+            // Window was empty (creator hasn't posted in the last 14 days), but we
+            // still want to surface their most recent upload as a fallback.
             VStack(alignment: .leading, spacing: 8) {
                 Text("What's new")
                     .font(.title3.weight(.semibold))
 
                 whatsNewRow(latest)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recentUploadsGrid: some View {
+        let columns = [GridItem(.adaptive(minimum: 200, maximum: 240), spacing: 12)]
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+            ForEach(page.recentVideos) { card in
+                Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
+                    VideoGridItem(
+                        video: gridModel(for: card),
+                        isSelected: false,
+                        isHovering: false,
+                        cacheDir: thumbnailCache.cacheDirURL,
+                        showMetadata: true,
+                        size: 200,
+                        highlightTerms: [],
+                        forceShowTitle: false
+                    )
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    videoContextMenuItems(for: [card])
+                }
             }
         }
     }

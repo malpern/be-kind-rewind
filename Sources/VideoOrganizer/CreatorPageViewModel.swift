@@ -37,6 +37,15 @@ struct CreatorPageViewModel {
     // What's new
     let latestVideo: CreatorVideoCard?
 
+    // Recent uploads window (last 14 days, capped at 5).
+    // - 0 in window → empty array (caller falls back to latestVideo single-row treatment)
+    // - 1 in window → one item; section header reads "What's new"
+    // - 2-5 in window → all items rendered as a grid; section header reads
+    //   "Recent uploads · last 14 days"
+    // - 6+ in window → first 5 items; caller surfaces "+ N more" affordance
+    let recentVideos: [CreatorVideoCard]
+    let recentVideosTotalInWindow: Int
+
     // Essentials (curated 6-8 by outlier score with recency weighting)
     let essentials: [CreatorVideoCard]
 
@@ -64,6 +73,70 @@ struct CreatorPageViewModel {
     let isFavorite: Bool
     let isExcluded: Bool
 
+    init(
+        channelId: String,
+        channelName: String,
+        subtitle: String?,
+        creatorTier: String?,
+        avatarData: Data?,
+        avatarUrl: URL?,
+        countryDisplayName: String?,
+        foundingYear: Int?,
+        savedVideoCount: Int,
+        watchedVideoCount: Int,
+        subscriberCountFormatted: String?,
+        lastUploadAge: String?,
+        totalViewsFormatted: String,
+        channelMedianViews: Int,
+        latestVideo: CreatorVideoCard?,
+        recentVideos: [CreatorVideoCard],
+        recentVideosTotalInWindow: Int,
+        essentials: [CreatorVideoCard],
+        allVideos: [CreatorVideoCard],
+        playlists: [CreatorPlaylistEntry],
+        topicShare: [CreatorTopicShare],
+        monthlyVideoCounts: [CreatorMonthlyCount],
+        totalUploadsKnown: Int,
+        totalUploadsReported: Int?,
+        coveragePercent: Double?,
+        channelCreatedDate: Date?,
+        lastRefreshedAt: Date?,
+        youtubeURL: URL,
+        isFavorite: Bool,
+        isExcluded: Bool
+    ) {
+        self.channelId = channelId
+        self.channelName = channelName
+        self.subtitle = subtitle
+        self.creatorTier = creatorTier
+        self.avatarData = avatarData
+        self.avatarUrl = avatarUrl
+        self.countryDisplayName = countryDisplayName
+        self.foundingYear = foundingYear
+        self.savedVideoCount = savedVideoCount
+        self.watchedVideoCount = watchedVideoCount
+        self.subscriberCountFormatted = subscriberCountFormatted
+        self.lastUploadAge = lastUploadAge
+        self.totalViewsFormatted = totalViewsFormatted
+        self.channelMedianViews = channelMedianViews
+        self.latestVideo = latestVideo
+        self.recentVideos = recentVideos
+        self.recentVideosTotalInWindow = recentVideosTotalInWindow
+        self.essentials = essentials
+        self.allVideos = allVideos
+        self.playlists = playlists
+        self.topicShare = topicShare
+        self.monthlyVideoCounts = monthlyVideoCounts
+        self.totalUploadsKnown = totalUploadsKnown
+        self.totalUploadsReported = totalUploadsReported
+        self.coveragePercent = coveragePercent
+        self.channelCreatedDate = channelCreatedDate
+        self.lastRefreshedAt = lastRefreshedAt
+        self.youtubeURL = youtubeURL
+        self.isFavorite = isFavorite
+        self.isExcluded = isExcluded
+    }
+
     static let placeholderEmpty = CreatorPageViewModel(
         channelId: "",
         channelName: "Unknown",
@@ -80,6 +153,8 @@ struct CreatorPageViewModel {
         totalViewsFormatted: "0 views",
         channelMedianViews: 0,
         latestVideo: nil,
+        recentVideos: [],
+        recentVideosTotalInWindow: 0,
         essentials: [],
         allVideos: [],
         playlists: [],
@@ -250,6 +325,14 @@ enum CreatorPageBuilder {
         // 10. Latest video = most recent by publishedAt.
         let latestVideo = allVideos.first
 
+        // 10b. Recent uploads window = last 14 days, capped at 5.
+        let recentVideosInWindow = allVideos.filter { card in
+            guard let ageDays = card.ageDays else { return false }
+            return ageDays <= 14
+        }
+        let recentVideos = Array(recentVideosInWindow.prefix(5))
+        let recentVideosTotalInWindow = recentVideosInWindow.count
+
         // 11. Header counts and totals.
         let totalViews = scoredCards.reduce(0) { $0 + $1.viewCountParsed }
         let watchedCount = savedVideosFlat.compactMap { store.seenSummary(for: $0.videoId) }.count
@@ -302,6 +385,8 @@ enum CreatorPageBuilder {
             totalViewsFormatted: formatViewTotal(totalViews),
             channelMedianViews: medianViews,
             latestVideo: latestVideo,
+            recentVideos: recentVideos,
+            recentVideosTotalInWindow: recentVideosTotalInWindow,
             essentials: essentials,
             allVideos: allVideos,
             playlists: playlists,

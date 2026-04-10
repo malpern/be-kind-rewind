@@ -201,6 +201,39 @@ struct CreatorPageBuilderTests {
         }
     }
 
+    @MainActor
+    @Test("makePage populates recentVideos for the 14-day window")
+    func recentVideosWithinWindow() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+
+            let page = CreatorPageBuilder.makePage(forChannelId: "chan-alpha", in: store)
+
+            // The fixture has vid-0 ("10 days ago") and vid-1 ("today") for chan-alpha.
+            // Both are within the 14-day window so both should appear in recentVideos.
+            #expect(page.recentVideos.count == 2)
+            #expect(page.recentVideosTotalInWindow == 2)
+            // Most recent first (sorted by ageDays asc).
+            #expect(page.recentVideos.first?.videoId == "vid-1")
+        }
+    }
+
+    @MainActor
+    @Test("recentVideos excludes a creator's videos older than 14 days")
+    func recentVideosExcludesOldUploads() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+
+            // chan-beta has vid-2 ("2 months ago"), well outside the 14-day window.
+            let page = CreatorPageBuilder.makePage(forChannelId: "chan-beta", in: store)
+
+            #expect(page.recentVideos.isEmpty)
+            #expect(page.recentVideosTotalInWindow == 0)
+            // Falls back to latestVideo for the legacy single-row treatment.
+            #expect(page.latestVideo?.videoId == "vid-2")
+        }
+    }
+
     @Test("upscaledAvatarURL bumps yt3.ggpht.com size parameters to s800")
     func upscalesYT3Avatars() {
         let small = "https://yt3.ggpht.com/ytc/AIdro_kAAAA-foo=s88-c-k-c0x00ffffff-no-rj"
