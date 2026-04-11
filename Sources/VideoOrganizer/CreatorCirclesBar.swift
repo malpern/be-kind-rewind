@@ -52,13 +52,10 @@ struct CreatorCirclesBar: View {
 
     var body: some View {
         if channels.isEmpty { EmptyView() } else {
-            VStack(spacing: 6) {
-                scrollableCircles
-                filterChip
-            }
-            .padding(.vertical, 8)
-            .padding(.horizontal, GridConstants.horizontalPadding)
-            .background(.bar)
+            scrollableCircles
+                .padding(.vertical, 8)
+                .padding(.horizontal, GridConstants.horizontalPadding)
+                .background(.bar)
         }
     }
 
@@ -308,148 +305,8 @@ struct CreatorCirclesBar: View {
         return "\(count) subscribers"
     }
 
-    // MARK: - Filter Chip
-
-    /// Active-filter preview shown below the face-pile circles when a creator
-    /// filter is active. Compact, single-insight design — one row only:
-    ///
-    ///   [avatar 32]  Channel Name             [↗ icon] [×]
-    ///                Top Theme
-    ///
-    /// One insight only — the primary theme tag from the LLM cache (or a
-    /// fallback when not classified). No stats join, no multi-theme list.
-    /// Right side: icon-only nav button (chevron-right circle) → opens the
-    /// detail page, plus the × clear button. The whole left side (avatar +
-    /// name + insight) is also a click target so the discoverability problem
-    /// stays solved without the icon button needing to advertise itself
-    /// with words.
-    @ViewBuilder
-    private var filterChip: some View {
-        if let selectedId = selectedChannelId,
-           let channel = channels.first(where: { $0.channelId == selectedId }) {
-            HStack(spacing: 10) {
-                Button {
-                    onOpenDetail?(channel.channelId)
-                } label: {
-                    HStack(alignment: .center, spacing: 12) {
-                        channelIcon(channel, size: 36)
-                            .frame(width: 36, height: 36)
-                            .clipShape(Circle())
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(channel.name)
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                            chipInsight(for: channel)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(onOpenDetail == nil)
-                .help("Open the creator page for \(channel.name)")
-                .accessibilityIdentifier("creatorFilterPreview")
-
-                if onOpenDetail != nil {
-                    Button {
-                        onOpenDetail?(channel.channelId)
-                    } label: {
-                        Image(systemName: "chevron.right.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.tint)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open the creator page for \(channel.name)")
-                    .accessibilityIdentifier("creatorFilterOpenDetail")
-                }
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        onSelect(selectedId)
-                    }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear the creator filter")
-                .accessibilityIdentifier("creatorFilterClear")
-                .padding(.trailing, 8)
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.04))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(.quaternary, lineWidth: 0.5)
-            )
-            .transition(.opacity.combined(with: .move(edge: .top)))
-        }
-    }
-
-    /// The single insight rendered below the channel name. Picks the most
-    /// distinctive thing we know about the creator and renders it as a
-    /// colored capsule echoing the theme capsule visual language used on
-    /// the creator detail page. Priority order:
-    ///
-    /// 1. Primary LLM theme — the highest-signal "what they make" answer
-    /// 2. Channel description first sentence — fallback for un-classified
-    ///    creators
-    /// 3. "N saved" count — last-resort fallback so the row never feels empty
-    @ViewBuilder
-    private func chipInsight(for channel: ChannelRecord) -> some View {
-        let themes = themeLabelsForChannel?(channel.channelId) ?? []
-        if let topTheme = themes.first {
-            Text(topTheme)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(Color.accentColor)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(
-                    Capsule().fill(Color.accentColor.opacity(0.12))
-                )
-                .overlay(
-                    Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
-                )
-        } else if let description = channel.description?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: ".")
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !description.isEmpty {
-            Text(description)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        } else {
-            let count = videoCountForChannel(channel.channelId)
-            Text("\(count) video\(count == 1 ? "" : "s") saved")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Format an absolute publish date as a short relative age, matching the
-    /// "2mo ago" / "5d ago" style used elsewhere on the creator page.
-    private func relativeAge(from date: Date) -> String {
-        let interval = Date().timeIntervalSince(date)
-        let days = Int(interval / 86_400)
-        if days <= 0 { return "today" }
-        if days == 1 { return "1d ago" }
-        if days < 30 { return "\(days)d ago" }
-        let months = days / 30
-        if months == 1 { return "1mo ago" }
-        if months < 12 { return "\(months)mo ago" }
-        let years = days / 365
-        return years == 1 ? "1y ago" : "\(years)y ago"
-    }
+    // The active-filter chip used to live here below the circles. It's now
+    // rendered at the top of the screen via OrganizerView's safeAreaInset
+    // (modeled on Mail's filter row), so the face-pile and the persistent
+    // filter chrome are decoupled.
 }

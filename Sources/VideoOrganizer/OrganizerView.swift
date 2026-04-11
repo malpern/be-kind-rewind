@@ -23,10 +23,13 @@ struct OrganizerView: View {
                 CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                     .navigationTitle("")
                     .safeAreaInset(edge: .top, spacing: 0) {
-                        if store.selectedTopicId != nil,
-                           (store.pageDisplayMode == .saved
-                            || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
-                            TopicScrollProgressBar(progress: store.topicScrollProgress)
+                        VStack(spacing: 0) {
+                            creatorFilterChip
+                            if store.selectedTopicId != nil,
+                               (store.pageDisplayMode == .saved
+                                || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
+                                TopicScrollProgressBar(progress: store.topicScrollProgress)
+                            }
                         }
                     }
                     .inspector(isPresented: $displaySettings.showInspector) {
@@ -219,6 +222,140 @@ struct OrganizerView: View {
         .pickerStyle(.segmented)
         .frame(width: 160)
         .help("Switch between saved videos and watch discovery")
+    }
+
+    /// Persistent active-creator-filter chip shown via safeAreaInset(edge: .top)
+    /// at the very top of the grid pane. Modeled on Mail's filter row chips
+    /// (Unread, VIP, etc.) — stays visible while scrolling so the user always
+    /// has both the active-filter signal and a one-click path to the
+    /// dedicated detail page.
+    ///
+    /// Single insight, single row, no labels on buttons:
+    ///
+    ///   [avatar 36] Channel Name        [Top Theme]    [↗] [×]
+    ///
+    /// Click anywhere on the left side (avatar / name / theme) → opens the
+    /// creator detail page. The chevron icon is a redundant explicit click
+    /// target. The × button clears the filter.
+    @ViewBuilder
+    private var creatorFilterChip: some View {
+        if let channelId = store.selectedChannelId,
+           let channel = creatorFilterChannelRecord(channelId: channelId) {
+            HStack(spacing: 12) {
+                Button {
+                    store.openCreatorDetail(channelId: channelId)
+                } label: {
+                    HStack(alignment: .center, spacing: 12) {
+                        creatorFilterAvatar(channel)
+                            .frame(width: 36, height: 36)
+                            .clipShape(Circle())
+                        Text(channel.name)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let topTheme = creatorFilterTopTheme(channelId: channelId) {
+                            Text(topTheme)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.accentColor)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule().fill(Color.accentColor.opacity(0.12))
+                                )
+                                .overlay(
+                                    Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
+                                )
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open the creator page for \(channel.name)")
+                .accessibilityIdentifier("creatorFilterPreview")
+
+                Button {
+                    store.openCreatorDetail(channelId: channelId)
+                } label: {
+                    Image(systemName: "chevron.right.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                }
+                .buttonStyle(.plain)
+                .help("Open the creator page for \(channel.name)")
+                .accessibilityIdentifier("creatorFilterOpenDetail")
+
+                Button {
+                    store.selectedChannelId = nil
+                    store.inspectedCreatorName = nil
+                    store.selectedVideoId = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear the creator filter")
+                .accessibilityIdentifier("creatorFilterClear")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.regularMaterial)
+            .overlay(
+                Rectangle()
+                    .frame(height: 0.5)
+                    .foregroundStyle(.quaternary),
+                alignment: .bottom
+            )
+        }
+    }
+
+    /// O(1) lookup of a channel record by id from the topic-channels cache
+    /// the store already maintains. Avoids hitting SQLite from a view body.
+    private func creatorFilterChannelRecord(channelId: String) -> ChannelRecord? {
+        for channels in store.topicChannels.values {
+            if let match = channels.first(where: { $0.channelId == channelId }) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// Top LLM theme label for a creator from the creator_themes cache.
+    /// Returns nil when the creator hasn't been classified yet.
+    private func creatorFilterTopTheme(channelId: String) -> String? {
+        guard let themes = try? store.store.creatorThemes(channelId: channelId),
+              !themes.isEmpty else {
+            return nil
+        }
+        return themes
+            .sorted { $0.videoIds.count > $1.videoIds.count }
+            .first?.label
+    }
+
+    @ViewBuilder
+    private func creatorFilterAvatar(_ channel: ChannelRecord) -> some View {
+        if let data = channel.iconData, let nsImage = NSImage(data: data) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else if let urlString = channel.iconUrl, let url = URL(string: urlString) {
+            AsyncImage(url: url) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Color.accentColor.opacity(0.25)
+            }
+        } else {
+            Color.accentColor.opacity(0.25)
+                .overlay(
+                    Text(channel.name.prefix(1))
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(.white)
+                )
+        }
     }
 
     @ViewBuilder
