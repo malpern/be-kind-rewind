@@ -16,24 +16,14 @@ struct VideoInspector: View {
 
     var body: some View {
         Group {
-            if let creatorName = store.inspectedCreatorName {
-                // Phase 1 retirement of the legacy in-inspector creator panel: when a
-                // creator gets "inspected" by the existing navigateToCreator flow, we
-                // resolve its channelId and forward to the new full creator detail page
-                // instead of rendering the cramped inspector panel. The legacy
-                // creatorInspectorContent renderer remains as a fallback for the rare
-                // case where no channelId can be resolved (very old saved videos).
-                let detail = store.creatorDetail(channelName: creatorName)
-                if let channelId = detail.channelId {
-                    Color.clear
-                        .onAppear {
-                            store.inspectedCreatorName = nil
-                            store.openCreatorDetail(channelId: channelId)
-                        }
-                } else {
-                    creatorInspectorContent(detail)
-                }
-            } else if let inspectedItem {
+            // Removed the auto-forward to the creator detail page that used
+            // to fire when `inspectedCreatorName` was set. That was invisible
+            // magic — opening the inspector with a filter active would silently
+            // navigate, which conflated two unrelated concepts. Navigation
+            // now happens via the explicit "Open Creator Page" button on the
+            // creator filter chip in the grid header (CollectionGridView) and
+            // via double-click on a creator circle.
+            if let inspectedItem {
                 inspectorContent(inspectedItem)
             } else {
                 emptyState

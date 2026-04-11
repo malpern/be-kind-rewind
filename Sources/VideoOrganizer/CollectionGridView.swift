@@ -881,12 +881,25 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 },
                 onSelectChannel: { [weak store] channelId in
                     guard let store else { return }
+                    // Single-click toggles the filter. Click an unselected
+                    // creator → filter; click the already-selected creator
+                    // → clear. Double-click opens the detail page (handled
+                    // separately on the circle button below).
+                    if store.selectedChannelId == channelId {
+                        store.selectedChannelId = nil
+                        store.inspectedCreatorName = nil
+                        store.selectedVideoId = nil
+                        return
+                    }
                     let channel = channels.first(where: { $0.channelId == channelId })
                     if section.displayMode == .watchCandidates {
                         _ = store.navigateToCreatorInWatch(channelId: channel?.channelId ?? channelId, channelName: channel?.name, preferredTopicId: section.topicId)
                     } else {
                         _ = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: section.topicId)
                     }
+                },
+                onOpenCreatorDetail: { [weak store] channelId in
+                    store?.openCreatorDetail(channelId: channelId)
                 }
             )
         }

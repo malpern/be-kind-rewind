@@ -12,6 +12,11 @@ struct CreatorCirclesBar: View {
     let hasRecentContent: (String) -> Bool  // true if creator has video from last 7 days
     let latestPublishedAtForChannel: (String) -> Date?
     let onSelect: (String) -> Void
+    /// Double-click and context-menu "Open Creator Page" handler. Distinct
+    /// from `onSelect` (which toggles the topic-grid filter on single click)
+    /// so the two interactions don't fight each other. Optional so existing
+    /// callers that don't need detail-page navigation can pass nil.
+    var onOpenDetail: ((String) -> Void)? = nil
 
     @State private var isExpanded = false
 
@@ -210,7 +215,21 @@ struct CreatorCirclesBar: View {
         }
         .buttonStyle(.plain)
         .help(channelTooltip(channel, count: count, recent: recent))
+        // Double-click → open creator detail page. Attached as a high-priority
+        // gesture so it wins over the Button's single-tap handler before the
+        // double-tap timer expires. The Button's onSelect (single click) only
+        // fires if the double-tap doesn't trigger.
+        .highPriorityGesture(
+            TapGesture(count: 2).onEnded {
+                onOpenDetail?(channel.channelId)
+            }
+        )
         .contextMenu {
+            Button("Open Creator Page") {
+                onOpenDetail?(channel.channelId)
+            }
+            .disabled(onOpenDetail == nil)
+            Divider()
             if let urlString = channel.channelUrl, let url = URL(string: urlString) {
                 Button("Open Channel on YouTube") {
                     NSWorkspace.shared.open(url)

@@ -23,10 +23,13 @@ struct OrganizerView: View {
                 CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                     .navigationTitle("")
                     .safeAreaInset(edge: .top, spacing: 0) {
-                        if store.selectedTopicId != nil,
-                           (store.pageDisplayMode == .saved
-                            || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
-                            TopicScrollProgressBar(progress: store.topicScrollProgress)
+                        VStack(spacing: 0) {
+                            creatorFilterChip
+                            if store.selectedTopicId != nil,
+                               (store.pageDisplayMode == .saved
+                                || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
+                                TopicScrollProgressBar(progress: store.topicScrollProgress)
+                            }
                         }
                     }
                     .inspector(isPresented: $displaySettings.showInspector) {
@@ -219,6 +222,100 @@ struct OrganizerView: View {
         .pickerStyle(.segmented)
         .frame(width: 160)
         .help("Switch between saved videos and watch discovery")
+    }
+
+    /// Persistent filter chip shown above the grid whenever a creator filter
+    /// is active. Provides a visible CTA to navigate to the creator detail
+    /// page (which used to require silently opening the inspector) and a
+    /// clear (×) button to deselect the filter. Solves two interaction-design
+    /// problems at once: deselect now works on the creator circles (since
+    /// the chip handles "click again to clear" instead of overloading the
+    /// circle's tap), and the path to the detail page is discoverable.
+    @ViewBuilder
+    private var creatorFilterChip: some View {
+        if let channelId = store.selectedChannelId,
+           let channel = creatorFilterChannelRecord(channelId: channelId) {
+            HStack(spacing: 10) {
+                creatorFilterAvatar(channel)
+                    .frame(width: 28, height: 28)
+                    .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Filtered by creator")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(channel.name)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button {
+                    store.openCreatorDetail(channelId: channelId)
+                } label: {
+                    Label("Open Creator Page", systemImage: "arrow.up.right.square")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Open the dedicated detail page for \(channel.name)")
+                .accessibilityIdentifier("creatorFilterChipOpenDetail")
+
+                Button {
+                    store.selectedChannelId = nil
+                    store.inspectedCreatorName = nil
+                    store.selectedVideoId = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Clear the creator filter")
+                .accessibilityIdentifier("creatorFilterChipClear")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.regularMaterial)
+            .overlay(
+                Rectangle()
+                    .frame(height: 0.5)
+                    .foregroundStyle(.quaternary),
+                alignment: .bottom
+            )
+        }
+    }
+
+    /// O(1) lookup of a channel record by id from the topic-channels cache
+    /// the store already maintains. Avoids hitting SQLite from a view body
+    /// on every redraw.
+    private func creatorFilterChannelRecord(channelId: String) -> ChannelRecord? {
+        for channels in store.topicChannels.values {
+            if let match = channels.first(where: { $0.channelId == channelId }) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    @ViewBuilder
+    private func creatorFilterAvatar(_ channel: ChannelRecord) -> some View {
+        if let data = channel.iconData, let nsImage = NSImage(data: data) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else if let urlString = channel.iconUrl, let url = URL(string: urlString) {
+            AsyncImage(url: url) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Color.accentColor.opacity(0.25)
+            }
+        } else {
+            Color.accentColor.opacity(0.25)
+                .overlay(
+                    Text(channel.name.prefix(1))
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                )
+        }
     }
 
     @ViewBuilder
