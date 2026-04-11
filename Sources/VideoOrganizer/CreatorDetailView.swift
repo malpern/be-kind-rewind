@@ -477,7 +477,7 @@ struct CreatorDetailView: View {
                         selectedThemeLabel = nil
                     } label: {
                         Image(systemName: "xmark.circle")
-                            .font(.caption)
+                            .font(.subheadline)
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.tint)
@@ -492,7 +492,7 @@ struct CreatorDetailView: View {
                         )
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.caption)
+                            .font(.subheadline)
                     }
                     .buttonStyle(.borderless)
                     .help("Re-run theme classification with the latest video list")
@@ -505,7 +505,7 @@ struct CreatorDetailView: View {
                    cachedCount > 0,
                    page.totalUploadsKnown > cachedCount {
                     Text("\(page.totalUploadsKnown - cachedCount) new since last classification")
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(.tertiary)
                 }
                 themesRadialChart
@@ -617,7 +617,7 @@ struct CreatorDetailView: View {
                                 .foregroundStyle(.primary)
                                 .contentTransition(.numericText())
                             Text(total == 1 ? "video" : "videos")
-                                .font(.caption2)
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                         .position(x: frame.midX, y: frame.midY)
@@ -674,7 +674,7 @@ struct CreatorDetailView: View {
                     .frame(width: 10, height: 10)
                 if let theme = slice.themeRecord, theme.isSeries {
                     Image(systemName: "list.number")
-                        .font(.caption2.weight(.semibold))
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
                 Text(slice.label)
@@ -684,7 +684,7 @@ struct CreatorDetailView: View {
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text("\(slice.videoCount)")
-                    .font(.caption.monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 6)
@@ -715,7 +715,7 @@ struct CreatorDetailView: View {
                     Text("00")
                         .font(.title2.weight(.bold).monospacedDigit())
                     Text("videos")
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -733,7 +733,7 @@ struct CreatorDetailView: View {
                             .font(.callout)
                         Spacer(minLength: 4)
                         Text("00")
-                            .font(.caption.monospacedDigit())
+                            .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 6)
@@ -764,7 +764,7 @@ struct CreatorDetailView: View {
     private func channelLinkButton(_ link: ChannelLink) -> some View {
         Link(destination: URL(string: link.url) ?? URL(string: "https://www.youtube.com")!) {
             Label(link.title, systemImage: link.symbolName)
-                .font(.caption.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .lineLimit(1)
         }
         .buttonStyle(.bordered)
@@ -914,13 +914,13 @@ struct CreatorDetailView: View {
                         Text("Recent uploads")
                             .font(.title3.weight(.semibold))
                         Text("last 14 days")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     if page.recentVideosTotalInWindow > page.recentVideos.count {
                         Text("+ \(page.recentVideosTotalInWindow - page.recentVideos.count) more")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -964,7 +964,7 @@ struct CreatorDetailView: View {
                     .font(.body.weight(.medium))
                     .lineLimit(2, reservesSpace: true)
                 Text("00 views · 0d ago")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -994,7 +994,7 @@ struct CreatorDetailView: View {
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
                         Text(errorMessage)
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1003,7 +1003,7 @@ struct CreatorDetailView: View {
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
                         Text("This creator's recent uploads aren't in your library yet. Scrape them from YouTube — no API quota cost.")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1063,16 +1063,16 @@ struct CreatorDetailView: View {
         if page.newSinceLastVisitCount > 0, let prevDate = page.previousVisitDate {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 Text("\(page.newSinceLastVisitCount) new since your last visit")
-                    .font(.caption.weight(.medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 Text("·")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
                 Text(relativeVisitDate(prevDate))
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
@@ -1221,7 +1221,7 @@ struct CreatorDetailView: View {
                     Text("Hits")
                         .font(.title3.weight(.semibold))
                     Text(hitsHelpText)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -1270,7 +1270,7 @@ struct CreatorDetailView: View {
                 .lineLimit(2, reservesSpace: true)
                 .frame(width: 200, alignment: .topLeading)
             Text("000K views")
-                .font(.caption.monospacedDigit())
+                .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 200, alignment: .leading)
         }
@@ -1313,7 +1313,7 @@ struct CreatorDetailView: View {
                 // sits at the same baseline. Use an em-dash placeholder when view
                 // count is unknown so the row never collapses to zero height.
                 Text(card.viewCountParsed > 0 ? card.viewCountFormatted : "—")
-                    .font(.caption.monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(card.viewCountParsed > 0 ? .secondary : .tertiary)
                     .frame(width: 200, alignment: .leading)
             }
@@ -1334,7 +1334,7 @@ struct CreatorDetailView: View {
             Image(systemName: "arrow.up")
             Text(label)
         }
-        .font(.caption2.weight(.semibold))
+        .font(.footnote.weight(.semibold))
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(.thinMaterial, in: Capsule())
@@ -1389,11 +1389,11 @@ struct CreatorDetailView: View {
         let hasKey = hasClaudeKeyCached
         HStack(spacing: 10) {
             Image(systemName: "tag")
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             if !hasKey {
                 Text("Add a Claude API key to generate tags for this creator")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Open Settings") { openSettings() }
@@ -1401,7 +1401,7 @@ struct CreatorDetailView: View {
                     .controlSize(.small)
             } else if !store.claudeThemeClassificationEnabled {
                 Text("Theme classification is off. Enable it to tag this creator's videos.")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Enable") {
@@ -1415,7 +1415,7 @@ struct CreatorDetailView: View {
                 // first, then theme classification fires automatically when
                 // the load completes (see the .onChange in emptyArchiveBanner).
                 Text("Load this creator's uploads to generate tags")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -1431,7 +1431,7 @@ struct CreatorDetailView: View {
                 .disabled(store.loadingFullHistoryChannels.contains(channelId))
             } else {
                 Text("No tags generated yet for this creator")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -1475,12 +1475,12 @@ struct CreatorDetailView: View {
             HStack(spacing: 6) {
                 if theme.isSeries {
                     Image(systemName: "list.number")
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                 }
                 Text(theme.label)
                     .font(.callout.weight(.medium))
                 Text("\(theme.videoIds.count)")
-                    .font(.caption.monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12)
@@ -1509,7 +1509,7 @@ struct CreatorDetailView: View {
                     Text("All videos")
                         .font(.title3.weight(.semibold))
                     Text(allVideosCountLabel)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                     creatorSearchField
@@ -1539,7 +1539,7 @@ struct CreatorDetailView: View {
                 }
 
                 Text("↑ marks videos punching above this creator's median view count")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
         }
@@ -1552,7 +1552,7 @@ struct CreatorDetailView: View {
     private var creatorSearchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
             TextField("Search videos", text: $creatorSearchText)
                 .textFieldStyle(.plain)
@@ -1602,7 +1602,7 @@ struct CreatorDetailView: View {
                                 .lineLimit(1)
                             if card.isOutlier {
                                 Image(systemName: "arrow.up")
-                                    .font(.caption.weight(.bold))
+                                    .font(.subheadline.weight(.bold))
                                     .foregroundStyle(.tint)
                                     .help(outlierTooltip(card))
                                     .accessibilityLabel("Outlier")
@@ -1610,7 +1610,7 @@ struct CreatorDetailView: View {
                         }
                         if let topic = card.topicName {
                             Text(topic)
-                                .font(.caption)
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -1696,7 +1696,7 @@ struct CreatorDetailView: View {
         } label: {
             Label(allVideosGridSort.label, systemImage: allVideosGridSort.symbolName)
                 .labelStyle(.titleAndIcon)
-                .font(.caption)
+                .font(.subheadline)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -1757,7 +1757,7 @@ struct CreatorDetailView: View {
                 Text(group.label)
                     .font(.headline)
                 Text("\(group.cards.count) video\(group.cards.count == 1 ? "" : "s")")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
@@ -2016,7 +2016,7 @@ struct CreatorDetailView: View {
         HStack(spacing: 8) {
             if theme.isSeries {
                 Image(systemName: "list.number")
-                    .font(.caption.weight(.bold))
+                    .font(.subheadline.weight(.bold))
                     .foregroundStyle(.tint)
                     .help(theme.orderingSignal == "numeric" ? "Numbered series" :
                           theme.orderingSignal == "date" ? "Date-ordered series" : "Recurring series")
@@ -2026,14 +2026,14 @@ struct CreatorDetailView: View {
                     .font(.body.weight(.medium))
                 if let description = theme.description, !description.isEmpty {
                     Text(description)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
             }
             Spacer(minLength: 0)
             Text("\(theme.videoIds.count)")
-                .font(.caption.monospacedDigit())
+                .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
@@ -2052,7 +2052,7 @@ struct CreatorDetailView: View {
                     HStack(spacing: 8) {
                         if card.videoId == standoutId {
                             Image(systemName: "star.fill")
-                                .font(.caption.weight(.bold))
+                                .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.yellow)
                                 .help("Standout episode of this series")
                         }
@@ -2063,12 +2063,12 @@ struct CreatorDetailView: View {
                         Spacer(minLength: 0)
                         if card.viewCountParsed > 0 {
                             Text(card.viewCountFormatted)
-                                .font(.caption.monospacedDigit())
+                                .font(.subheadline.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                         if let age = card.ageFormatted {
                             Text(age)
-                                .font(.caption)
+                                .font(.subheadline)
                                 .foregroundStyle(.tertiary)
                         }
                     }
@@ -2130,12 +2130,12 @@ struct CreatorDetailView: View {
                         .font(.body)
                         .foregroundStyle(.primary)
                     Text("\(entry.creatorVideoCount) video\(entry.creatorVideoCount == 1 ? "" : "s") from this creator")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 14)
@@ -2206,7 +2206,7 @@ struct CreatorDetailView: View {
                     .foregroundStyle(.primary)
                 Spacer()
                 Text("last 24 months")
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -2217,7 +2217,7 @@ struct CreatorDetailView: View {
                 )
                 .frame(height: 140)
             Text("0 videos · peak 0 in a single month")
-                .font(.caption2.monospacedDigit())
+                .font(.footnote.monospacedDigit())
                 .foregroundStyle(.tertiary)
         }
         .frame(minWidth: 280, idealWidth: 360, alignment: .leading)
@@ -2272,7 +2272,7 @@ struct CreatorDetailView: View {
                 .accessibilityLabel("Topic share for \(page.channelName)")
 
                 Text("their share · library share")
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 2)
             }
@@ -2299,7 +2299,7 @@ struct CreatorDetailView: View {
                     Image(systemName: topicShareWindow.symbolName)
                     Text(topicShareWindow.label)
                 }
-                .font(.caption2.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
@@ -2326,10 +2326,10 @@ struct CreatorDetailView: View {
                         .foregroundStyle(.primary)
                         .contentTransition(.numericText())
                     Text("·")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.tertiary)
                     Text(percentageString(share.shareOfVoice))
-                        .font(.caption.monospacedDigit())
+                        .font(.subheadline.monospacedDigit())
                         .foregroundStyle(shareOfVoiceColor(share.shareOfVoice))
                 }
                 .help("\(share.videoCount) of this creator's saved videos · \(share.videoCount) of \(share.topicTotalSavedCount) total \(share.topicName) videos in your library (\(percentageString(share.shareOfVoice)) share of voice)")
@@ -2381,7 +2381,7 @@ struct CreatorDetailView: View {
                     .foregroundStyle(.primary)
                 Spacer()
                 Text("last 24 months")
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
 
@@ -2417,7 +2417,7 @@ struct CreatorDetailView: View {
                             .foregroundStyle(Color.primary.opacity(0.25))
                         if value.as(Date.self) != nil {
                             AxisValueLabel(format: .dateTime.month(.abbreviated).year(.twoDigits))
-                                .font(.caption.monospacedDigit())
+                                .font(.subheadline.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -2427,7 +2427,7 @@ struct CreatorDetailView: View {
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
                             .foregroundStyle(Color.primary.opacity(0.12))
                         AxisValueLabel()
-                            .font(.caption.monospacedDigit())
+                            .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -2442,7 +2442,7 @@ struct CreatorDetailView: View {
                 .accessibilityLabel("Monthly upload cadence for \(page.channelName), peak \(maxCount) in a single month")
 
                 Text("\(totalDated) videos · peak \(maxCount) in a single month")
-                    .font(.caption2.monospacedDigit())
+                    .font(.footnote.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
         }
@@ -2472,7 +2472,7 @@ struct CreatorDetailView: View {
                 }
 
                 Text("\(scope.creatorCount) creators publish \(scope.topicName) videos in your library — ranked by \(metricDescription)")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 2)
 
@@ -2601,7 +2601,7 @@ struct CreatorDetailView: View {
                             .lineLimit(1)
                         if entry.isPageCreator {
                             Text("YOU")
-                                .font(.caption2.weight(.bold))
+                                .font(.footnote.weight(.bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
@@ -2609,7 +2609,7 @@ struct CreatorDetailView: View {
                         }
                     }
                     Text(leaderboardSubtitle(for: entry))
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -2623,13 +2623,13 @@ struct CreatorDetailView: View {
                         .foregroundStyle(.primary)
                         .contentTransition(.numericText())
                     Text(metricUnitText)
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(.tertiary)
                 }
 
                 if !entry.isPageCreator {
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 } else {
                     Color.clear.frame(width: 7)
@@ -2773,7 +2773,7 @@ struct CreatorDetailView: View {
                 }
 
             Text("Notes are saved when you click outside the field or press ⌘↩. Saving notes implicitly pins this creator.")
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.tertiary)
         }
     }
@@ -2866,11 +2866,11 @@ struct CreatorDetailView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading…")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else if let lastCount {
                 Text(lastCount == 0 ? "No new videos" : "Loaded \(lastCount) more")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .transition(.opacity)
             }
@@ -2941,7 +2941,7 @@ struct CreatorDetailView: View {
                 Link(url.absoluteString, destination: url)
                     .font(.body)
                 Image(systemName: "arrow.up.right.square")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
         }

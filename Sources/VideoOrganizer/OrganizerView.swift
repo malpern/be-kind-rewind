@@ -242,7 +242,7 @@ struct OrganizerView: View {
 
         if store.youtubeQuotaExhausted {
             Label("API Quota Exhausted", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.orange)
                 .help("YouTube API daily quota exceeded. Some features are limited until midnight Pacific time.")
         }
@@ -253,7 +253,7 @@ struct OrganizerView: View {
             HStack(spacing: 4) {
                 ProgressView().controlSize(.small)
                 Text("\(thumbnailCache.downloadedCount)/\(thumbnailCache.totalCount)")
-                    .font(.caption.monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .accessibilityLabel("Downloading thumbnails: \(thumbnailCache.downloadedCount) of \(thumbnailCache.totalCount)")
@@ -275,7 +275,7 @@ struct OrganizerView: View {
                 openSettings()
             } label: {
                 Label(label, systemImage: icon)
-                    .font(.caption.weight(.medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(color)
             }
             .buttonStyle(.borderless)

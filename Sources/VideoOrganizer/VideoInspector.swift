@@ -154,7 +154,7 @@ struct VideoInspector: View {
         if !tags.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Tags")
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
 
                 FlexibleTagList(tags: tags) { tag in
@@ -217,7 +217,7 @@ struct VideoInspector: View {
     private func metadataRow(icon: String, label: String, value: String, mono: Bool = false) -> some View {
         GridRow {
             Label(label, systemImage: icon)
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .frame(width: 85, alignment: .leading)
             Text(value)
@@ -362,7 +362,7 @@ struct VideoInspector: View {
 
                         if let subs = detail.formattedSubscribers, let tier = detail.subscriberTier {
                             Text("\(subs) · \(tier)")
-                                .font(.caption)
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -401,7 +401,7 @@ struct VideoInspector: View {
                         ForEach(detail.videosByTopic, id: \.topicName) { entry in
                             HStack {
                                 Image(systemName: TopicTheme.iconName(for: entry.topicName))
-                                    .font(.caption)
+                                    .font(.subheadline)
                                     .foregroundStyle(TopicTheme.iconColor(for: entry.topicName))
                                     .frame(width: 20)
                                 Text(entry.topicName)
@@ -468,13 +468,13 @@ struct VideoInspector: View {
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(v.title)
-                                .font(.caption.weight(.medium))
+                                .font(.subheadline.weight(.medium))
                                 .lineLimit(2)
                                 .foregroundStyle(.primary)
                             if let meta = [v.viewCount, v.publishedAt].compactMap({ $0 }).joined(separator: " · ") as String?,
                                !meta.isEmpty {
                                 Text(meta)
-                                    .font(.caption2)
+                                    .font(.footnote)
                                     .foregroundStyle(.tertiary)
                             }
                         }
@@ -507,7 +507,7 @@ private struct FlexibleTagList: View {
     @ViewBuilder
     private func tagChip(_ tag: String) -> some View {
         let chip = Text(tag)
-            .font(.caption.weight(.medium))
+            .font(.subheadline.weight(.medium))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(

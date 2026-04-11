@@ -142,11 +142,11 @@ struct TopicSidebar: View {
                         Spacer()
                         if store.parsedQuery.isEmpty {
                             Text("\(store.totalVideoCount) videos")
-                                .font(.caption)
+                                .font(.subheadline)
                                 .foregroundStyle(.tertiary)
                         } else {
                             Text("\(store.searchResultCount) results")
-                                .font(.caption.weight(.medium))
+                                .font(.subheadline.weight(.medium))
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
@@ -612,11 +612,11 @@ private struct DisplayPopover: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: "photo")
-                        .font(.caption2)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                     Slider(value: $displaySettings.thumbnailSize, in: 120...400, step: 20)
                     Image(systemName: "photo")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }

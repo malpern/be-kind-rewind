@@ -165,7 +165,7 @@ struct CreatorCirclesBar: View {
                         .foregroundStyle(.secondary)
                 }
                 Text("more")
-                    .font(.caption2)
+                    .font(.footnote)
                     .foregroundStyle(.tertiary)
             }
         }
@@ -218,7 +218,7 @@ struct CreatorCirclesBar: View {
                 .frame(width: size, height: size)
 
                 Text(channel.name)
-                    .font(.caption2)
+                    .font(.footnote)
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .lineLimit(1)
                     .frame(maxWidth: size + 16)
