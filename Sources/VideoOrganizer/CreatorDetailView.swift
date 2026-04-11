@@ -288,6 +288,15 @@ struct CreatorDetailView: View {
             // Phase 3: auto-scrape channel links on first visit. Cheap, gated
             // by ScrapeRateLimiter and the cached-row check inside the loader.
             store.loadChannelLinksIfNeeded(channelId: channelId)
+
+            // Phase 3: also opportunistically check whether themes/about
+            // need (re)generation. The function checks both caches
+            // independently and bails out early if both are fresh — so
+            // creators with cached archives but pre-existing classification
+            // won't re-run the LLM. This handles the case where a creator
+            // was visited before theme classification was added: the
+            // archive is on disk but themes have never been generated.
+            store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
             // Reset leaderboard scope to the page creator's primary topic on every
             // navigation. The user can flip the picker to look at other topics, but
             // navigating to a new creator should always start at THEIR primary topic.
@@ -734,48 +743,32 @@ struct CreatorDetailView: View {
         .help("Toggle the long-tail themes")
     }
 
-    /// Skeleton placeholder for the themes column. Mirrors the real loaded
-    /// state's layout — a circle stub for the donut chart at the top, followed
-    /// by 6 stub legend rows. Reserves enough vertical space (~360pt) that
-    /// the identity card row doesn't grow when the real chart slots in.
+    /// Skeleton placeholder for the themes column. Mirrors the new tag-list
+    /// loaded state — a wrapping FlowLayout of stub tag capsules at the
+    /// same dimensions as the real `themeLargeTag`, so the identity card
+    /// row's height stays stable when the real tags slot in.
     @ViewBuilder
     private var themesSkeletonRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                Circle()
-                    .stroke(Color.gray.opacity(0.18), lineWidth: 36)
-                    .frame(width: 180, height: 180)
-                VStack(spacing: 2) {
+        FlowLayout(spacing: 8, lineSpacing: 8) {
+            ForEach(0..<6, id: \.self) { i in
+                let stub = i.isMultiple(of: 3) ? "Loading tag" : (i.isMultiple(of: 2) ? "Theme" : "Topic name")
+                HStack(spacing: 6) {
+                    Text(stub)
+                        .font(.body.weight(.semibold))
                     Text("00")
-                        .font(.title2.weight(.bold).monospacedDigit())
-                    Text("videos")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.subheadline.monospacedDigit())
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule().fill(Color.accentColor.opacity(0.12))
+                )
+                .overlay(
+                    Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
+                )
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 220)
-            .padding(.top, 6)
-
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(0..<6, id: \.self) { _ in
-                    HStack(spacing: 8) {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(Color.gray.opacity(0.3))
-                            .frame(width: 10, height: 10)
-                        Text("Loading theme")
-                            .font(.callout)
-                        Spacer(minLength: 4)
-                        Text("00")
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                }
-            }
-            .padding(.top, 4)
         }
+        .padding(.top, 4)
         .redacted(reason: .placeholder)
     }
 
