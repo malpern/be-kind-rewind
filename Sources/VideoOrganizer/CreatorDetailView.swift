@@ -120,29 +120,26 @@ struct CreatorDetailView: View {
         isLoadingArchive || page.isClassifyingThemes
     }
 
-    /// Phase 3: sort order for the All Videos GRID view. The table view has
-    /// built-in sortable column headers, but the grid needs an explicit picker
-    /// to match the main save window's sort menu. Sticky across launches.
+    /// Sort order for the All Videos grid view. Mirrors the main grid's
+    /// sectioned sort menu — one row per dimension, fixed direction
+    /// (newest first / most views / longest, etc.). The high/low pairs
+    /// from the previous version were collapsed.
     ///
-    /// Default `.byTheme` triggers a theme-grouped layout (section headers
-    /// per LLM-cluster). Saved cards inside the groups get a small badge —
-    /// see `allVideosGridCard` for the badge treatment. Replaces the older
-    /// `.byTopic` mode that grouped by user-collection topic and had a
-    /// loud "Unsaved" bucket.
+    /// Default is `.byTheme` — the theme-grouped layout with section
+    /// headers per LLM-cluster. "Clear Sort" returns to this default.
     @AppStorage("creatorAllVideosGridSort") private var allVideosGridSort: AllVideosGridSort = .byTheme
 
     enum AllVideosGridSort: String, CaseIterable, Identifiable {
-        // Note: rawValue stays "byTopic" for one release so users with the
-        // old @AppStorage value automatically map to the new behavior.
-        // The label/case-name was renamed to .byTheme; the persisted key
-        // is the only thing that lags.
+        // RawValues are kept stable across the rename so users with prior
+        // @AppStorage values auto-migrate. The old "high/low" pairs collapse
+        // to whichever direction is the natural default for that dimension
+        // (Date → newest first, Views → most viewed, Duration → longest).
+        // Users who had `dateOldest`, `viewsLow`, or `durationShort` saved
+        // will fall through to the @AppStorage default (.byTheme).
         case byTheme = "byTopic"
-        case dateNewest
-        case dateOldest
-        case viewsHigh
-        case viewsLow
-        case durationLong
-        case durationShort
+        case date = "dateNewest"
+        case views = "viewsHigh"
+        case duration = "durationLong"
         case alphabetical
         case outlierScore
 
@@ -151,13 +148,10 @@ struct CreatorDetailView: View {
         var label: String {
             switch self {
             case .byTheme: return "By theme"
-            case .dateNewest: return "Newest first"
-            case .dateOldest: return "Oldest first"
-            case .viewsHigh: return "Most viewed"
-            case .viewsLow: return "Least viewed"
-            case .durationLong: return "Longest first"
-            case .durationShort: return "Shortest first"
-            case .alphabetical: return "A–Z"
+            case .date: return "Date"
+            case .views: return "Views"
+            case .duration: return "Length"
+            case .alphabetical: return "A-Z"
             case .outlierScore: return "Top outliers"
             }
         }
@@ -165,9 +159,9 @@ struct CreatorDetailView: View {
         var symbolName: String {
             switch self {
             case .byTheme: return "rectangle.3.group"
-            case .dateNewest, .dateOldest: return "calendar"
-            case .viewsHigh, .viewsLow: return "chart.bar.fill"
-            case .durationLong, .durationShort: return "timer"
+            case .date: return "calendar"
+            case .views: return "chart.bar.fill"
+            case .duration: return "timer"
             case .alphabetical: return "textformat.abc"
             case .outlierScore: return "arrow.up.right"
             }
@@ -1774,23 +1768,33 @@ struct CreatorDetailView: View {
         return ids.compactMap { lookup[$0] }
     }
 
-    /// Phase 3: sort menu for the All Videos grid view. Mirrors the sort menu
-    /// in the main save window (`OrganizerView.swift:160`) but with a smaller
-    /// case set tuned for a per-creator page (no Creator/Shuffle since both
-    /// are nonsensical when scoped to one creator). Sticky via @AppStorage.
+    /// Sort menu for the All Videos grid. Matches the main grid's sectioned
+    /// sort menu style: one row per dimension, "Clear Sort" at the bottom
+    /// that returns to the default (.byTheme). No Creator or Shuffle since
+    /// both are nonsensical on a per-creator page.
     @ViewBuilder
     private var allVideosGridSortMenu: some View {
         Menu {
-            ForEach(AllVideosGridSort.allCases) { sort in
-                Button {
-                    allVideosGridSort = sort
-                } label: {
-                    if allVideosGridSort == sort {
-                        Label(sort.label, systemImage: "checkmark")
-                    } else {
-                        Label(sort.label, systemImage: sort.symbolName)
+            Section("Sort") {
+                ForEach(AllVideosGridSort.allCases) { sort in
+                    Button {
+                        allVideosGridSort = sort
+                    } label: {
+                        if allVideosGridSort == sort {
+                            Label(sort.label, systemImage: "checkmark")
+                        } else {
+                            Label(sort.label, systemImage: sort.symbolName)
+                        }
                     }
+                    .accessibilityIdentifier("creatorSort\(sort.label)")
                 }
+
+                Button {
+                    allVideosGridSort = .byTheme
+                } label: {
+                    Label("Clear Sort", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .disabled(allVideosGridSort == .byTheme)
             }
         } label: {
             Label(allVideosGridSort.label, systemImage: allVideosGridSort.symbolName)
@@ -2045,18 +2049,12 @@ struct CreatorDetailView: View {
             // here just orders cards within each theme group by
             // newest-first. The byThemeGroups builder consumes this list.
             return base.sorted { ($0.ageDays ?? .max) < ($1.ageDays ?? .max) }
-        case .dateNewest:
+        case .date:
             return base.sorted { ($0.ageDays ?? .max) < ($1.ageDays ?? .max) }
-        case .dateOldest:
-            return base.sorted { ($0.ageDays ?? -1) > ($1.ageDays ?? -1) }
-        case .viewsHigh:
+        case .views:
             return base.sorted { $0.viewCountParsed > $1.viewCountParsed }
-        case .viewsLow:
-            return base.sorted { $0.viewCountParsed < $1.viewCountParsed }
-        case .durationLong:
+        case .duration:
             return base.sorted { runtimeMinutes($0) > runtimeMinutes($1) }
-        case .durationShort:
-            return base.sorted { runtimeMinutes($0) < runtimeMinutes($1) }
         case .alphabetical:
             return base.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         case .outlierScore:
