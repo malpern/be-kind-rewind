@@ -103,6 +103,11 @@ struct CreatorDetailView: View {
     /// this via .onChange and clears the flag after performing the scroll.
     @State private var pendingScrollAnchor: SectionAnchor?
 
+    /// True when the user has clicked the "+N more" pill in the themes
+    /// column to reveal the long-tail themes alongside the head/middle.
+    /// Resets per channel switch so each creator's view starts collapsed.
+    @State private var themesExpanded: Bool = false
+
     // MARK: - Skeleton loading
 
     /// Phase 3: any background load that mutates the page model is in flight.
@@ -249,6 +254,7 @@ struct CreatorDetailView: View {
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
             notesDraft = page.notes ?? ""
+            themesExpanded = false
             // Phase 3 perf: refresh the cached keychain check once per page open.
             // The themesEmptyStateRow used to call ClaudeClient.hasStoredAPIKey()
             // directly from its view body, which fired a keychain query on every
@@ -508,8 +514,7 @@ struct CreatorDetailView: View {
                         .font(.subheadline)
                         .foregroundStyle(.tertiary)
                 }
-                themesRadialChart
-                themesLegendList
+                themesTagList
             } else if page.isClassifyingThemes || isLoadingArchive {
                 // Skeleton: 6 redacted capsules with the same vertical rhythm
                 // as real themes. Replaces the inline progress row that used
@@ -586,81 +591,82 @@ struct CreatorDetailView: View {
         return slices
     }
 
-    /// Beautiful animated donut chart showing each major theme as a slice
-    /// sized by video count. Slices ramp from 0 to their full size on appear
-    /// via `chartsAnimationProgress`. Center label shows the total. Currently
-    /// selected theme (from filter) gets full opacity while others fade. Long
-    /// tail collapses into a gray "Other" slice.
+    /// Themes column body: large clickable tag capsules in a wrapping flow.
+    /// Replaces the radial donut chart that lived here in earlier iterations.
+    /// Default-collapsed view shows the head + middle of the theme
+    /// distribution (data-driven, not a fixed N) followed by a "+N more"
+    /// pill that expands to reveal the long tail as individual tags.
     @ViewBuilder
-    private var themesRadialChart: some View {
-        let slices = majorThemeSlices
-        let total = slices.reduce(0) { $0 + $1.videoCount }
-        if !slices.isEmpty, total > 0 {
-            Chart(slices) { slice in
-                SectorMark(
-                    angle: .value("Videos", Double(slice.videoCount) * chartsAnimationProgress),
-                    innerRadius: .ratio(0.62),
-                    angularInset: 2
-                )
-                .foregroundStyle(slice.color)
-                .cornerRadius(6)
-                .opacity(sliceOpacity(for: slice))
+    private var themesTagList: some View {
+        let visible = themesPartition.visible
+        let hidden = themesPartition.hidden
+        FlowLayout(spacing: 8, lineSpacing: 8) {
+            ForEach(visible, id: \.label) { theme in
+                themeLargeTag(theme)
             }
-            .chartLegend(.hidden)
-            .chartBackground { proxy in
-                GeometryReader { geo in
-                    if let plotFrame = proxy.plotFrame {
-                        let frame = geo[plotFrame]
-                        VStack(spacing: 2) {
-                            Text("\(total)")
-                                .font(.title2.weight(.bold).monospacedDigit())
-                                .foregroundStyle(.primary)
-                                .contentTransition(.numericText())
-                            Text(total == 1 ? "video" : "videos")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        .position(x: frame.midX, y: frame.midY)
+            if themesExpanded {
+                ForEach(hidden, id: \.label) { theme in
+                    themeLargeTag(theme)
+                }
+                if !hidden.isEmpty {
+                    themesExpandPill(label: "Show fewer", systemImage: "minus.circle") {
+                        withAnimation(.easeInOut(duration: 0.2)) { themesExpanded = false }
                     }
                 }
-            }
-            .frame(height: 220)
-            .padding(.top, 6)
-            .accessibilityLabel("Theme distribution donut chart for \(page.channelName)")
-        }
-    }
-
-    /// Slice opacity rule: full strength when no theme filter is active OR
-    /// this slice matches the active filter; faded otherwise so the active
-    /// theme visually dominates the chart. The "Other" bucket is always
-    /// visible at full opacity since it can't be selected as a filter.
-    private func sliceOpacity(for slice: ThemeChartSlice) -> Double {
-        guard let selected = selectedThemeLabel else { return 1.0 }
-        if slice.id == "__other__" { return 0.5 }
-        return slice.label == selected ? 1.0 : 0.30
-    }
-
-    /// Compact legend list below the donut. Each row is a clickable button
-    /// with a color swatch matching the chart slice + the theme name + count.
-    /// Clicking sets the theme filter and scrolls to All Videos (same
-    /// behavior the old capsule list had). The "Other" entry is rendered but
-    /// not clickable since "Other" isn't a real filter target.
-    @ViewBuilder
-    private var themesLegendList: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(majorThemeSlices) { slice in
-                themesLegendRow(slice)
+            } else if !hidden.isEmpty {
+                themesExpandPill(label: "+\(hidden.count) more", systemImage: "plus.circle") {
+                    withAnimation(.easeInOut(duration: 0.2)) { themesExpanded = true }
+                }
             }
         }
         .padding(.top, 4)
     }
 
+    /// Split the themes into "visible" (head + middle of the distribution)
+    /// and "hidden" (long tail) using an 80% Pareto cumulative-sum rule.
+    ///
+    /// - **Sort** by video count desc
+    /// - **Cumulative sum** until ≥80% of total videos are covered
+    /// - That's the visible set
+    /// - Anything past that point is the long tail
+    ///
+    /// Two safety bounds:
+    /// - **Floor 3**: always show at least 3 themes when available, even
+    ///   when one theme dominates (otherwise a creator with 90% of videos
+    ///   in one theme would show just that one tag — unhelpful)
+    /// - **Ceiling 8**: never show more than 8 themes by default, even when
+    ///   the distribution is unusually flat (avoid blowing out the column)
+    private var themesPartition: (visible: [CreatorThemeRecord], hidden: [CreatorThemeRecord]) {
+        let sorted = page.themes.sorted { $0.videoIds.count > $1.videoIds.count }
+        guard sorted.count > 1 else { return (sorted, []) }
+
+        let total = sorted.reduce(0) { $0 + $1.videoIds.count }
+        guard total > 0 else { return (sorted, []) }
+        let target = Double(total) * 0.80
+
+        var cumulative = 0
+        var visibleCount = 0
+        for theme in sorted {
+            cumulative += theme.videoIds.count
+            visibleCount += 1
+            if Double(cumulative) >= target { break }
+        }
+
+        let floor = min(3, sorted.count)
+        let ceiling = 8
+        let bounded = max(floor, min(visibleCount, ceiling))
+        let visible = Array(sorted.prefix(bounded))
+        let hidden = Array(sorted.dropFirst(bounded))
+        return (visible, hidden)
+    }
+
+    /// Large tag capsule for a single theme. Body-weight semibold text,
+    /// generous padding, accent fill when selected. Click toggles the
+    /// All Videos theme filter and scrolls to it.
     @ViewBuilder
-    private func themesLegendRow(_ slice: ThemeChartSlice) -> some View {
-        let isOther = slice.themeRecord == nil
-        let isSelected = !isOther && selectedThemeLabel == slice.label
+    private func themeLargeTag(_ theme: CreatorThemeRecord) -> some View {
+        let isSelected = selectedThemeLabel == theme.label
         Button {
-            guard let theme = slice.themeRecord else { return }
             if isSelected {
                 selectedThemeLabel = nil
             } else {
@@ -668,36 +674,64 @@ struct CreatorDetailView: View {
                 pendingScrollAnchor = .allVideos
             }
         } label: {
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(slice.color)
-                    .frame(width: 10, height: 10)
-                if let theme = slice.themeRecord, theme.isSeries {
+            HStack(spacing: 6) {
+                if theme.isSeries {
                     Image(systemName: "list.number")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.subheadline.weight(.semibold))
                 }
-                Text(slice.label)
-                    .font(.callout.weight(isSelected ? .semibold : .regular))
-                    .foregroundStyle(isOther ? .secondary : .primary)
+                Text(theme.label)
+                    .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer(minLength: 4)
-                Text("\(slice.videoCount)")
+                Text("\(theme.videoIds.count)")
                     .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : .secondary)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .foregroundStyle(isSelected ? Color.white : Color.accentColor)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                Capsule()
+                    .fill(isSelected ? Color.accentColor : Color.accentColor.opacity(0.12))
             )
-            .contentShape(Rectangle())
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.accentColor.opacity(isSelected ? 0 : 0.35), lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(isOther)
-        .help(slice.themeRecord?.description ?? slice.label)
+        .help(theme.description ?? theme.label)
+    }
+
+    /// "+N more" / "Show fewer" pill button styled as a control rather than
+    /// a real theme tag. Same height as `themeLargeTag` so the row reads
+    /// as a coherent strip, but uses neutral colors so it doesn't look
+    /// like a theme.
+    @ViewBuilder
+    private func themesExpandPill(label: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                Text(label)
+                    .font(.body.weight(.medium))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .foregroundStyle(.secondary)
+            .background(
+                Capsule()
+                    .fill(Color.primary.opacity(0.08))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(.quaternary, lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Toggle the long-tail themes")
     }
 
     /// Skeleton placeholder for the themes column. Mirrors the real loaded
