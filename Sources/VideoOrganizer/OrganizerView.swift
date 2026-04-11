@@ -16,21 +16,14 @@ struct OrganizerView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            TopicSidebar(store: store, displaySettings: displaySettings)
+            TopicSidebar(store: store, displaySettings: displaySettings, thumbnailCache: thumbnailCache)
                 .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 400)
         } detail: {
             NavigationStack(path: $store.detailPath) {
                 CollectionGridView(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
                     .navigationTitle("")
                     .safeAreaInset(edge: .top, spacing: 0) {
-                        VStack(spacing: 0) {
-                            creatorFilterChip
-                            if store.selectedTopicId != nil,
-                               (store.pageDisplayMode == .saved
-                                || (store.pageDisplayMode == .watchCandidates && store.watchPresentationMode == .byTopic)) {
-                                TopicScrollProgressBar(progress: store.topicScrollProgress)
-                            }
-                        }
+                        gridHeaderRow
                     }
                     .inspector(isPresented: $displaySettings.showInspector) {
                         VideoInspector(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
@@ -38,16 +31,14 @@ struct OrganizerView: View {
                             .accessibilityIdentifier("videoInspector")
                     }
                     .toolbar {
+                        // Three-thing toolbar after the design simplification:
+                        // pageModeControls on the left, Inspector on the right.
+                        // Sort moved to the grid header (next to the active topic
+                        // title) and status indicators moved to the sidebar
+                        // footer — see the design plan in
+                        // docs/creator-detail-removed-features.md for context.
                         ToolbarItemGroup(placement: .automatic) {
                             pageModeControls
-                        }
-
-                        ToolbarItemGroup(placement: .automatic) {
-                            sortMenu
-                        }
-
-                        ToolbarItemGroup(placement: .automatic) {
-                            statusIndicators
                         }
 
                         ToolbarItemGroup(placement: .primaryAction) {
@@ -155,6 +146,53 @@ struct OrganizerView: View {
         "\(store.pageDisplayMode.rawValue)-\(store.selectedTopicId ?? -1)"
     }
 
+    private var selectedCreatorChannel: ChannelRecord? {
+        guard let selectedChannelId = store.selectedChannelId else { return nil }
+        if let selectedTopicId = store.selectedTopicId,
+           let topicMatch = store.channelsForTopic(selectedTopicId).first(where: { $0.channelId == selectedChannelId }) {
+            return topicMatch
+        }
+        return store.knownChannelsById[selectedChannelId] ?? (try? store.store.channelById(selectedChannelId))
+    }
+
+    /// Inline header row pinned to the top of the grid pane via
+    /// `safeAreaInset(.top)`. Hosts the sort menu (moved out of the toolbar
+    /// in the design simplification — sort is a *viewing preference*, not a
+    /// navigation primitive, so it lives next to the data it sorts).
+    ///
+    /// Kept minimal — just one element on the right — so the chrome above
+    /// the grid is ~28pt instead of the ~80pt the previous chip + scroll
+    /// progress bar + toolbar groups added up to.
+    @ViewBuilder
+    private var gridHeaderRow: some View {
+        HStack(spacing: 8) {
+            if let channel = selectedCreatorChannel {
+                ActiveCreatorFilterCard(
+                    channel: channel,
+                    onClear: {
+                        store.clearChannelFilter()
+                        displaySettings.toast.show("Creator Filter Cleared", icon: "person.crop.circle.badge.xmark")
+                    }
+                )
+            } else {
+                Spacer(minLength: 0)
+            }
+
+            sortMenu
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+        }
+        .padding(.horizontal, GridConstants.horizontalPadding)
+        .padding(.vertical, 6)
+        .background(.bar)
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundStyle(.quaternary),
+            alignment: .bottom
+        )
+    }
+
     @ViewBuilder
     private var sortMenu: some View {
         Menu {
@@ -224,214 +262,11 @@ struct OrganizerView: View {
         .help("Switch between saved videos and watch discovery")
     }
 
-    /// Persistent active-creator-filter chip shown via safeAreaInset(edge: .top)
-    /// at the very top of the grid pane. Modeled on Mail's filter row chips
-    /// (Unread, VIP, etc.) — stays visible while scrolling so the user always
-    /// has both the active-filter signal and a one-click path to the
-    /// dedicated detail page.
-    ///
-    /// Single insight, single row, no labels on buttons:
-    ///
-    ///   [avatar 36] Channel Name        [Top Theme]    [↗] [×]
-    ///
-    /// Click anywhere on the left side (avatar / name / theme) → opens the
-    /// creator detail page. The chevron icon is a redundant explicit click
-    /// target. The × button clears the filter.
-    @ViewBuilder
-    private var creatorFilterChip: some View {
-        if let channelId = store.selectedChannelId,
-           let channel = creatorFilterChannelRecord(channelId: channelId) {
-            HStack(spacing: 12) {
-                Button {
-                    store.openCreatorDetail(channelId: channelId)
-                } label: {
-                    HStack(alignment: .center, spacing: 12) {
-                        creatorFilterAvatar(channel)
-                            .frame(width: 36, height: 36)
-                            .clipShape(Circle())
-                        Text(channel.name)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        if let topTheme = creatorFilterTopTheme(channelId: channelId) {
-                            Text(topTheme)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(Color.accentColor)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(
-                                    Capsule().fill(Color.accentColor.opacity(0.12))
-                                )
-                                .overlay(
-                                    Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
-                                )
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Open the creator page for \(channel.name)")
-                .accessibilityIdentifier("creatorFilterPreview")
-
-                Button {
-                    store.openCreatorDetail(channelId: channelId)
-                } label: {
-                    Image(systemName: "chevron.right.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.tint)
-                }
-                .buttonStyle(.plain)
-                .help("Open the creator page for \(channel.name)")
-                .accessibilityIdentifier("creatorFilterOpenDetail")
-
-                Button {
-                    store.selectedChannelId = nil
-                    store.inspectedCreatorName = nil
-                    store.selectedVideoId = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear the creator filter")
-                .accessibilityIdentifier("creatorFilterClear")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.regularMaterial)
-            .overlay(
-                Rectangle()
-                    .frame(height: 0.5)
-                    .foregroundStyle(.quaternary),
-                alignment: .bottom
-            )
-        }
-    }
-
-    /// O(1) lookup of a channel record by id from the topic-channels cache
-    /// the store already maintains. Avoids hitting SQLite from a view body.
-    private func creatorFilterChannelRecord(channelId: String) -> ChannelRecord? {
-        for channels in store.topicChannels.values {
-            if let match = channels.first(where: { $0.channelId == channelId }) {
-                return match
-            }
-        }
-        return nil
-    }
-
-    /// Top LLM theme label for a creator from the creator_themes cache.
-    /// Returns nil when the creator hasn't been classified yet.
-    private func creatorFilterTopTheme(channelId: String) -> String? {
-        guard let themes = try? store.store.creatorThemes(channelId: channelId),
-              !themes.isEmpty else {
-            return nil
-        }
-        return themes
-            .sorted { $0.videoIds.count > $1.videoIds.count }
-            .first?.label
-    }
-
-    @ViewBuilder
-    private func creatorFilterAvatar(_ channel: ChannelRecord) -> some View {
-        if let data = channel.iconData, let nsImage = NSImage(data: data) {
-            Image(nsImage: nsImage)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-        } else if let urlString = channel.iconUrl, let url = URL(string: urlString) {
-            AsyncImage(url: url) { image in
-                image.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color.accentColor.opacity(0.25)
-            }
-        } else {
-            Color.accentColor.opacity(0.25)
-                .overlay(
-                    Text(channel.name.prefix(1))
-                        .font(.body.weight(.bold))
-                        .foregroundStyle(.white)
-                )
-        }
-    }
-
-    @ViewBuilder
-    private var statusIndicators: some View {
-        if let playlistTitle = store.selectedPlaylistTitle {
-            Button {
-                store.clearPlaylistFilter()
-                displaySettings.toast.show("Playlist Filter Cleared", icon: "music.note.list")
-            } label: {
-                Label(playlistTitle, systemImage: "music.note.list")
-            }
-            .buttonStyle(.bordered)
-            .help("Clear playlist filter")
-        }
-
-        if store.isLoading {
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel("Loading")
-        }
-
-        if store.youtubeQuotaExhausted {
-            Label("API Quota Exhausted", systemImage: "exclamationmark.triangle.fill")
-                .font(.subheadline)
-                .foregroundStyle(.orange)
-                .help("YouTube API daily quota exceeded. Some features are limited until midnight Pacific time.")
-        }
-
-        scrapeHealthIndicator
-
-        if thumbnailCache.isDownloading {
-            HStack(spacing: 4) {
-                ProgressView().controlSize(.small)
-                Text("\(thumbnailCache.downloadedCount)/\(thumbnailCache.totalCount)")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityLabel("Downloading thumbnails: \(thumbnailCache.downloadedCount) of \(thumbnailCache.totalCount)")
-        }
-    }
-
-    /// Phase 3: scrape health pill in the toolbar. Hidden when state is healthy
-    /// or unknown (no recent attempts) — only surfaces when there's something
-    /// to flag. Click to open Settings (where the discovery section can show
-    /// recent failures and let the user clear/retry). Tooltip shows the actual
-    /// failure reason and how many of the recent N attempts failed.
-    @ViewBuilder
-    private var scrapeHealthIndicator: some View {
-        if let health = store.scrapeHealth, health.state == .degraded || health.state == .blocked {
-            let icon = health.state == .blocked ? "wifi.exclamationmark" : "exclamationmark.triangle"
-            let color: Color = health.state == .blocked ? .red : .orange
-            let label = health.state == .blocked ? "Scrape Blocked" : "Scrape Degraded"
-            Button {
-                openSettings()
-            } label: {
-                Label(label, systemImage: icon)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(color)
-            }
-            .buttonStyle(.borderless)
-            .help(scrapeHealthTooltip(health))
-            .accessibilityIdentifier("scrapeHealthIndicator")
-        }
-    }
-
-    private func scrapeHealthTooltip(_ health: ScrapeHealthSnapshot) -> String {
-        var parts: [String] = []
-        parts.append("\(health.recentFailures) of \(health.recentAttempts) recent scrape\(health.recentAttempts == 1 ? "" : "s") failed (\(Int(health.failureRate * 100))%).")
-        if let reason = health.suspectedReason {
-            parts.append("Likely cause: \(reason).")
-        }
-        if let lastFailure = health.lastFailureMessage {
-            parts.append("Most recent error: \(lastFailure)")
-        }
-        return parts.joined(separator: " ")
-    }
+    // Status indicators (playlist filter, loading, quota, scrape health,
+    // thumbnail download progress) used to live here as a toolbar group.
+    // They moved to TopicSidebar's `statusFooter` in the design pass —
+    // ambient status belongs in a status bar pinned to the bottom of the
+    // sidebar, not in the chrome that frames primary actions.
 
     private func prefetchWatchThumbnailsIfNeeded() async {
         guard store.pageDisplayMode == .watchCandidates else { return }
@@ -507,6 +342,78 @@ struct OrganizerView: View {
             }
         }
         displaySettings.toast.show(order.helpText, icon: order.sfSymbol)
+    }
+}
+
+private struct ActiveCreatorFilterCard: View {
+    let channel: ChannelRecord
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ChannelIconView(
+                iconData: channel.iconData,
+                fallbackUrl: channel.iconUrl.flatMap(URL.init(string:))
+            )
+            .frame(width: 56, height: 56)
+            .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(channel.name)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if channel.subscriberCount != nil {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let subscriberLabel = subscriberLabel {
+                    Text(subscriberLabel)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            Button {
+                onClear()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Clear creator filter")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 0.5)
+        )
+        .frame(maxWidth: 420, alignment: .leading)
+    }
+
+    private var subscriberLabel: String? {
+        guard let raw = channel.subscriberCount, let count = Int(raw) else { return nil }
+        if count >= 1_000_000 {
+            return String(format: "%.2fM subscribers", Double(count) / 1_000_000)
+        }
+        if count >= 1_000 {
+            return String(format: "%.0fK subscribers", Double(count) / 1_000)
+        }
+        return "\(count) subscribers"
     }
 }
 

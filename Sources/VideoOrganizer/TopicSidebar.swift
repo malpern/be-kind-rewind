@@ -1,9 +1,11 @@
 import SwiftUI
+import TaggingKit
 
 /// Left sidebar listing topics with video counts, subtopic expansion, and Saved/Watch mode toggle.
 struct TopicSidebar: View {
     @Bindable var store: OrganizerStore
     @Bindable var displaySettings: DisplaySettings
+    let thumbnailCache: ThumbnailCache
     @Environment(\.openSettings) private var openSettings
     @State private var showingSettings = false
     @State private var expandedTopicId: Int64? = nil
@@ -340,6 +342,9 @@ struct TopicSidebar: View {
                     searchFocused = true
                 }
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                statusFooter
+            }
             .navigationTitle("")
             .toolbar {
                 ToolbarItem(placement: .automatic) {
@@ -363,6 +368,115 @@ struct TopicSidebar: View {
                 }
             }
         }
+    }
+
+    /// Ambient status footer pinned to the bottom of the sidebar via
+    /// `safeAreaInset(.bottom)`. Hosts the status indicators that used to
+    /// live in the top toolbar (playlist filter pill, scrape health, quota
+    /// warning, thumbnail download progress) — moved here in the design
+    /// simplification because ambient status belongs in a status bar, not
+    /// in the chrome that frames primary actions. Mail's "Connection: Online"
+    /// and Finder's path bar use the same pattern.
+    ///
+    /// Hidden when there's nothing to surface — the footer collapses to
+    /// zero height so it doesn't take pixels from the topic list when
+    /// nothing is happening.
+    @ViewBuilder
+    private var statusFooter: some View {
+        let hasContent = store.selectedPlaylistTitle != nil
+            || store.isLoading
+            || store.youtubeQuotaExhausted
+            || (store.scrapeHealth?.state == .degraded || store.scrapeHealth?.state == .blocked)
+            || thumbnailCache.isDownloading
+
+        if hasContent {
+            HStack(spacing: 8) {
+                if let playlistTitle = store.selectedPlaylistTitle {
+                    Button {
+                        store.clearPlaylistFilter()
+                        displaySettings.toast.show("Playlist Filter Cleared", icon: "music.note.list")
+                    } label: {
+                        Label(playlistTitle, systemImage: "music.note.list")
+                            .font(.footnote)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Clear playlist filter")
+                }
+
+                if store.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Loading")
+                }
+
+                if store.youtubeQuotaExhausted {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .help("YouTube API daily quota exceeded. Some features are limited until midnight Pacific time.")
+                        .accessibilityLabel("YouTube API quota exhausted")
+                }
+
+                statusFooterScrapeIndicator
+
+                Spacer(minLength: 0)
+
+                if thumbnailCache.isDownloading {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text("\(thumbnailCache.downloadedCount)/\(thumbnailCache.totalCount)")
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityLabel("Downloading thumbnails: \(thumbnailCache.downloadedCount) of \(thumbnailCache.totalCount)")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+            .overlay(
+                Rectangle()
+                    .frame(height: 0.5)
+                    .foregroundStyle(.quaternary),
+                alignment: .top
+            )
+        }
+    }
+
+    /// Scrape health pill for the sidebar footer. Hidden when state is
+    /// healthy or unknown — only surfaces when there's something to flag.
+    @ViewBuilder
+    private var statusFooterScrapeIndicator: some View {
+        if let health = store.scrapeHealth, health.state == .degraded || health.state == .blocked {
+            let icon = health.state == .blocked ? "wifi.exclamationmark" : "exclamationmark.triangle"
+            let color: Color = health.state == .blocked ? .red : .orange
+            Button {
+                openSettings()
+            } label: {
+                Image(systemName: icon)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(color)
+            }
+            .buttonStyle(.borderless)
+            .help(statusFooterScrapeTooltip(health))
+            .accessibilityIdentifier("scrapeHealthIndicator")
+            .accessibilityLabel(health.state == .blocked ? "Scrape blocked" : "Scrape degraded")
+        }
+    }
+
+    private func statusFooterScrapeTooltip(_ health: ScrapeHealthSnapshot) -> String {
+        var parts: [String] = []
+        parts.append("\(health.recentFailures) of \(health.recentAttempts) recent scrape\(health.recentAttempts == 1 ? "" : "s") failed (\(Int(health.failureRate * 100))%).")
+        if let reason = health.suspectedReason {
+            parts.append("Likely cause: \(reason).")
+        }
+        if let lastFailure = health.lastFailureMessage {
+            parts.append("Most recent error: \(lastFailure)")
+        }
+        return parts.joined(separator: " ")
     }
 
     /// Navigates to the selected typeahead suggestion (topic, subtopic, channel filter,
@@ -665,11 +779,8 @@ private struct TopicRow: View {
     var isViewport: Bool = false
 
     var body: some View {
-        HStack(spacing: SidebarMetrics.rowSpacing) {
-            if isSubtopic {
-                Color.clear
-                    .frame(width: SidebarMetrics.iconWidth, height: 1)
-            } else {
+        HStack(alignment: .top, spacing: SidebarMetrics.rowSpacing) {
+            if !isSubtopic {
                 Image(systemName: TopicTheme.iconName(for: topic.name))
                     .font(.system(size: 21, weight: .regular))
                     .foregroundStyle(topicForegroundColor)
@@ -680,13 +791,16 @@ private struct TopicRow: View {
                 .appPrimary()
                 .fontWeight(isSelected ? .medium : .regular)
                 .foregroundStyle(topicForegroundColor)
-                .lineLimit(1)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer()
 
             Text("\(count)")
                 .font(Typography.metadata.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .padding(.top, 2)
         }
         .padding(.vertical, SidebarMetrics.rowVerticalPadding)
         .padding(.horizontal, SidebarMetrics.rowHorizontalPadding)
@@ -739,14 +853,16 @@ private struct CreatorSidebarRow: View {
     var isViewport: Bool = false
 
     var body: some View {
-        HStack(spacing: SidebarMetrics.rowSpacing) {
+        HStack(alignment: .top, spacing: SidebarMetrics.rowSpacing) {
             channelIcon
 
             VStack(alignment: .leading, spacing: 2) {
                 HighlightedText(creator.creatorName, terms: highlightTerms)
                     .appPrimary()
                     .fontWeight(isSelected ? .medium : .regular)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer()
@@ -754,6 +870,7 @@ private struct CreatorSidebarRow: View {
             Text("\(creator.count)")
                 .font(Typography.metadata.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .padding(.top, 2)
         }
         .padding(.vertical, SidebarMetrics.rowVerticalPadding)
         .padding(.horizontal, SidebarMetrics.rowHorizontalPadding)

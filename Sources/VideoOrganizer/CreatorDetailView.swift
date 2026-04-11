@@ -30,40 +30,6 @@ struct CreatorDetailView: View {
     // perspectives in one section was overkill — they're nearly identical for
     // most creators. Now it's a single view ranked by all-time outlier score.
 
-    /// Leaderboard topic scope. Defaults to the page creator's primary topic but the
-    /// user can flip the menu to look at any other topic the creator publishes in.
-    /// Resets on navigation away (per page, not sticky across creators).
-    @State private var leaderboardScopeTopicId: Int64?
-
-    /// Leaderboard ranking metric. Sticky across navigations + app launches via
-    /// @AppStorage. The plan specifies three options ranking by what the user has
-    /// actually saved or the videos' performance — never by global subscriber count.
-    @AppStorage("creatorLeaderboardMetric") private var leaderboardMetric: LeaderboardMetric = .savedCount
-
-    enum LeaderboardMetric: String, CaseIterable, Identifiable {
-        case savedCount
-        case outlierCount
-        case totalViews
-
-        var id: String { rawValue }
-
-        var label: String {
-            switch self {
-            case .savedCount: return "Saved"
-            case .outlierCount: return "Outliers"
-            case .totalViews: return "Views"
-            }
-        }
-
-        var symbolName: String {
-            switch self {
-            case .savedCount: return "tray.full"
-            case .outlierCount: return "arrow.up.right"
-            case .totalViews: return "eye"
-            }
-        }
-    }
-
     /// Per-creator search query. Local to the page, resets on navigation away. Filters
     /// the All Videos table/grid by case-insensitive title substring. Distinct from the
     /// main app search (which spans the whole library) — this only narrows the videos
@@ -83,12 +49,6 @@ struct CreatorDetailView: View {
     /// Environment hook for opening the standard macOS Settings scene from in-app
     /// affordances (e.g., the "Manage excluded creators" link in the identity menu).
     @Environment(\.openSettings) private var openSettings
-
-    /// Drives the entrance animation for the Niches & cadence charts. Starts at 0
-    /// and ramps to 1 on first appear (and on every channel switch) so the bars
-    /// grow into place instead of popping in. Used as a multiplier on every bar's
-    /// value mark — when the value is 0 the bar has no height/width.
-    @State private var chartsAnimationProgress: Double = 0
 
     /// Phase 3 perf: cached snapshot of `ClaudeClient.hasStoredAPIKey()` so the
     /// themesEmptyStateRow doesn't hit the keychain on every SwiftUI re-render.
@@ -170,21 +130,6 @@ struct CreatorDetailView: View {
         }
     }
 
-    /// Phase 3: topic share window preference. Sticky across launches via
-    /// @AppStorage. "All time" uses every saved video; "Last 12 months" filters
-    /// to videos published in the last 365 days so the user can see if the
-    /// creator's niche mix has shifted recently.
-    @AppStorage("creatorTopicShareWindow") private var topicShareWindow: TopicShareWindow = .allTime
-
-    enum TopicShareWindow: String, CaseIterable, Identifiable {
-        case allTime
-        case last12Months
-
-        var id: String { rawValue }
-        var label: String { self == .allTime ? "All time" : "Last 12 months" }
-        var symbolName: String { self == .allTime ? "infinity" : "clock.arrow.circlepath" }
-    }
-
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
         case byTheme
         case grid
@@ -207,12 +152,13 @@ struct CreatorDetailView: View {
         }
     }
 
-    /// Section anchors for ⌘1–⌘0 jump shortcuts. The order matches the visual order
+    /// Section anchors for ⌘1–⌘6 jump shortcuts. The order matches the visual order
     /// of sections in the page body and the keyboard shortcuts in `sectionShortcuts`.
-    /// The standalone "By theme" section was removed: theme browsing now lives
-    /// inside the All Videos byTheme view mode and the identity-card tag list.
+    /// Niches/cadence, leaderboard, and standalone channel information were
+    /// removed in the design simplification — relevant bits live in the
+    /// identity card and its context menu instead.
     enum SectionAnchor: Hashable {
-        case identity, whatsNew, hits, allVideos, playlists, niches, leaderboard, notes
+        case identity, whatsNew, hits, allVideos, playlists, notes
     }
 
     var body: some View {
@@ -224,10 +170,7 @@ struct CreatorDetailView: View {
                     hitsSection.id(SectionAnchor.hits)
                     allVideosSection.id(SectionAnchor.allVideos)
                     playlistsSection.id(SectionAnchor.playlists)
-                    nichesAndCadenceSection.id(SectionAnchor.niches)
-                    leaderboardSection.id(SectionAnchor.leaderboard)
                     notesSection.id(SectionAnchor.notes)
-                    channelInformationSection
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
@@ -318,16 +261,6 @@ struct CreatorDetailView: View {
                 guard !videoIds.isEmpty else { return }
                 await thumbnailCache.prefetch(videoIds: videoIds)
             }
-            // Reset leaderboard scope to the page creator's primary topic on every
-            // navigation. The user can flip the picker to look at other topics, but
-            // navigating to a new creator should always start at THEIR primary topic.
-            leaderboardScopeTopicId = page.leaderboardDefaultTopicId
-            // Replay the chart entrance animation on every navigation. Reset to 0
-            // synchronously, then let SwiftUI animate the ramp to 1 over ~0.7s.
-            chartsAnimationProgress = 0
-            withAnimation(.easeOut(duration: 0.7).delay(0.1)) {
-                chartsAnimationProgress = 1
-            }
             // Kick off Claude theme classification + about generation in the background
             // if the toggle is on and the cache is empty. The store inserts this channel
             // into classifyingThemeChannels, which we observe below to rebuild the page
@@ -389,9 +322,7 @@ struct CreatorDetailView: View {
             ("3", .hits),
             ("4", .allVideos),
             ("5", .playlists),
-            ("6", .niches),
-            ("7", .leaderboard),
-            ("8", .notes),
+            ("6", .notes),
         ]
         ZStack {
             ForEach(bindings, id: \.1) { key, anchor in
@@ -410,23 +341,26 @@ struct CreatorDetailView: View {
 
     // MARK: - Identity card
 
-    /// App Store / Apple Podcasts pattern: square (rounded-corner) icon on the left,
-    /// info stack on the right, no card chrome — sits flush with the page. The
-    /// rounded-square avatar treatment deliberately departs from YouTube's circular
-    /// convention so the page reads as a native macOS detail page rather than a
-    /// YouTube-flavored widget.
+    /// App Store / Apple Podcasts pattern: square (rounded-corner) icon on the
+    /// left, info stack on the right, no card chrome — sits flush with the
+    /// page. The rounded-square avatar treatment deliberately departs from
+    /// YouTube's circular convention so the page reads as a native macOS
+    /// detail page rather than a YouTube-flavored widget.
+    ///
+    /// Asymmetric hero: the top row is `[avatar | metadata column]` —
+    /// just two columns, with the metadata column getting the full
+    /// breathing width for proper bio line length (45-75 char target).
+    /// The themes capsules used to live in a fixed 320pt right column on
+    /// the same row, but that split attention three ways and squeezed the
+    /// bio. They now flow as a full-width strip below the metadata.
     @ViewBuilder
     private var identityCard: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 24) {
                 avatar
                     .frame(width: 160, height: 160)
+                    .help(avatarTooltip)
 
-                // Middle column: name, subtitle, about, tier/stats, actions.
-                // The about paragraph reads at .body size with generous line
-                // spacing (was .callout with no lineSpacing — too dense). The
-                // column flexes via .frame(maxWidth: .infinity) so the right
-                // themes column can claim its share of the row.
                 VStack(alignment: .leading, spacing: 8) {
                     Text(page.channelName)
                         .font(.largeTitle.weight(.semibold))
@@ -447,24 +381,14 @@ struct CreatorDetailView: View {
                     if let about = page.aboutParagraph {
                         Text(about)
                             .font(.body)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary)
                             .lineSpacing(4)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .padding(.top, 8)
-                    } else if page.isClassifyingThemes {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Generating creator summary…")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.top, 6)
                     }
 
-                    tierLine
-                    statsLine
+                    statsTileRow
                     headerActionButtons
                         .padding(.top, 8)
                     if !page.channelLinks.isEmpty {
@@ -475,20 +399,17 @@ struct CreatorDetailView: View {
                 .padding(.top, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(1)
-
-                // Right column: themes capsules. Moved up here from a separate
-                // mid-page section so the description column is naturally
-                // narrower (better legibility) and tags are visible at a glance
-                // alongside the channel description. Width tuned to fit ~2
-                // capsules per row in the FlowLayout for typical labels (1-3
-                // words, max 24 chars per the prompt rules).
-                themesIdentityColumn
-                    .frame(width: 320, alignment: .topLeading)
             }
             .contentShape(Rectangle())
             .contextMenu {
                 identityContextMenuItems
             }
+
+            // Themes flow as a full-width strip below the metadata row.
+            // Was a fixed 320pt right column on the same row; moved out
+            // so the bio reads at proper line length and the themes get
+            // the full width to wrap naturally.
+            themesIdentityColumn
 
             Divider()
         }
@@ -844,12 +765,11 @@ struct CreatorDetailView: View {
         return "\(head)…\(tail)"
     }
 
-    /// Inline action buttons that live in the header next to the avatar/title.
-    /// Slimmed down per user feedback: Pin, Copy Link, and Exclude were removed.
-    /// Pin lived next to Open and added clutter for a feature most users don't
-    /// touch from the page. Copy Link is redundant with the system Share sheet.
-    /// Exclude is a destructive action that's now docked in the bottom Channel
-    /// Information area where it can't be triggered accidentally.
+    /// App Store pattern: one primary CTA, one system action, one overflow.
+    /// `[Open on YouTube]` `[Share]` `[···]`. Power actions (refresh themes,
+    /// load more uploads, copy URL, exclude/restore, manage excluded) live
+    /// in the overflow Menu so they're discoverable via a button instead of
+    /// only via right-click on the avatar.
     @ViewBuilder
     private var headerActionButtons: some View {
         HStack(spacing: 8) {
@@ -868,6 +788,19 @@ struct CreatorDetailView: View {
             .controlSize(.regular)
             .help("Share this channel via the system share sheet")
             .accessibilityIdentifier("creatorHeaderShareButton")
+
+            Menu {
+                identityContextMenuItems
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 16, height: 16)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More actions")
+            .accessibilityIdentifier("creatorHeaderOverflowMenu")
+            .accessibilityLabel("More actions")
         }
     }
 
@@ -939,44 +872,74 @@ struct CreatorDetailView: View {
         }
     }
 
+    /// Three stat tiles in the identity card. Replaces the old comma-soup
+    /// `tierLine` + `statsLine` (which crammed 6+ metrics into two text
+    /// rows separated by " · "). Apple Health / App Store / Apple Music
+    /// all use this pattern: a small row of `BIG NUMBER` over `tiny label`
+    /// stat tiles. Three is the magic number — fewer feels sparse, more
+    /// dilutes the focal points.
+    ///
+    /// Tiles: Saved · Subscribers · Last upload. Tier / founding year /
+    /// country are deliberately *not* tiles — they live in the avatar
+    /// `.help()` tooltip and the identity context menu, where they belong
+    /// as low-priority metadata.
     @ViewBuilder
-    private var tierLine: some View {
-        let parts: [String] = [
-            page.creatorTier,
-            page.foundingYear.map { "since \($0)" },
-            page.countryDisplayName
-        ].compactMap { $0 }
+    private var statsTileRow: some View {
+        HStack(spacing: 24) {
+            statTile(
+                value: "\(page.savedVideoCount)",
+                label: "Saved"
+            )
 
-        if !parts.isEmpty {
-            Text(parts.joined(separator: " · "))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            if let subs = page.subscriberCountFormatted {
+                statTile(
+                    value: subs,
+                    label: "Subscribers"
+                )
+            }
+
+            if let lastUpload = page.lastUploadAge {
+                statTile(
+                    value: lastUpload,
+                    label: "Last upload"
+                )
+            }
+
+            Spacer(minLength: 0)
         }
+        .padding(.top, 4)
     }
 
     @ViewBuilder
-    private var statsLine: some View {
-        let chips = headerChips
-        if !chips.isEmpty {
-            Text(chips.joined(separator: " · "))
-                .font(.callout)
+    private func statTile(value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.title2.weight(.bold).monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(label)
+                .font(.caption)
                 .foregroundStyle(.secondary)
+                .textCase(nil)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var headerChips: [String] {
-        var chips: [String] = []
-        chips.append("\(page.savedVideoCount) saved")
-        if page.watchedVideoCount > 0 {
-            chips.append("\(page.watchedVideoCount) watched")
+    /// Tooltip surfaced on the avatar — hosts the metadata that used to
+    /// live in `tierLine`. The user gets it on hover without taking page
+    /// real estate.
+    private var avatarTooltip: String {
+        var parts: [String] = [page.channelName]
+        if let tier = page.creatorTier {
+            parts.append(tier)
         }
-        if let subs = page.subscriberCountFormatted {
-            chips.append(subs)
+        if let founding = page.foundingYear {
+            parts.append("since \(founding)")
         }
-        if let lastUpload = page.lastUploadAge {
-            chips.append("last upload \(lastUpload)")
+        if let country = page.countryDisplayName {
+            parts.append(country)
         }
-        return chips
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - What's new / Recent uploads
@@ -1054,41 +1017,34 @@ struct CreatorDetailView: View {
         .redacted(reason: .placeholder)
     }
 
-    /// Phase 3: banner shown when the creator's archive is empty (we have no
-    /// scraped uploads, only saved videos). Tells the user *why* the page only
-    /// shows N saved videos and offers a one-click action to scrape the
-    /// channel's recent uploads. Also surfaces the error reason if a previous
-    /// load attempt failed, instead of failing silently.
+    /// Banner shown only when a previous archive load attempt failed. The
+    /// happy-path "we're loading" state is now an inline `ProgressView` next
+    /// to the What's new header — the auto-load fires from `.task(id:)` so
+    /// the user doesn't need to ask for it explicitly.
+    ///
+    /// Keeping a hero card for the success-path empty state read as
+    /// "this page is broken/unfinished" because it appeared on every fresh
+    /// visit before the auto-load completed (~2-10s). Now the only time the
+    /// loud orange banner shows up is when something genuinely went wrong.
     @ViewBuilder
     private var emptyArchiveBanner: some View {
-        let archiveIsEmpty = page.lastRefreshedAt == nil && page.savedVideoCount > 0
-        let isLoading = store.loadingFullHistoryChannels.contains(channelId)
         let errorMessage = store.lastFullHistoryLoadError[channelId]
-        if archiveIsEmpty || errorMessage != nil {
+        let isLoading = store.loadingFullHistoryChannels.contains(channelId)
+        if let errorMessage {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: errorMessage != nil ? "exclamationmark.triangle.fill" : "tray")
+                Image(systemName: "exclamationmark.triangle.fill")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(errorMessage != nil ? Color.orange : Color.accentColor)
+                    .foregroundStyle(Color.orange)
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 4) {
-                    if let errorMessage {
-                        Text("Couldn't load this creator's recent uploads")
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Text(errorMessage)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        Text("Showing only your saved videos")
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Text("This creator's recent uploads aren't in your library yet. Scrape them from YouTube — no API quota cost.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text("Couldn't load this creator's recent uploads")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(errorMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
                 Button {
@@ -1103,7 +1059,7 @@ struct CreatorDetailView: View {
                             Text("Loading…")
                         }
                     } else {
-                        Label(errorMessage != nil ? "Retry" : "Load uploads", systemImage: "arrow.down.circle")
+                        Label("Retry", systemImage: "arrow.clockwise")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1113,11 +1069,11 @@ struct CreatorDetailView: View {
             .padding(14)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(errorMessage != nil ? Color.orange.opacity(0.08) : Color.accentColor.opacity(0.08))
+                    .fill(Color.orange.opacity(0.08))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(errorMessage != nil ? Color.orange.opacity(0.3) : Color.accentColor.opacity(0.25), lineWidth: 0.5)
+                    .strokeBorder(Color.orange.opacity(0.3), lineWidth: 0.5)
             )
             // When the load completes (count appears, even if 0), force a
             // page rebuild so the new archive videos flow into allVideos and
@@ -2235,595 +2191,6 @@ struct CreatorDetailView: View {
         .help("Filter the topic grid to videos in \(entry.playlist.title)")
     }
 
-    // MARK: - Niches & cadence (the 25% analytics block)
-
-    @ViewBuilder
-    private var nichesAndCadenceSection: some View {
-        if !page.topicShare.isEmpty || !page.topicShareLast12Months.isEmpty || !page.monthlyVideoCounts.isEmpty {
-            GroupBox("Niches & cadence") {
-                HStack(alignment: .top, spacing: 24) {
-                    topicShareChart
-                    cadenceChart
-                }
-                .padding(.top, 6)
-            }
-        } else if isLoadingArchive {
-            // Skeleton: render the same GroupBox shape with placeholder bars
-            // and a placeholder cadence area, so the section reserves space
-            // for the real charts when the archive load completes.
-            GroupBox("Niches & cadence") {
-                HStack(alignment: .top, spacing: 24) {
-                    nichesSkeletonColumn
-                    cadenceSkeletonChart
-                }
-                .padding(.top, 6)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var nichesSkeletonColumn: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Topic share")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-            ForEach(0..<3, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("Loading topic")
-                            .font(.callout.weight(.medium))
-                        Spacer(minLength: 0)
-                        Text("00%")
-                            .font(.callout.monospacedDigit().weight(.semibold))
-                    }
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
-                        .frame(height: 10)
-                }
-            }
-        }
-        .frame(minWidth: 260, idealWidth: 340, alignment: .leading)
-        .redacted(reason: .placeholder)
-    }
-
-    @ViewBuilder
-    private var cadenceSkeletonChart: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Videos per month")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text("last 24 months")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-            }
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 0.5)
-                )
-                .frame(height: 140)
-            Text("0 videos · peak 0 in a single month")
-                .font(.footnote.monospacedDigit())
-                .foregroundStyle(.tertiary)
-        }
-        .frame(minWidth: 280, idealWidth: 360, alignment: .leading)
-        .redacted(reason: .placeholder)
-    }
-
-    /// Active topic share slice based on the user's window preference. Falls back
-    /// to all-time when "Last 12 months" is selected but the creator has no recent
-    /// dated videos, so the chart is never empty just because of the toggle.
-    private var activeTopicShare: [CreatorTopicShare] {
-        switch topicShareWindow {
-        case .allTime:
-            return page.topicShare
-        case .last12Months:
-            return page.topicShareLast12Months.isEmpty
-                ? page.topicShare
-                : page.topicShareLast12Months
-        }
-    }
-
-    @ViewBuilder
-    private var topicShareChart: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Topic share")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-                topicShareWindowPicker
-            }
-
-            if activeTopicShare.isEmpty {
-                Text(
-                    topicShareWindow == .last12Months
-                        ? "No dated videos in the last 12 months"
-                        : "No saved videos yet"
-                )
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 12)
-            } else {
-                // Render each topic as a labeled row with the bar beneath. This gives
-                // the topic names primary-text contrast (instead of fighting with
-                // Chart's auto-styled axis labels) and lets the user scan creator
-                // niches at a glance.
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(activeTopicShare) { share in
-                        topicShareRow(share)
-                    }
-                }
-                .accessibilityLabel("Topic share for \(page.channelName)")
-
-                Text("their share · library share")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 2)
-            }
-        }
-        .frame(minWidth: 260, idealWidth: 340, alignment: .leading)
-    }
-
-    /// Compact menu picker for the topic share time window. Only shown when the
-    /// creator actually has recent videos to flip to — otherwise the menu would
-    /// always fall back to "All time" anyway and the picker is noise.
-    @ViewBuilder
-    private var topicShareWindowPicker: some View {
-        if !page.topicShareLast12Months.isEmpty {
-            Menu {
-                Picker("Window", selection: $topicShareWindow) {
-                    ForEach(TopicShareWindow.allCases) { window in
-                        Label(window.label, systemImage: window.symbolName).tag(window)
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: topicShareWindow.symbolName)
-                    Text(topicShareWindow.label)
-                }
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.secondary)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Switch between all-time and last-12-month topic share")
-        }
-    }
-
-    @ViewBuilder
-    private func topicShareRow(_ share: CreatorTopicShare) -> some View {
-        let domainMax = max(1.0, activeTopicShare.map(\.percentage).max() ?? 1.0)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(share.topicName)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 8)
-                HStack(spacing: 4) {
-                    Text(percentageString(share.percentage))
-                        .font(.callout.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .contentTransition(.numericText())
-                    Text("·")
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                    Text(percentageString(share.shareOfVoice))
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(shareOfVoiceColor(share.shareOfVoice))
-                }
-                .help("\(share.videoCount) of this creator's saved videos · \(share.videoCount) of \(share.topicTotalSavedCount) total \(share.topicName) videos in your library (\(percentageString(share.shareOfVoice)) share of voice)")
-            }
-            Chart {
-                BarMark(
-                    x: .value("Share", share.percentage * chartsAnimationProgress),
-                    y: .value("Topic", share.topicName)
-                )
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color.accentColor.opacity(0.7), Color.accentColor],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .cornerRadius(4)
-            }
-            .chartXScale(domain: 0...domainMax)
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartPlotStyle { plotArea in
-                plotArea
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color.primary.opacity(0.06))
-                    )
-            }
-            .frame(height: 10)
-        }
-    }
-
-    /// Highlight high share-of-voice with the accent color so users can spot which
-    /// topics this creator dominates in the library at a glance. >= 25% = accent,
-    /// otherwise secondary text color.
-    private func shareOfVoiceColor(_ share: Double) -> Color {
-        share >= 0.25 ? .accentColor : .secondary
-    }
-
-    @ViewBuilder
-    private var cadenceChart: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            let totalDated = page.monthlyVideoCounts.reduce(0) { $0 + $1.count }
-            let maxCount = page.monthlyVideoCounts.map(\.count).max() ?? 0
-
-            HStack(alignment: .firstTextBaseline) {
-                Text("Videos per month")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text("last 24 months")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-            }
-
-            if totalDated == 0 {
-                Text("No dated videos available")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 12)
-            } else {
-                Chart(page.monthlyVideoCounts) { bucket in
-                    BarMark(
-                        x: .value("Month", bucket.month, unit: .month),
-                        yStart: .value("Start", 0),
-                        yEnd: .value("Videos", Double(bucket.count) * chartsAnimationProgress),
-                        width: .ratio(0.65)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color.accentColor.opacity(0.55), Color.accentColor],
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
-                    )
-                    .cornerRadius(3)
-                }
-                .chartYScale(domain: 0...Double(max(1, maxCount)))
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .month, count: 6)) { value in
-                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
-                            .foregroundStyle(Color.primary.opacity(0.12))
-                        AxisTick(length: 3, stroke: StrokeStyle(lineWidth: 0.5))
-                            .foregroundStyle(Color.primary.opacity(0.25))
-                        if value.as(Date.self) != nil {
-                            AxisValueLabel(format: .dateTime.month(.abbreviated).year(.twoDigits))
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
-                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
-                            .foregroundStyle(Color.primary.opacity(0.12))
-                        AxisValueLabel()
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .chartPlotStyle { plotArea in
-                    plotArea
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Color.primary.opacity(0.04))
-                        )
-                }
-                .frame(height: 140)
-                .accessibilityLabel("Monthly upload cadence for \(page.channelName), peak \(maxCount) in a single month")
-
-                Text("\(totalDated) videos · peak \(maxCount) in a single month")
-                    .font(.footnote.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .frame(minWidth: 280, idealWidth: 360, alignment: .leading)
-    }
-
-    private func percentageString(_ value: Double) -> String {
-        if value >= 0.10 {
-            return String(format: "%.0f%%", value * 100)
-        }
-        return String(format: "%.1f%%", value * 100)
-    }
-
-    // MARK: - Top creators in this niche (competitor leaderboard)
-
-    @ViewBuilder
-    private var leaderboardSection: some View {
-        let entries = currentLeaderboardEntries
-        if !entries.isEmpty, let scope = currentLeaderboardScope {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("Top creators in this niche")
-                        .font(.title3.weight(.semibold))
-                    Spacer()
-                    leaderboardScopePicker
-                    leaderboardMetricPicker
-                }
-
-                Text("\(scope.creatorCount) creators publish \(scope.topicName) videos in your library — ranked by \(metricDescription)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 2)
-
-                VStack(spacing: 0) {
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                        leaderboardRow(rank: index + 1, entry: entry)
-                        if index < entries.count - 1 {
-                            Divider().padding(.leading, 56)
-                        }
-                    }
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.background.secondary)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 0.5)
-                )
-            }
-        }
-    }
-
-    /// The active scope object — looks up the chosen topicId in the page's scope list.
-    private var currentLeaderboardScope: CreatorLeaderboardScope? {
-        guard let topicId = leaderboardScopeTopicId ?? page.leaderboardDefaultTopicId else {
-            return nil
-        }
-        return page.leaderboardScopes.first(where: { $0.topicId == topicId })
-    }
-
-    /// Entries for the current scope, re-sorted by the selected metric. Both data
-    /// pieces are pre-computed in the builder so this is a free in-memory sort.
-    private var currentLeaderboardEntries: [CreatorLeaderboardEntry] {
-        guard let topicId = leaderboardScopeTopicId ?? page.leaderboardDefaultTopicId,
-              let raw = page.leaderboardByTopic[topicId] else {
-            return []
-        }
-        return raw.sorted { lhs, rhs in
-            switch leaderboardMetric {
-            case .savedCount:
-                if lhs.savedVideoCount != rhs.savedVideoCount {
-                    return lhs.savedVideoCount > rhs.savedVideoCount
-                }
-            case .outlierCount:
-                if lhs.outlierVideoCount != rhs.outlierVideoCount {
-                    return lhs.outlierVideoCount > rhs.outlierVideoCount
-                }
-            case .totalViews:
-                if lhs.totalViewsInTopic != rhs.totalViewsInTopic {
-                    return lhs.totalViewsInTopic > rhs.totalViewsInTopic
-                }
-            }
-            return lhs.channelName.localizedStandardCompare(rhs.channelName) == .orderedAscending
-        }
-    }
-
-    private var metricDescription: String {
-        switch leaderboardMetric {
-        case .savedCount: return "saved video count"
-        case .outlierCount: return "outlier count (videos punching above their channel median)"
-        case .totalViews: return "total views in this topic"
-        }
-    }
-
-    /// Topic scope picker — Menu of every topic the page creator publishes in.
-    @ViewBuilder
-    private var leaderboardScopePicker: some View {
-        if page.leaderboardScopes.count > 1 {
-            Menu {
-                ForEach(page.leaderboardScopes) { scope in
-                    Button {
-                        leaderboardScopeTopicId = scope.topicId
-                    } label: {
-                        if scope.topicId == (leaderboardScopeTopicId ?? page.leaderboardDefaultTopicId) {
-                            Label(scope.topicName, systemImage: "checkmark")
-                        } else {
-                            Text(scope.topicName)
-                        }
-                    }
-                }
-            } label: {
-                Label(currentLeaderboardScope?.topicName ?? "Topic", systemImage: "rectangle.stack")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Pick which topic to compute the leaderboard against")
-        }
-    }
-
-    /// Metric picker — Menu (not segmented) for [Saved | Outliers | Views].
-    /// Same crash-avoidance reasoning as the All Videos view-mode picker:
-    /// segmented Pickers can crash during SwiftUI scroll prefetch on macOS
-    /// 26 when their enum case count varies, and Menus avoid the issue
-    /// entirely.
-    private var leaderboardMetricPicker: some View {
-        Menu {
-            ForEach(LeaderboardMetric.allCases) { metric in
-                Button {
-                    leaderboardMetric = metric
-                } label: {
-                    if leaderboardMetric == metric {
-                        Label(metric.label, systemImage: "checkmark")
-                    } else {
-                        Label(metric.label, systemImage: metric.symbolName)
-                    }
-                }
-            }
-        } label: {
-            Label(leaderboardMetric.label, systemImage: leaderboardMetric.symbolName)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Rank by saved video count, outlier count, or total views")
-    }
-
-    private func leaderboardRow(rank: Int, entry: CreatorLeaderboardEntry) -> some View {
-        Button {
-            if !entry.isPageCreator {
-                store.openCreatorDetail(channelId: entry.channelId)
-            }
-        } label: {
-            HStack(spacing: 12) {
-                Text("\(rank)")
-                    .font(.body.monospacedDigit().weight(.medium))
-                    .foregroundStyle(entry.isPageCreator ? Color.accentColor : .secondary)
-                    .frame(width: 22, alignment: .trailing)
-
-                leaderboardAvatar(entry)
-                    .frame(width: 32, height: 32)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(entry.channelName)
-                            .font(.body.weight(entry.isPageCreator ? .semibold : .regular))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        if entry.isPageCreator {
-                            Text("YOU")
-                                .font(.footnote.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.accentColor))
-                        }
-                    }
-                    Text(leaderboardSubtitle(for: entry))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-
-                // Prominent right-aligned figure: whatever metric the user picked.
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(metricValueText(for: entry))
-                        .font(.body.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.primary)
-                        .contentTransition(.numericText())
-                    Text(metricUnitText)
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                }
-
-                if !entry.isPageCreator {
-                    Image(systemName: "chevron.right")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Color.clear.frame(width: 7)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-            .background(
-                entry.isPageCreator
-                ? Color.accentColor.opacity(0.08)
-                : Color.clear
-            )
-        }
-        .buttonStyle(.plain)
-        .help(entry.isPageCreator
-              ? "This is the creator whose page you're viewing"
-              : "Open \(entry.channelName)'s creator page")
-    }
-
-    /// The big right-aligned figure for one row, formatted for the active metric.
-    private func metricValueText(for entry: CreatorLeaderboardEntry) -> String {
-        switch leaderboardMetric {
-        case .savedCount:
-            return "\(entry.savedVideoCount)"
-        case .outlierCount:
-            return "\(entry.outlierVideoCount)"
-        case .totalViews:
-            return formatCompact(entry.totalViewsInTopic)
-        }
-    }
-
-    /// Caption beneath the prominent figure (e.g. "saved · in Mech Kbds").
-    private var metricUnitText: String {
-        let topicName = currentLeaderboardScope?.topicName ?? ""
-        switch leaderboardMetric {
-        case .savedCount: return "saved · in \(topicName)"
-        case .outlierCount: return "outliers · in \(topicName)"
-        case .totalViews: return "views · in \(topicName)"
-        }
-    }
-
-    @ViewBuilder
-    private func leaderboardAvatar(_ entry: CreatorLeaderboardEntry) -> some View {
-        // Routes through ChannelIconView so we use the SQLite iconData blob
-        // when available and only fall back to network when we don't have
-        // bytes locally. The leaderboard entry doesn't carry iconData
-        // itself, so we look it up from the store's in-memory channel cache.
-        ChannelIconView(
-            iconData: store.knownChannelsById[entry.channelId]?.iconData,
-            fallbackUrl: entry.channelIconUrl
-        )
-        .clipShape(Circle())
-        .overlay(Circle().strokeBorder(.quaternary, lineWidth: 0.5))
-    }
-
-    private var leaderboardAvatarFallback: some View {
-        ZStack {
-            Circle().fill(.tertiary)
-            Image(systemName: "person.fill")
-                .font(.system(size: 16))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func leaderboardSubtitle(for entry: CreatorLeaderboardEntry) -> String {
-        // Subtitle line shows supporting context — the metrics OTHER than the
-        // currently-prominent one, plus subscriber count for external scale.
-        var parts: [String] = []
-        switch leaderboardMetric {
-        case .savedCount:
-            if entry.outlierVideoCount > 0 {
-                parts.append("\(entry.outlierVideoCount) outlier\(entry.outlierVideoCount == 1 ? "" : "s")")
-            }
-            if entry.totalViewsInTopic > 0 {
-                parts.append("\(formatCompact(entry.totalViewsInTopic)) views")
-            }
-        case .outlierCount:
-            parts.append("\(entry.savedVideoCount) saved")
-            if entry.totalViewsInTopic > 0 {
-                parts.append("\(formatCompact(entry.totalViewsInTopic)) views")
-            }
-        case .totalViews:
-            parts.append("\(entry.savedVideoCount) saved")
-            if entry.outlierVideoCount > 0 {
-                parts.append("\(entry.outlierVideoCount) outlier\(entry.outlierVideoCount == 1 ? "" : "s")")
-            }
-        }
-        if let subs = entry.subscriberCountFormatted {
-            parts.append(subs)
-        }
-        return parts.joined(separator: " · ")
-    }
-
     // MARK: - Notes (per-creator scratch pad)
 
     @ViewBuilder
@@ -2870,182 +2237,6 @@ struct CreatorDetailView: View {
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
         }
-    }
-
-    // MARK: - Channel information
-
-    @ViewBuilder
-    private var channelInformationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Channel information")
-                    .font(.title3.weight(.semibold))
-                Spacer()
-                loadFullHistoryButton
-            }
-
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-                if let subs = page.subscriberCountFormatted {
-                    infoRow("Subscribers", value: subs)
-                }
-                infoRow("Total uploads (known)", value: "\(page.totalUploadsKnown)")
-                if let reported = page.totalUploadsReported, reported != page.totalUploadsKnown {
-                    infoRow("Total uploads (reported)", value: "\(reported)")
-                }
-                infoRow("In your library", value: libraryCoverageString)
-                if let founding = page.foundingYear {
-                    infoRow("Earliest known upload", value: String(founding))
-                }
-                if let country = page.countryDisplayName {
-                    infoRow("Country", value: country)
-                }
-                if let refreshed = page.lastRefreshedAt {
-                    infoRow("Last refreshed", value: refreshedRowValue(date: refreshed))
-                }
-                infoRowLink("YouTube", url: page.youtubeURL)
-            }
-            .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.background.secondary)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.quaternary, lineWidth: 0.5)
-            )
-
-            // Destructive Exclude action docked at the bottom of the page,
-            // out of the header where it could be misclicked. The button
-            // toggles between Exclude (orange) and Restore (green-tinted).
-            HStack {
-                Spacer()
-                Button(role: page.isExcluded ? nil : .destructive) {
-                    if page.isExcluded {
-                        store.restoreExcludedCreator(channelId: channelId)
-                    } else {
-                        store.excludeCreatorFromWatch(
-                            channelId: channelId,
-                            channelName: page.channelName,
-                            channelIconUrl: page.avatarUrl?.absoluteString
-                        )
-                    }
-                } label: {
-                    Label(
-                        page.isExcluded ? "Restore from Watch" : "Exclude from Watch",
-                        systemImage: page.isExcluded ? "checkmark.circle" : "nosign"
-                    )
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-                .help(page.isExcluded
-                      ? "Restore this creator to Watch discovery"
-                      : "Hide this creator from Watch discovery")
-                .accessibilityIdentifier("creatorBottomExcludeButton")
-            }
-            .padding(.top, 8)
-        }
-    }
-
-    /// Phase 3: "Load full upload history" button. Triggers a deeper one-shot
-    /// scrape (max 200 videos vs the default 16) and shows a small spinner +
-    /// result count next to itself. Disabled while a load is in flight for this
-    /// channel; once a load completes, the result count persists for the
-    /// remainder of the session as quiet feedback.
-    @ViewBuilder
-    private var loadFullHistoryButton: some View {
-        let isLoading = store.loadingFullHistoryChannels.contains(channelId)
-        let lastCount = store.lastFullHistoryLoadCount[channelId]
-        HStack(spacing: 8) {
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Loading…")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            } else if let lastCount {
-                Text(lastCount == 0 ? "No new videos" : "Loaded \(lastCount) more")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .transition(.opacity)
-            }
-
-            Button {
-                store.loadFullChannelHistory(
-                    channelId: channelId,
-                    channelName: page.channelName
-                )
-            } label: {
-                Label("Load full history", systemImage: "arrow.down.circle")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(isLoading)
-            .help("Scrape this creator's last 200 uploads into your archive (one-shot, no API quota)")
-        }
-        .onChange(of: store.lastFullHistoryLoadCount[channelId]) { _, _ in
-            // Rebuild the page model after a load completes so totalUploadsKnown,
-            // allVideos, monthlyVideoCounts and downstream stats reflect the new
-            // archive rows immediately.
-            if !store.loadingFullHistoryChannels.contains(channelId) {
-                page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
-            }
-        }
-    }
-
-    /// Build the value displayed for the "Last refreshed" row, including the
-    /// stale-warning suffix when the cache is more than 7 days old.
-    private func refreshedRowValue(date: Date) -> String {
-        let formatted = formatRefreshTime(date)
-        let ageDays = Int(Date().timeIntervalSince(date) / 86_400)
-        if ageDays >= 7 {
-            return "\(formatted) · \(ageDays) days old"
-        }
-        return formatted
-    }
-
-    private var libraryCoverageString: String {
-        if let coverage = page.coveragePercent {
-            let pct = Int(coverage * 100)
-            return "\(page.savedVideoCount) (\(pct)%)"
-        }
-        return "\(page.savedVideoCount)"
-    }
-
-    @ViewBuilder
-    private func infoRow(_ label: String, value: String) -> some View {
-        GridRow {
-            Text(label)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .gridColumnAlignment(.leading)
-            Text(value)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-        }
-    }
-
-    @ViewBuilder
-    private func infoRowLink(_ label: String, url: URL) -> some View {
-        GridRow {
-            Text(label)
-                .font(.body)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                Link(url.absoluteString, destination: url)
-                    .font(.body)
-                Image(systemName: "arrow.up.right.square")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func formatRefreshTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
     }
 
     // MARK: - Context menus (macOS-native actions)
@@ -3138,6 +2329,29 @@ struct CreatorDetailView: View {
         } label: {
             Label("Copy Channel URL", systemImage: "link")
         }
+
+        Divider()
+
+        // "Load more uploads" — manual re-trigger of the deeper one-shot
+        // archive scrape (max 200 videos vs the default 16). The auto-load
+        // in .task only fires once per channel per session, so users who
+        // want to pull in newer uploads after that first load need this
+        // affordance. Lives here in the context menu now that the standalone
+        // Channel Information section was removed.
+        Button {
+            store.loadFullChannelHistory(
+                channelId: channelId,
+                channelName: page.channelName
+            )
+        } label: {
+            Label(
+                store.loadingFullHistoryChannels.contains(channelId)
+                    ? "Loading more uploads…"
+                    : "Load more uploads",
+                systemImage: "arrow.down.circle"
+            )
+        }
+        .disabled(store.loadingFullHistoryChannels.contains(channelId))
 
         Divider()
 
