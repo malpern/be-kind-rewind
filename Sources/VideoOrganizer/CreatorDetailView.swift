@@ -101,6 +101,24 @@ struct CreatorDetailView: View {
     /// this via .onChange and clears the flag after performing the scroll.
     @State private var pendingScrollAnchor: SectionAnchor?
 
+    // MARK: - Skeleton loading
+
+    /// Phase 3: any background load that mutates the page model is in flight.
+    /// Driven by the auto-archive load and theme classification — both of
+    /// which can complete on the order of seconds and would otherwise cause
+    /// visible layout shifts as content slots in. The skeleton helpers below
+    /// gate on these to render placeholder content with the same dimensions
+    /// as the eventual real content.
+    private var isLoadingArchive: Bool {
+        store.loadingFullHistoryChannels.contains(channelId)
+    }
+
+    /// True while any of the loading paths that affect page content are still
+    /// running. The flag is the OR of every async producer the page depends on.
+    private var isHydrating: Bool {
+        isLoadingArchive || page.isClassifyingThemes
+    }
+
     /// Phase 3: sort order for the All Videos GRID view. The table view has
     /// built-in sortable column headers, but the grid needs an explicit picker
     /// to match the main save window's sort menu. Sticky across launches.
@@ -471,17 +489,48 @@ struct CreatorDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-            } else if page.isClassifyingThemes {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Generating tags…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            } else if page.isClassifyingThemes || isLoadingArchive {
+                // Skeleton: 6 redacted capsules with the same vertical rhythm
+                // as real themes. Replaces the inline progress row that used
+                // to shrink the column. Reserves enough height that the
+                // identity card doesn't grow when real themes arrive.
+                themesSkeletonRows
             } else {
                 themesEmptyStateRow
             }
         }
+    }
+
+    /// Skeleton placeholder for the themes column. Six stub capsule rows with
+    /// `.redacted(reason: .placeholder)` so each one occupies the same vertical
+    /// space a real capsule would. Reserves ~180pt of height which approximates
+    /// the average loaded state.
+    @ViewBuilder
+    private var themesSkeletonRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(0..<6, id: \.self) { _ in
+                HStack(spacing: 6) {
+                    Text("Loading theme")
+                        .font(.callout.weight(.medium))
+                    Spacer(minLength: 0)
+                    Text("00")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(Color.gray.opacity(0.10))
+                )
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.gray.opacity(0.25), lineWidth: 0.5)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .redacted(reason: .placeholder)
     }
 
     /// Inline action buttons that live in the header next to the avatar/title.
@@ -652,8 +701,36 @@ struct CreatorDetailView: View {
                 Text("What's new")
                     .font(.title3.weight(.semibold))
                 whatsNewRow(latest)
+            } else if isLoadingArchive {
+                // No videos yet AND a load is in progress — render a skeleton
+                // row at the same dimensions as `whatsNewRow` so the page
+                // doesn't shift when real data arrives.
+                Text("What's new")
+                    .font(.title3.weight(.semibold))
+                whatsNewRowSkeleton
             }
         }
+    }
+
+    /// Skeleton placeholder matching `whatsNewRow` dimensions exactly so the
+    /// page layout doesn't shift when real data arrives.
+    @ViewBuilder
+    private var whatsNewRowSkeleton: some View {
+        HStack(alignment: .top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(.quaternary)
+                .frame(width: 160, height: 90)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Loading recent upload title placeholder")
+                    .font(.body.weight(.medium))
+                    .lineLimit(2, reservesSpace: true)
+                Text("00 views · 0d ago")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .redacted(reason: .placeholder)
     }
 
     /// Phase 3: banner shown when the creator's archive is empty (we have no
@@ -919,7 +996,46 @@ struct CreatorDetailView: View {
                     .padding(.vertical, 4)
                 }
             }
+        } else if isLoadingArchive {
+            // Skeleton: render the section header + a row of placeholder cards
+            // at the same dimensions as essentialsCard so the page doesn't
+            // shift when archive load completes and real outliers slot in.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Hits")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHGrid(rows: [GridItem(.fixed(180))], spacing: 14) {
+                        ForEach(0..<5, id: \.self) { _ in
+                            essentialsCardSkeleton
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
         }
+    }
+
+    /// Skeleton placeholder matching `essentialsCard` dimensions (200×112
+    /// thumbnail, 2-line title with `reservesSpace: true`, 1-line metadata).
+    @ViewBuilder
+    private var essentialsCardSkeleton: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.quaternary)
+                .frame(width: 200, height: 112)
+            Text("Placeholder loading title for outlier card")
+                .font(.subheadline.weight(.medium))
+                .lineLimit(2, reservesSpace: true)
+                .frame(width: 200, alignment: .topLeading)
+            Text("000K views")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 200, alignment: .leading)
+        }
+        .redacted(reason: .placeholder)
     }
 
     private var hitsHelpText: String {
@@ -1675,7 +1791,70 @@ struct CreatorDetailView: View {
                 }
                 .padding(.top, 6)
             }
+        } else if isLoadingArchive {
+            // Skeleton: render the same GroupBox shape with placeholder bars
+            // and a placeholder cadence area, so the section reserves space
+            // for the real charts when the archive load completes.
+            GroupBox("Niches & cadence") {
+                HStack(alignment: .top, spacing: 24) {
+                    nichesSkeletonColumn
+                    cadenceSkeletonChart
+                }
+                .padding(.top, 6)
+            }
         }
+    }
+
+    @ViewBuilder
+    private var nichesSkeletonColumn: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Topic share")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            ForEach(0..<3, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Loading topic")
+                            .font(.callout.weight(.medium))
+                        Spacer(minLength: 0)
+                        Text("00%")
+                            .font(.callout.monospacedDigit().weight(.semibold))
+                    }
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                        .frame(height: 10)
+                }
+            }
+        }
+        .frame(minWidth: 260, idealWidth: 340, alignment: .leading)
+        .redacted(reason: .placeholder)
+    }
+
+    @ViewBuilder
+    private var cadenceSkeletonChart: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Videos per month")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("last 24 months")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(.quaternary, lineWidth: 0.5)
+                )
+                .frame(height: 140)
+            Text("0 videos · peak 0 in a single month")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+        }
+        .frame(minWidth: 280, idealWidth: 360, alignment: .leading)
+        .redacted(reason: .placeholder)
     }
 
     /// Active topic share slice based on the user's window preference. Falls back
