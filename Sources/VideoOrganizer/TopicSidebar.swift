@@ -224,6 +224,7 @@ struct TopicSidebar: View {
                                             count: displayedCount(forSubtopic: sub, parentTopicId: topic.id),
                                             highlightTerms: store.parsedQuery.includeTerms,
                                             isSubtopic: true,
+                                            isExpanded: false,
                                             isSelected: isSelected(sub),
                                             isViewport: store.viewportSubtopicId == sub.id
                                         )
@@ -449,6 +450,7 @@ struct TopicSidebar: View {
                 topic: topic,
                 count: displayedCount(for: topic),
                 highlightTerms: store.parsedQuery.includeTerms,
+                isExpanded: isExpanded(topic),
                 isSelected: isSelected(topic),
                 isViewport: isViewportTopic(topic)
             )
@@ -658,19 +660,26 @@ private struct TopicRow: View {
     let count: Int
     var highlightTerms: [String] = []
     var isSubtopic: Bool = false
+    var isExpanded: Bool = false
     var isSelected: Bool = false
     var isViewport: Bool = false
 
     var body: some View {
         HStack(spacing: SidebarMetrics.rowSpacing) {
-            Image(systemName: TopicTheme.iconName(for: topic.name))
-                .font(.system(size: 21, weight: .regular))
-                .foregroundStyle(.white)
-                .frame(width: SidebarMetrics.iconWidth)
+            if isSubtopic {
+                Color.clear
+                    .frame(width: SidebarMetrics.iconWidth, height: 1)
+            } else {
+                Image(systemName: TopicTheme.iconName(for: topic.name))
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(topicForegroundColor)
+                    .frame(width: SidebarMetrics.iconWidth)
+            }
 
-            HighlightedText(topic.name, terms: highlightTerms)
+            HighlightedText(TopicTheme.displayName(for: topic.name), terms: highlightTerms)
                 .appPrimary()
                 .fontWeight(isSelected ? .medium : .regular)
+                .foregroundStyle(topicForegroundColor)
                 .lineLimit(1)
 
             Spacer()
@@ -685,6 +694,16 @@ private struct TopicRow: View {
             RoundedRectangle(cornerRadius: SidebarMetrics.rowCornerRadius, style: .continuous)
                 .fill(backgroundColor)
         )
+    }
+
+    private var topicForegroundColor: Color {
+        if isSelected {
+            return .white
+        }
+        if isExpanded {
+            return Color.white.opacity(0.68)
+        }
+        return .white
     }
 
     private var backgroundColor: Color {

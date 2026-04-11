@@ -881,10 +881,20 @@ struct CreatorDetailView: View {
     /// the small thumbnails elsewhere in the app — typically 88-240px. The page
     /// header at 160pt × 2x retina needs at least 320px to avoid looking soft.
     /// We fall back to the cached blob only when no URL is available.
+    ///
+    /// Offline-first ordering: when we already have an `avatarData` blob and
+    /// the user is potentially offline, we render the blob *immediately*
+    /// instead of flashing through `AsyncImage`'s `.empty` → `.failure`
+    /// transition. The high-res network upgrade only kicks in when there's
+    /// no blob yet (first visit to a creator on a fresh install). This
+    /// trades a slightly soft avatar on revisits-while-online for a flicker-
+    /// free fully-offline UX, which matches the rest of the app.
     @ViewBuilder
     private var avatar: some View {
         Group {
-            if let url = page.avatarUrl {
+            if page.avatarData != nil {
+                avatarLowResOrFallback
+            } else if let url = page.avatarUrl {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .empty:

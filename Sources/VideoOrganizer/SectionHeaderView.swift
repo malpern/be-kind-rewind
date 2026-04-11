@@ -15,7 +15,7 @@ struct SectionHeaderView: View {
                 .font(.title3)
                 .foregroundStyle(.white)
 
-            HighlightedText(name, terms: highlightTerms)
+            HighlightedText(TopicTheme.displayName(for: name), terms: highlightTerms)
                 .font(.title3.bold())
 
             Group {

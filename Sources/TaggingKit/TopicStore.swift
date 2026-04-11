@@ -993,6 +993,15 @@ public final class TopicStore: Sendable {
         try db.prepare(channels.select(channelId)).map { $0[channelId] }
     }
 
+    /// Return every channel record in the channels table, regardless of whether
+    /// the channel is currently referenced by any topic. Used by the offline
+    /// backfill to find channels with missing `iconData` blobs that the
+    /// per-topic loaders never see (e.g., creators discovered via candidate
+    /// search but never saved into a topic).
+    public func allChannels() throws -> [ChannelRecord] {
+        try db.prepare(channels).map(channelFromRow)
+    }
+
     /// Return video IDs that don't have a channel_id set yet.
     public func videoIdsMissingChannelId() throws -> [String] {
         try db.prepare(videos.filter(videoChannelId == nil as String?).select(videoId)).map { $0[videoId] }

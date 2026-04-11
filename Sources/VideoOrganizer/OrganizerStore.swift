@@ -240,22 +240,34 @@ final class OrganizerStore {
         }
     }
 
-    /// Walk `knownChannelsById` and download icon bytes for any channel that
-    /// has an `iconUrl` but no cached `iconData` blob. Writes results back to
-    /// SQLite via `updateChannelIcon` and refreshes the in-memory cache so
-    /// subsequent renders pick up the new bytes without a roundtrip.
+    /// Walk every channel in the SQLite channels table and download icon
+    /// bytes for any channel that has an `iconUrl` but no cached `iconData`
+    /// blob. Writes results back to SQLite via `updateChannelIcon` and
+    /// refreshes the in-memory `knownChannelsById` cache for any channel
+    /// already tracked there so subsequent renders pick up the new bytes
+    /// without a roundtrip.
     ///
     /// This is the structural fix for offline channel avatars: every channel
-    /// the user has touched ends up with its icon stored locally, and
-    /// `ChannelIconView` reads from that store first. Capped at 100 per pass
-    /// so launch doesn't kick off a 500-icon download burst.
+    /// the user has *ever* touched (including pure-archive creators they've
+    /// never saved into a topic) ends up with its icon stored locally, and
+    /// `ChannelIconView` reads from that store first. Walking the full
+    /// channels table — not just topic-referenced channels — closes the
+    /// leaderboard / archive-discovery gap. Capped at 100 per pass so launch
+    /// doesn't kick off a 500-icon download burst.
     func backfillMissingChannelIcons() {
-        let candidates = knownChannelsById.values.filter { record in
+        let allRecords: [ChannelRecord]
+        do {
+            allRecords = try store.allChannels()
+        } catch {
+            AppLogger.app.error("Channel icon backfill: failed to enumerate channels: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let candidates = allRecords.filter { record in
             record.iconData == nil && record.iconUrl != nil
         }
         guard !candidates.isEmpty else { return }
         let capped = Array(candidates.prefix(100))
-        AppLogger.app.info("Backfilling \(capped.count, privacy: .public) missing channel icons")
+        AppLogger.app.info("Backfilling \(capped.count, privacy: .public) missing channel icons (of \(candidates.count, privacy: .public) needing icons across \(allRecords.count, privacy: .public) total channels)")
 
         Task { [weak self] in
             guard let self else { return }
