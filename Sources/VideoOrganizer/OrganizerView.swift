@@ -155,35 +155,43 @@ struct OrganizerView: View {
         return store.knownChannelsById[selectedChannelId] ?? (try? store.store.channelById(selectedChannelId))
     }
 
-    /// Inline header row pinned to the top of the grid pane via
-    /// `safeAreaInset(.top)`. Hosts the sort menu (moved out of the toolbar
-    /// in the design simplification — sort is a *viewing preference*, not a
-    /// navigation primitive, so it lives next to the data it sorts).
+    /// Header pinned to the top of the grid pane via `safeAreaInset(.top)`.
+    /// Two-row layout when a creator filter is active:
     ///
-    /// Kept minimal — just one element on the right — so the chrome above
-    /// the grid is ~28pt instead of the ~80pt the previous chip + scroll
-    /// progress bar + toolbar groups added up to.
+    ///   Row 1 (filter row, only when filter is active): full-width
+    ///         edge-to-edge banner with avatar + name + subscribers,
+    ///         a primary blue "Open Creator Page" CTA, and an X clear.
+    ///   Row 2 (sort row, always visible): sort menu, right-aligned.
+    ///
+    /// Both rows share a single `.bar` material background so they read
+    /// as a unified header. When no filter is active, only the sort row
+    /// renders (~28pt total chrome).
     @ViewBuilder
     private var gridHeaderRow: some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 0) {
             if let channel = selectedCreatorChannel {
                 ActiveCreatorFilterCard(
                     channel: channel,
+                    onOpenDetail: {
+                        store.openCreatorDetail(channelId: channel.channelId)
+                    },
                     onClear: {
                         store.clearChannelFilter()
                         displaySettings.toast.show("Creator Filter Cleared", icon: "person.crop.circle.badge.xmark")
                     }
                 )
-            } else {
-                Spacer(minLength: 0)
+                Divider()
             }
 
-            sortMenu
-                .menuStyle(.borderlessButton)
-                .fixedSize()
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                sortMenu
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+            }
+            .padding(.horizontal, GridConstants.horizontalPadding)
+            .padding(.vertical, 6)
         }
-        .padding(.horizontal, GridConstants.horizontalPadding)
-        .padding(.vertical, 6)
         .background(.bar)
         .overlay(
             Rectangle()
@@ -345,8 +353,16 @@ struct OrganizerView: View {
     }
 }
 
+/// Edge-to-edge filter banner shown above the grid when a creator filter
+/// is active. Lives in the top safeAreaInset alongside the sort row, with
+/// a shared `.bar` material background. The card itself has no rounded
+/// chrome — it's a flat horizontal band.
+///
+/// Layout: `[avatar 56] [name + subscribers] Spacer [Open Creator Page] [×]`.
+/// The blue button is the primary CTA. The X is a tertiary clear.
 private struct ActiveCreatorFilterCard: View {
     let channel: ChannelRecord
+    let onOpenDetail: () -> Void
     let onClear: () -> Void
 
     var body: some View {
@@ -383,26 +399,28 @@ private struct ActiveCreatorFilterCard: View {
             Spacer(minLength: 12)
 
             Button {
+                onOpenDetail()
+            } label: {
+                Label("Open Creator Page", systemImage: "chevron.right.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .help("Open the full creator detail page for \(channel.name)")
+            .accessibilityIdentifier("openCreatorPageFromFilterCard")
+
+            Button {
                 onClear()
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
+                    .font(.system(size: 18))
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
             .help("Clear creator filter")
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, GridConstants.horizontalPadding)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.quaternary, lineWidth: 0.5)
-        )
-        .frame(maxWidth: 420, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var subscriberLabel: String? {

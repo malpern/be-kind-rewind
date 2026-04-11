@@ -89,31 +89,55 @@ struct VideoInspector: View {
 
                     if let channel = channelPresentation.name {
                         VStack(alignment: .leading, spacing: 8) {
-                            Button {
-                                if let topicId = store.navigateToCreator(
-                                    channelId: video.channelId,
-                                    channelName: channel,
-                                    preferredTopicId: video.topicId
-                                ) {
-                                    displaySettings.scrollToTopicRequested = topicId
-                                }
-                            } label: {
-                                HStack(spacing: 10) {
-                                    channelAvatar(channelPresentation)
-                                    HighlightedText(channel, terms: store.parsedQuery.includeTerms)
-                                        .appPrimary()
-                                        .fontWeight(.medium)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .help("Show this creator in the library")
-                            .contentShape(Rectangle())
-                            .contextMenu {
-                                if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
-                                    Button("Open Channel on YouTube") {
-                                        NSWorkspace.shared.open(channelUrl)
+                            HStack(alignment: .center, spacing: 10) {
+                                Button {
+                                    if let topicId = store.navigateToCreator(
+                                        channelId: video.channelId,
+                                        channelName: channel,
+                                        preferredTopicId: video.topicId
+                                    ) {
+                                        displaySettings.scrollToTopicRequested = topicId
                                     }
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        channelAvatar(channelPresentation)
+                                        HighlightedText(channel, terms: store.parsedQuery.includeTerms)
+                                            .appPrimary()
+                                            .fontWeight(.medium)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .help("Filter the library to this creator")
+                                .contentShape(Rectangle())
+                                .contextMenu {
+                                    if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
+                                        Button("Open Channel on YouTube") {
+                                            NSWorkspace.shared.open(channelUrl)
+                                        }
+                                    }
+                                }
+
+                                Spacer(minLength: 8)
+
+                                // Blue primary CTA right next to the creator
+                                // name. App Store "Go To Artist" pattern —
+                                // the most prominent affordance for opening
+                                // the creator's full detail page lives in the
+                                // entity's row, not buried in an actions
+                                // stack at the bottom of the inspector.
+                                if let channelId = video.channelId, !channelId.isEmpty {
+                                    Button {
+                                        store.openCreatorDetail(channelId: channelId)
+                                    } label: {
+                                        Label("Open", systemImage: "chevron.right.circle.fill")
+                                            .labelStyle(.titleAndIcon)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                    .help("Open the full creator detail page for \(channel)")
+                                    .accessibilityIdentifier("openCreatorPageFromInspector")
                                 }
                             }
 
@@ -290,19 +314,10 @@ struct VideoInspector: View {
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
             .help("Open this video on YouTube")
-
-            Button {
-                if let url = video.youtubeUrl {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
-                }
-            } label: {
-                Label("Copy Link", systemImage: "link")
-                    .frame(maxWidth: .infinity)
-            }
-            .controlSize(.large)
-            .buttonStyle(.bordered)
-            .help("Copy YouTube link to clipboard")
+            // Copy Link button removed — low-value duplication of the
+            // system Share sheet, and the row was crowding the inspector.
+            // Use the right-click context menu on the title or thumbnail
+            // for copy operations.
 
             if inspectedItem.isWatchCandidate, let topicId = store.selectedTopicId {
                 sectionDivider()
