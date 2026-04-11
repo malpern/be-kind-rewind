@@ -1516,16 +1516,28 @@ struct CreatorDetailView: View {
                     if allVideosViewMode == .grid || allVideosViewMode == .byTheme {
                         allVideosGridSortMenu
                     }
-                    Picker("", selection: $allVideosViewMode) {
+                    // Menu picker (not segmented) — segmented Pickers crash
+                    // during SwiftUI scroll prefetch on macOS 26 when the
+                    // enum case count changes between releases. Menus don't
+                    // have this issue and read just as cleanly for a
+                    // 3-option toggle.
+                    Menu {
                         ForEach(AllVideosViewMode.allCases) { mode in
-                            Image(systemName: mode.symbolName)
-                                .help(mode.label)
-                                .tag(mode)
+                            Button {
+                                allVideosViewMode = mode
+                            } label: {
+                                if allVideosViewMode == mode {
+                                    Label(mode.label, systemImage: "checkmark")
+                                } else {
+                                    Label(mode.label, systemImage: mode.symbolName)
+                                }
+                            }
                         }
+                    } label: {
+                        Label(allVideosViewMode.label, systemImage: allVideosViewMode.symbolName)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 110)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                     .help("Switch between By Theme, Grid, and Table views")
                 }
 
@@ -2563,18 +2575,29 @@ struct CreatorDetailView: View {
         }
     }
 
-    /// Metric picker — segmented Picker for [Saved | Outliers | Views].
+    /// Metric picker — Menu (not segmented) for [Saved | Outliers | Views].
+    /// Same crash-avoidance reasoning as the All Videos view-mode picker:
+    /// segmented Pickers can crash during SwiftUI scroll prefetch on macOS
+    /// 26 when their enum case count varies, and Menus avoid the issue
+    /// entirely.
     private var leaderboardMetricPicker: some View {
-        Picker("", selection: $leaderboardMetric) {
+        Menu {
             ForEach(LeaderboardMetric.allCases) { metric in
-                Image(systemName: metric.symbolName)
-                    .help(metric.label)
-                    .tag(metric)
+                Button {
+                    leaderboardMetric = metric
+                } label: {
+                    if leaderboardMetric == metric {
+                        Label(metric.label, systemImage: "checkmark")
+                    } else {
+                        Label(metric.label, systemImage: metric.symbolName)
+                    }
+                }
             }
+        } label: {
+            Label(leaderboardMetric.label, systemImage: leaderboardMetric.symbolName)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(width: 110)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
         .help("Rank by saved video count, outlier count, or total views")
     }
 

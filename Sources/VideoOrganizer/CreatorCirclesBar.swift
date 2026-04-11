@@ -310,35 +310,24 @@ struct CreatorCirclesBar: View {
 
     // MARK: - Filter Chip
 
-    /// Active-filter banner shown below the face-pile circles whenever a
-    /// creator filter is active. Reads as a contextual extension of the
-    /// circles row (same `.bar` background, same horizontal padding) rather
-    /// than a separate page-level chrome strip — that placement is the
-    /// macOS-native version of "filter is active here, here are the relevant
-    /// actions" (Mail's message list does the same with its own filter row).
-    ///
-    /// Three controls:
-    /// - "Showing N video(s)" caption (no longer duplicates the channel name
-    ///   since the highlighted circle above already identifies the creator)
-    /// - "Open Creator Page" bordered button → discoverable CTA to navigate
-    ///   to the dedicated detail view
-    /// - "Clear filter" × button → mirrors the click-again-to-deselect
-    ///   behavior on the circles, for users who prefer an explicit affordance
     /// Active-filter preview shown below the face-pile circles when a creator
-    /// filter is active. Designed as a *value preview* rather than a generic
-    /// "Open Creator Page" CTA: the avatar + name + stats + theme list
-    /// already communicate what the creator is about and what richer info
-    /// lives behind the click. Clicking the preview itself opens the detail
-    /// page. The right edge has a separate × clear button.
+    /// filter is active. Compact, single-insight design — one row only:
     ///
-    /// Two lines (or one if no themes available):
-    ///   [avatar] Name · 12 saved · 2mo ago
-    ///            Switch Reviews · Web Dev · Office Chairs
+    ///   [avatar 32]  Channel Name             [↗ icon] [×]
+    ///                Top Theme
+    ///
+    /// One insight only — the primary theme tag from the LLM cache (or a
+    /// fallback when not classified). No stats join, no multi-theme list.
+    /// Right side: icon-only nav button (chevron-right circle) → opens the
+    /// detail page, plus the × clear button. The whole left side (avatar +
+    /// name + insight) is also a click target so the discoverability problem
+    /// stays solved without the icon button needing to advertise itself
+    /// with words.
     @ViewBuilder
     private var filterChip: some View {
         if let selectedId = selectedChannelId,
            let channel = channels.first(where: { $0.channelId == selectedId }) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button {
                     onOpenDetail?(channel.channelId)
                 } label: {
@@ -346,9 +335,13 @@ struct CreatorCirclesBar: View {
                         channelIcon(channel, size: 36)
                             .frame(width: 36, height: 36)
                             .clipShape(Circle())
-                        VStack(alignment: .leading, spacing: 2) {
-                            chipPrimaryLine(channel)
-                            chipSecondaryLine(channel)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(channel.name)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            chipInsight(for: channel)
                         }
                         Spacer(minLength: 0)
                     }
@@ -361,19 +354,32 @@ struct CreatorCirclesBar: View {
                 .help("Open the creator page for \(channel.name)")
                 .accessibilityIdentifier("creatorFilterPreview")
 
+                if onOpenDetail != nil {
+                    Button {
+                        onOpenDetail?(channel.channelId)
+                    } label: {
+                        Image(systemName: "chevron.right.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.tint)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open the creator page for \(channel.name)")
+                    .accessibilityIdentifier("creatorFilterOpenDetail")
+                }
+
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         onSelect(selectedId)
                     }
                 } label: {
-                    Label("Clear", systemImage: "xmark")
-                        .labelStyle(.iconOnly)
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
+                .buttonStyle(.plain)
                 .help("Clear the creator filter")
                 .accessibilityIdentifier("creatorFilterClear")
-                .padding(.trailing, 4)
+                .padding(.trailing, 8)
             }
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -387,64 +393,48 @@ struct CreatorCirclesBar: View {
         }
     }
 
-    /// Top line: channel name in primary text, then dot-separated stats
-    /// (topic-scoped video count, formatted subscriber count, last-upload
-    /// age). Each stat is omitted gracefully when its data isn't available.
+    /// The single insight rendered below the channel name. Picks the most
+    /// distinctive thing we know about the creator and renders it as a
+    /// colored capsule echoing the theme capsule visual language used on
+    /// the creator detail page. Priority order:
+    ///
+    /// 1. Primary LLM theme — the highest-signal "what they make" answer
+    /// 2. Channel description first sentence — fallback for un-classified
+    ///    creators
+    /// 3. "N saved" count — last-resort fallback so the row never feels empty
     @ViewBuilder
-    private func chipPrimaryLine(_ channel: ChannelRecord) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(channel.name)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Text("·")
-                .font(.body)
-                .foregroundStyle(.tertiary)
-            Text(chipStatsString(for: channel))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-    }
-
-    /// Build the dot-separated stats string for the filter chip's primary
-    /// line. Lives outside the @ViewBuilder so we can use ordinary control
-    /// flow (var + append) to assemble the parts conditionally.
-    private func chipStatsString(for channel: ChannelRecord) -> String {
-        let count = videoCountForChannel(channel.channelId)
-        var parts: [String] = ["\(count) saved"]
-        if let subs = subscriberCountForChannel?(channel.channelId)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !subs.isEmpty {
-            parts.append(subs)
-        }
-        if let publishedAt = latestPublishedAtForChannel(channel.channelId) {
-            parts.append(relativeAge(from: publishedAt))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    /// Second line: top theme labels separated by middle dots. Reads from
-    /// the LLM-cached `creator_themes` table via the closure passed in by
-    /// the call site. When no themes are cached, falls back to the channel
-    /// description's first sentence so there's still some preview value.
-    @ViewBuilder
-    private func chipSecondaryLine(_ channel: ChannelRecord) -> some View {
+    private func chipInsight(for channel: ChannelRecord) -> some View {
         let themes = themeLabelsForChannel?(channel.channelId) ?? []
-        if !themes.isEmpty {
-            Text(themes.prefix(4).joined(separator: " · "))
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        if let topTheme = themes.first {
+            Text(topTheme)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.accentColor)
                 .lineLimit(1)
                 .truncationMode(.tail)
-        } else if let description = channel.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule().fill(Color.accentColor.opacity(0.12))
+                )
+                .overlay(
+                    Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
+                )
+        } else if let description = channel.description?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: ".")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
                   !description.isEmpty {
             Text(description)
-                .font(.callout)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+        } else {
+            let count = videoCountForChannel(channel.channelId)
+            Text("\(count) video\(count == 1 ? "" : "s") saved")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
     }
 
