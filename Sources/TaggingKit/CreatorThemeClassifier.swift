@@ -165,7 +165,7 @@ public actor CreatorThemeClassifier {
     // MARK: - About paragraph
 
     /// Generate a short, scannable "About" sentence for the creator from their
-    /// title sample. Targets 1-2 sentences, max ~200 chars, no filler openers.
+    /// title sample. Targets 1 sentence, max ~100 chars, no filler openers.
     public func generateAbout(
         creatorName: String,
         videos: [CreatorVideoInput],
@@ -179,12 +179,12 @@ public actor CreatorThemeClassifier {
         let titleList = capped.map(\.title).joined(separator: "\n")
 
         let prompt = """
-        Summarize what the YouTube creator "\(creatorName)" makes, in 1-2 sentences \
-        totaling at most 200 characters. Base it ONLY on the video titles below.
+        Summarize what the YouTube creator "\(creatorName)" makes in ONE short sentence \
+        of at most 100 characters. Base it ONLY on the video titles below.
 
         STRICT RULES:
-        - Maximum 200 characters total. Aim for ~150.
-        - 1-2 sentences. No paragraphs.
+        - Maximum 100 characters total. Aim for ~75.
+        - Exactly 1 sentence. No paragraphs.
         - The first word must be a CONTENT NOUN or descriptive phrase, not a filler \
           opener. Forbidden first phrases include:
           • "This is the YouTube channel for/of/by..."
@@ -199,10 +199,10 @@ public actor CreatorThemeClassifier {
         - Lead with the most distinctive specific topic, not a generic category.
         - Be dense and scannable: every word should add information.
 
-        GOOD EXAMPLES:
-        - "Mechanical keyboard reviews and split-ergo build vlogs, with deep dives into switch lubing and keymapping."
-        - "Front-end web development tutorials covering CSS, design systems, and book promotion."
-        - "Office chair, audio gear, and dev hardware reviews — adjacent to mechanical keyboards."
+        GOOD EXAMPLES (note the brevity — one tight sentence):
+        - "Mechanical keyboard reviews and split-ergo build vlogs."
+        - "Front-end web tutorials covering CSS and design systems."
+        - "Office chair and dev hardware reviews."
 
         BAD EXAMPLES (do not write like this):
         - "This is the YouTube channel for Ben Frain, a developer who covers mechanical keyboards and dev hardware."
@@ -217,9 +217,9 @@ public actor CreatorThemeClassifier {
 
         let response = try await client.complete(
             prompt: prompt,
-            system: "You write 1-2 sentence factual summaries of a YouTube creator's content based on their video titles. You never use filler openers. You never mention 'YouTube' or 'channel'. Maximum 200 characters.",
+            system: "You write ONE-sentence factual summaries of a YouTube creator's content based on their video titles. You never use filler openers. You never mention 'YouTube' or 'channel'. Maximum 100 characters.",
             model: .haiku,
-            maxTokens: 256
+            maxTokens: 128
         )
 
         return cleanupAboutParagraph(response.trimmingCharacters(in: .whitespacesAndNewlines))

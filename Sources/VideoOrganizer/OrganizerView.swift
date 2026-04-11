@@ -34,7 +34,7 @@ struct OrganizerView: View {
                     }
                     .inspector(isPresented: $displaySettings.showInspector) {
                         VideoInspector(store: store, thumbnailCache: thumbnailCache, displaySettings: displaySettings)
-                            .inspectorColumnWidth(min: 280, ideal: 300, max: 340)
+                            .inspectorColumnWidth(min: 296, ideal: 320, max: 344)
                             .accessibilityIdentifier("videoInspector")
                     }
                     .toolbar {

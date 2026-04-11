@@ -204,6 +204,7 @@ enum CollectionSectionHeaderModel {
     case creator(
         channelName: String,
         channelIconUrl: URL?,
+        channelIconData: Data?,
         channelUrl: URL?,
         count: Int,
         totalCount: Int?,

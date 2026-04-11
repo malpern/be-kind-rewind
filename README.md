@@ -35,7 +35,7 @@ On first launch, new installs with missing credentials will show a short setup s
 In the app:
 
 1. Open `Settings`
-2. Go to `API Keys`
+2. Go to `Accounts`
 3. Paste your Anthropic API key
 4. Click `Save Anthropic Key`
 
@@ -48,7 +48,7 @@ This improves discovery refreshes and playlist verification.
 In the app:
 
 1. Open `Settings`
-2. Go to `API Keys`
+2. Go to `Accounts`
 3. Paste your YouTube Data API key
 4. Click `Save YouTube API Key`
 
@@ -68,16 +68,16 @@ then do this:
 1. Create a Google OAuth desktop client.
 2. Download the client JSON.
 3. In the app, open `Settings`.
-4. In the `YouTube` section, click `Import OAuth Client JSON…`.
+4. In the `Accounts` pane, click `Import OAuth Client JSON…`.
 5. Select the downloaded JSON file.
 6. Click `Reconnect` or `Upgrade Access`.
-7. In the `Sync` section, use `Open Browser Sign-In` once so the browser fallback profile is signed into YouTube too.
+7. In the `Advanced` pane, use `Open Browser Sign-In` once so the browser fallback profile is signed into YouTube too.
 
 ### 5. Optional: import watch history
 
 If you export Google Takeout / My Activity watch history, you can import it in:
 
-- `Settings > History > Import Watch History…`
+- `Settings > Watch > Import Watch History…`
 
 That suppresses already-watched videos from the `Watch` candidate list.
 

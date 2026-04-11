@@ -129,9 +129,10 @@ struct CreatorDetailView: View {
     /// Phase 3: sort order for the All Videos GRID view. The table view has
     /// built-in sortable column headers, but the grid needs an explicit picker
     /// to match the main save window's sort menu. Sticky across launches.
-    @AppStorage("creatorAllVideosGridSort") private var allVideosGridSort: AllVideosGridSort = .dateNewest
+    @AppStorage("creatorAllVideosGridSort") private var allVideosGridSort: AllVideosGridSort = .byTopic
 
     enum AllVideosGridSort: String, CaseIterable, Identifiable {
+        case byTopic
         case dateNewest
         case dateOldest
         case viewsHigh
@@ -145,6 +146,7 @@ struct CreatorDetailView: View {
 
         var label: String {
             switch self {
+            case .byTopic: return "By topic"
             case .dateNewest: return "Newest first"
             case .dateOldest: return "Oldest first"
             case .viewsHigh: return "Most viewed"
@@ -158,6 +160,7 @@ struct CreatorDetailView: View {
 
         var symbolName: String {
             switch self {
+            case .byTopic: return "rectangle.stack"
             case .dateNewest, .dateOldest: return "calendar"
             case .viewsHigh, .viewsLow: return "chart.bar.fill"
             case .durationLong, .durationShort: return "timer"
@@ -206,10 +209,10 @@ struct CreatorDetailView: View {
 
     /// Section anchors for ⌘1–⌘0 jump shortcuts. The order matches the visual order
     /// of sections in the page body and the keyboard shortcuts in `sectionShortcuts`.
-    /// `notes` is the 9th section so it gets ⌘9; ⌘0 is unused now that the standalone
-    /// themes section was folded into the identity card.
+    /// The standalone "By theme" section was removed: theme browsing now lives
+    /// inside the All Videos byTheme view mode and the identity-card tag list.
     enum SectionAnchor: Hashable {
-        case identity, whatsNew, hits, allVideos, byTheme, playlists, niches, leaderboard, notes
+        case identity, whatsNew, hits, allVideos, playlists, niches, leaderboard, notes
     }
 
     var body: some View {
@@ -220,7 +223,6 @@ struct CreatorDetailView: View {
                     whatsNewSection.id(SectionAnchor.whatsNew)
                     hitsSection.id(SectionAnchor.hits)
                     allVideosSection.id(SectionAnchor.allVideos)
-                    byThemeSection.id(SectionAnchor.byTheme)
                     playlistsSection.id(SectionAnchor.playlists)
                     nichesAndCadenceSection.id(SectionAnchor.niches)
                     leaderboardSection.id(SectionAnchor.leaderboard)
@@ -297,6 +299,25 @@ struct CreatorDetailView: View {
             // was visited before theme classification was added: the
             // archive is on disk but themes have never been generated.
             store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
+
+            // Offline-first thumbnails: prefetch every video shown on this
+            // page into the on-disk thumbnail cache. Without this, only the
+            // saved videos for the user's currently-selected topic ever get
+            // cached — so opening a creator page while offline used to
+            // leave most rows blank. Union the four sources visible on the
+            // page: allVideos (master list for table/grid/byTheme/byTopic),
+            // theirHits, recentVideos, essentials. Prefetch is a no-op for
+            // already-cached IDs so this is cheap on revisits.
+            Task.detached { [thumbnailCache, page] in
+                var ids = Set<String>()
+                for card in page.allVideos { ids.insert(card.videoId) }
+                for card in page.theirHits { ids.insert(card.videoId) }
+                for card in page.recentVideos { ids.insert(card.videoId) }
+                for card in page.essentials { ids.insert(card.videoId) }
+                let videoIds = Array(ids)
+                guard !videoIds.isEmpty else { return }
+                await thumbnailCache.prefetch(videoIds: videoIds)
+            }
             // Reset leaderboard scope to the page creator's primary topic on every
             // navigation. The user can flip the picker to look at other topics, but
             // navigating to a new creator should always start at THEIR primary topic.
@@ -367,11 +388,10 @@ struct CreatorDetailView: View {
             ("2", .whatsNew),
             ("3", .hits),
             ("4", .allVideos),
-            ("5", .byTheme),
-            ("6", .playlists),
-            ("7", .niches),
-            ("8", .leaderboard),
-            ("9", .notes),
+            ("5", .playlists),
+            ("6", .niches),
+            ("7", .leaderboard),
+            ("8", .notes),
         ]
         ZStack {
             ForEach(bindings, id: \.1) { key, anchor in
@@ -1219,22 +1239,16 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private func thumbnail(for card: CreatorVideoCard) -> some View {
-        if let url = card.thumbnailUrl {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty:
-                    thumbnailPlaceholder
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                case .failure:
-                    thumbnailPlaceholder
-                @unknown default:
-                    thumbnailPlaceholder
-                }
-            }
-        } else {
-            thumbnailPlaceholder
-        }
+        // Routes through ThumbnailView so we hit the on-disk cache first
+        // (~/Library/Caches/VideoOrganizer/thumbnails/{videoId}.jpg) and
+        // only fall back to AsyncImage when the file isn't there. Critical
+        // for offline use — without this, every Hits/What's-New row went
+        // straight to i.ytimg.com on every render.
+        ThumbnailView(
+            videoId: card.videoId,
+            thumbnailUrl: card.thumbnailUrl,
+            cacheDir: thumbnailCache.cacheDirURL
+        )
     }
 
     private var thumbnailPlaceholder: some View {
@@ -1597,7 +1611,15 @@ struct CreatorDetailView: View {
                 case .table:
                     allVideosTable
                 case .grid:
-                    allVideosGrid
+                    // Special-case the "by topic" sort: render with topic
+                    // section headers (matching the saved-view's topic
+                    // grouping) instead of a flat grid. The other sorts
+                    // stay flat — they only define ordering, not grouping.
+                    if allVideosGridSort == .byTopic {
+                        allVideosByTopic
+                    } else {
+                        allVideosGrid
+                    }
                 case .byTheme:
                     allVideosByTheme
                 }
@@ -1778,6 +1800,93 @@ struct CreatorDetailView: View {
         }
     }
 
+    /// By Topic grouping. Each user-collection topic becomes a section header
+    /// followed by a LazyVGrid of the creator's videos saved into that topic.
+    /// Mirrors the saved-view's topic-section UX so the All Videos byTopic
+    /// sort feels native. Videos that don't have a topic (archive entries the
+    /// user hasn't saved into a topic yet) sink into a final "Unsaved" bucket.
+    @ViewBuilder
+    private var allVideosByTopic: some View {
+        let groups = byTopicGroups
+        if groups.isEmpty {
+            // No topic data at all — fall back to a flat grid so the user
+            // still sees something instead of an empty section.
+            allVideosGrid
+        } else {
+            VStack(alignment: .leading, spacing: 24) {
+                ForEach(groups) { group in
+                    byTopicGroupSection(group)
+                }
+            }
+        }
+    }
+
+    /// One topic bucket inside the byTopic view: section header (topic name +
+    /// count) and the topic's videos rendered as a LazyVGrid using the same
+    /// card treatment as the flat grid.
+    @ViewBuilder
+    private func byTopicGroupSection(_ group: ByTopicGroup) -> some View {
+        let columns = [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)]
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(group.label)
+                    .font(.headline)
+                Text("\(group.cards.count) video\(group.cards.count == 1 ? "" : "s")")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                ForEach(group.cards) { card in
+                    allVideosGridCard(card)
+                }
+            }
+        }
+    }
+
+    /// One section in the byTopic view. Topic-name keyed; the "Unsaved" bucket
+    /// uses id="__unsaved__" so it sorts last and is identifiable.
+    struct ByTopicGroup: Identifiable {
+        let id: String
+        let label: String
+        let cards: [CreatorVideoCard]
+    }
+
+    /// Build the byTopic groups from the filtered card set. Topics are sorted
+    /// alphabetically (matching the saved view); the "Unsaved" bucket — if it
+    /// exists — is appended last so users see their organized topics first.
+    private var byTopicGroups: [ByTopicGroup] {
+        let cards = filteredAllVideos
+        guard !cards.isEmpty else { return [] }
+
+        var bucketsByTopic: [String: [CreatorVideoCard]] = [:]
+        var unsaved: [CreatorVideoCard] = []
+        for card in cards {
+            if let topic = card.topicName {
+                bucketsByTopic[topic, default: []].append(card)
+            } else {
+                unsaved.append(card)
+            }
+        }
+
+        let sortedTopicNames = bucketsByTopic.keys.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        var groups: [ByTopicGroup] = sortedTopicNames.map { name in
+            let topicCards = (bucketsByTopic[name] ?? []).sorted {
+                ($0.ageDays ?? .max) < ($1.ageDays ?? .max)
+            }
+            return ByTopicGroup(id: name, label: name, cards: topicCards)
+        }
+        if !unsaved.isEmpty {
+            let sortedUnsaved = unsaved.sorted {
+                ($0.ageDays ?? .max) < ($1.ageDays ?? .max)
+            }
+            groups.append(ByTopicGroup(id: "__unsaved__", label: "Unsaved", cards: sortedUnsaved))
+        }
+        return groups
+    }
+
     /// By Theme grouping. Each major theme becomes a section header followed
     /// by a LazyVGrid of its videos. Long-tail themes (themes with fewer than
     /// 3 videos OR not in the top 8) collapse into a final "Other" section.
@@ -1935,7 +2044,10 @@ struct CreatorDetailView: View {
             candidateScore: nil,
             stateTag: card.isOutlier ? "OUTLIER" : nil,
             isPlaceholder: false,
-            placeholderMessage: nil
+            placeholderMessage: nil,
+            // All cards on this page belong to the same creator, so the
+            // page channel's cached icon bytes apply to every card.
+            channelIconData: store.knownChannelsById[channelId]?.iconData
         )
     }
 
@@ -1976,6 +2088,24 @@ struct CreatorDetailView: View {
     private var gridSortedAllVideos: [CreatorVideoCard] {
         let base = filteredAllVideos
         switch allVideosGridSort {
+        case .byTopic:
+            // Group videos under their owning user-topic. Cards with a topic
+            // sort alphabetically by topic name; within each topic the
+            // secondary sort is newest-first so the most recent saved video
+            // in each bucket leads. Cards with no topic (archive entries the
+            // user hasn't saved into a topic yet) sink to the bottom.
+            return base.sorted { lhs, rhs in
+                switch (lhs.topicName, rhs.topicName) {
+                case let (l?, r?) where l != r:
+                    return l.localizedStandardCompare(r) == .orderedAscending
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return (lhs.ageDays ?? .max) < (rhs.ageDays ?? .max)
+                }
+            }
         case .dateNewest:
             return base.sorted { ($0.ageDays ?? .max) < ($1.ageDays ?? .max) }
         case .dateOldest:
@@ -2014,20 +2144,13 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private func tableThumbnail(for card: CreatorVideoCard) -> some View {
-        Group {
-            if let url = card.thumbnailUrl {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    default:
-                        Color.clear
-                    }
-                }
-            } else {
-                Color.clear
-            }
-        }
+        // Same on-disk-cache-first treatment as `thumbnail(for:)`. Without
+        // this, every visible Table row punched the network on every render.
+        ThumbnailView(
+            videoId: card.videoId,
+            thumbnailUrl: card.thumbnailUrl,
+            cacheDir: thumbnailCache.cacheDirURL
+        )
         .frame(width: 56, height: 32)
         .background(.quaternary)
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
@@ -2039,114 +2162,6 @@ struct CreatorDetailView: View {
         let actual = formatCompact(card.viewCountParsed)
         let median = formatCompact(page.channelMedianViews)
         return "View count is \(multiplier) this creator's median (\(actual) vs \(median) median)"
-    }
-
-    // MARK: - By theme (LLM-driven browse)
-
-    @ViewBuilder
-    private var byThemeSection: some View {
-        if !page.themes.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("By theme")
-                    .font(.title3.weight(.semibold))
-
-                VStack(spacing: 0) {
-                    ForEach(Array(page.themes.enumerated()), id: \.element.label) { index, theme in
-                        DisclosureGroup {
-                            byThemeVideoList(for: theme)
-                        } label: {
-                            byThemeRowLabel(theme)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        if index < page.themes.count - 1 {
-                            Divider()
-                        }
-                    }
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.background.secondary)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 0.5)
-                )
-            }
-        }
-    }
-
-    private func byThemeRowLabel(_ theme: CreatorThemeRecord) -> some View {
-        HStack(spacing: 8) {
-            if theme.isSeries {
-                Image(systemName: "list.number")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.tint)
-                    .help(theme.orderingSignal == "numeric" ? "Numbered series" :
-                          theme.orderingSignal == "date" ? "Date-ordered series" : "Recurring series")
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(theme.label)
-                    .font(.body.weight(.medium))
-                if let description = theme.description, !description.isEmpty {
-                    Text(description)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-            Spacer(minLength: 0)
-            Text("\(theme.videoIds.count)")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(.gray.opacity(0.15)))
-        }
-    }
-
-    @ViewBuilder
-    private func byThemeVideoList(for theme: CreatorThemeRecord) -> some View {
-        let allowed = Set(theme.videoIds)
-        let videosInTheme = page.allVideos.filter { allowed.contains($0.videoId) }
-        let standoutId = page.standoutEpisodesBySeriesLabel[theme.label]
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(videosInTheme) { card in
-                Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
-                    HStack(spacing: 8) {
-                        if card.videoId == standoutId {
-                            Image(systemName: "star.fill")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(.yellow)
-                                .help("Standout episode of this series")
-                        }
-                        Text(card.title)
-                            .font(.callout)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        if card.viewCountParsed > 0 {
-                            Text(card.viewCountFormatted)
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        if let age = card.ageFormatted {
-                            Text(age)
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    videoContextMenuItems(for: [card])
-                }
-            }
-        }
-        .padding(.top, 6)
-        .padding(.leading, 8)
     }
 
     // MARK: - In your playlists
@@ -2749,20 +2764,14 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private func leaderboardAvatar(_ entry: CreatorLeaderboardEntry) -> some View {
-        Group {
-            if let url = entry.channelIconUrl {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    default:
-                        leaderboardAvatarFallback
-                    }
-                }
-            } else {
-                leaderboardAvatarFallback
-            }
-        }
+        // Routes through ChannelIconView so we use the SQLite iconData blob
+        // when available and only fall back to network when we don't have
+        // bytes locally. The leaderboard entry doesn't carry iconData
+        // itself, so we look it up from the store's in-memory channel cache.
+        ChannelIconView(
+            iconData: store.knownChannelsById[entry.channelId]?.iconData,
+            fallbackUrl: entry.channelIconUrl
+        )
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(.quaternary, lineWidth: 0.5))
     }

@@ -135,7 +135,8 @@ struct CollectionGridView: View {
                                 channelId: candidate.channelId
                             ),
                             isPlaceholder: false,
-                            placeholderMessage: candidate.secondaryText
+                            placeholderMessage: candidate.secondaryText,
+                            channelIconData: candidate.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
                         )
                     }
                 },
@@ -178,7 +179,8 @@ struct CollectionGridView: View {
                 candidateScore: nil,
                 stateTag: store.badgeTagForVideo(v.videoId),
                 isPlaceholder: false,
-                placeholderMessage: nil
+                placeholderMessage: nil,
+                channelIconData: v.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
             )
         }
     }
@@ -209,7 +211,8 @@ struct CollectionGridView: View {
                         channelId: $0.channelId
                     ),
                     isPlaceholder: $0.isPlaceholder,
-                    placeholderMessage: $0.secondaryText
+                    placeholderMessage: $0.secondaryText,
+                    channelIconData: $0.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
                 )
             }
         }
@@ -808,9 +811,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
 
             if let creatorName = section.creatorName {
+                let iconData = section.creatorChannelId.flatMap { store?.knownChannelsById[$0]?.iconData }
                 return .creator(
                     channelName: creatorName,
                     channelIconUrl: section.channelIconUrl,
+                    channelIconData: iconData,
                     channelUrl: section.creatorChannelUrl,
                     count: section.videos.count,
                     totalCount: section.totalCount,

@@ -14,6 +14,21 @@ struct VideoInspector: View {
         return store.selectedVideoIds.contains(inspectedId)
     }
 
+    private enum InspectorMetrics {
+        static let minWidth: CGFloat = 296
+        static let idealWidth: CGFloat = 320
+        static let maxWidth: CGFloat = 344
+        static let titleLineSpacing: CGFloat = 3
+        static let paragraphLineSpacing: CGFloat = 4
+        static let compactLineSpacing: CGFloat = 2
+        static let sectionSpacing: CGFloat = 18
+        static let sectionDividerVerticalPadding: CGFloat = 6
+        static let metadataLabelWidth: CGFloat = 90
+        static let thumbnailCornerRadius: CGFloat = 10
+        static let inlineThumbnailCornerRadius: CGFloat = 6
+        static let rowSpacing: CGFloat = 12
+    }
+
     var body: some View {
         Group {
             // Removed the auto-forward to the creator detail page that used
@@ -29,7 +44,11 @@ struct VideoInspector: View {
                 emptyState
             }
         }
-        .frame(minWidth: 280, idealWidth: 300, maxWidth: 320)
+        .frame(
+            minWidth: InspectorMetrics.minWidth,
+            idealWidth: InspectorMetrics.idealWidth,
+            maxWidth: InspectorMetrics.maxWidth
+        )
         .background(.background)
     }
 
@@ -39,10 +58,10 @@ struct VideoInspector: View {
                 .font(.system(size: 32))
                 .foregroundStyle(.tertiary)
             Text("Select a video")
-                .font(.headline)
+                .appSectionHeader()
             Text("Hover a card to preview it here, or select one to see actions, tags, and playlist details.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .appSecondary()
+                .lineSpacing(InspectorMetrics.paragraphLineSpacing)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 24)
@@ -58,63 +77,78 @@ struct VideoInspector: View {
             VStack(alignment: .leading, spacing: 0) {
                 ThumbnailView(videoId: video.videoId, thumbnailUrl: video.thumbnailUrl, cacheDir: thumbnailCache.cacheDirURL)
                     .aspectRatio(16/9, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: InspectorMetrics.thumbnailCornerRadius, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: InspectorMetrics.sectionSpacing) {
                     HighlightedText(video.title, terms: store.parsedQuery.includeTerms)
-                        .font(.title3.weight(.semibold))
+                        .appPageTitle()
+                        .fontWeight(.semibold)
+                        .lineSpacing(InspectorMetrics.titleLineSpacing)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
 
                     if let channel = channelPresentation.name {
-                        Button {
-                            if let topicId = store.navigateToCreator(
-                                channelId: video.channelId,
-                                channelName: channel,
-                                preferredTopicId: video.topicId
-                            ) {
-                                displaySettings.scrollToTopicRequested = topicId
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                channelAvatar(channelPresentation)
-                                HighlightedText(channel, terms: store.parsedQuery.includeTerms)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help("Show this creator in the library")
-                        .contentShape(Rectangle())
-                        .contextMenu {
-                            if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
-                                Button("Open Channel on YouTube") {
-                                    NSWorkspace.shared.open(channelUrl)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button {
+                                if let topicId = store.navigateToCreator(
+                                    channelId: video.channelId,
+                                    channelName: channel,
+                                    preferredTopicId: video.topicId
+                                ) {
+                                    displaySettings.scrollToTopicRequested = topicId
                                 }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    channelAvatar(channelPresentation)
+                                    HighlightedText(channel, terms: store.parsedQuery.includeTerms)
+                                        .appPrimary()
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .help("Show this creator in the library")
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                if let channelUrl = channelPresentation.channelUrl.flatMap(URL.init(string:)) {
+                                    Button("Open Channel on YouTube") {
+                                        NSWorkspace.shared.open(channelUrl)
+                                    }
+                                }
+                            }
+
+                            if let subtitle = inspectorSubtitle(for: video), !subtitle.isEmpty {
+                                Text(subtitle)
+                                    .appMetadata()
+                                    .textCase(.uppercase)
+                                    .tracking(0.4)
                             }
                         }
                     }
 
-                    Divider()
+                    sectionDivider()
 
                     tagsSection(inspectedItem)
 
                     if !inspectedItem.playlists.isEmpty || inspectedItem.isWatchCandidate || inspectedItem.seenSummary != nil {
-                        Divider()
+                        sectionDivider()
                     }
 
                     metadataGrid(video)
 
                     if isSelected {
-                        Divider()
+                        sectionDivider()
                         actionButtons(inspectedItem)
                     }
 
                     let moreVideos = store.moreFromChannel(videoId: video.videoId)
                     if !moreVideos.isEmpty {
-                        Divider()
+                        sectionDivider()
                         moreFromChannel(moreVideos, channelName: video.channelName)
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 18)
             }
         }
     }
@@ -148,13 +182,26 @@ struct VideoInspector: View {
 
     // MARK: - Metadata Grid
 
+    private func inspectorSubtitle(for video: VideoViewModel) -> String? {
+        let parts: [String] = [video.publishedAt, video.viewCount]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " • ")
+    }
+
+    private func sectionDivider() -> some View {
+        Divider()
+            .padding(.vertical, InspectorMetrics.sectionDividerVerticalPadding)
+    }
+
     @ViewBuilder
     private func tagsSection(_ inspectedItem: InspectedVideoViewModel) -> some View {
         let tags = inspectorTags(for: inspectedItem)
         if !tags.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Tags")
-                    .font(.subheadline.weight(.semibold))
+                    .appSectionHeader()
                     .foregroundStyle(.secondary)
 
                 FlexibleTagList(tags: tags) { tag in
@@ -173,7 +220,7 @@ struct VideoInspector: View {
 
     private func metadataGrid(_ video: VideoViewModel) -> some View {
         let playlists = store.playlistsForVideo(video.videoId)
-        return Grid(alignment: .leading, verticalSpacing: 10) {
+        return Grid(alignment: .leading, verticalSpacing: 8) {
             if let views = video.viewCount {
                 metadataRow(icon: "eye", label: "Views", value: views)
             }
@@ -217,11 +264,12 @@ struct VideoInspector: View {
     private func metadataRow(icon: String, label: String, value: String, mono: Bool = false) -> some View {
         GridRow {
             Label(label, systemImage: icon)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(width: 85, alignment: .leading)
+                .appMetadata()
+                .frame(width: InspectorMetrics.metadataLabelWidth, alignment: .leading)
             Text(value)
-                .font(mono ? .callout.monospacedDigit() : .callout)
+                .font(mono ? Typography.primary.monospacedDigit() : Typography.primary)
+                .lineSpacing(InspectorMetrics.compactLineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -230,7 +278,7 @@ struct VideoInspector: View {
     /// Context-sensitive action buttons: Save/Dismiss for watch candidates, playlist management for saved videos.
     private func actionButtons(_ inspectedItem: InspectedVideoViewModel) -> some View {
         let video = inspectedItem.video
-        return VStack(spacing: 8) {
+        return VStack(spacing: 10) {
             Button {
                 if let url = video.youtubeUrl {
                     NSWorkspace.shared.open(url)
@@ -257,7 +305,7 @@ struct VideoInspector: View {
             .help("Copy YouTube link to clipboard")
 
             if inspectedItem.isWatchCandidate, let topicId = store.selectedTopicId {
-                Divider()
+                sectionDivider()
 
                 Button(role: .destructive) {
                     store.dismissCandidate(topicId: topicId, videoId: video.videoId)
@@ -339,7 +387,7 @@ struct VideoInspector: View {
                 }
                 .padding(.top, 20)
 
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: InspectorMetrics.sectionSpacing) {
                     // Name + tier — name doubles as the entry point for the new
                     // creator detail page when we know the channelId.
                     VStack(spacing: 4) {
@@ -348,7 +396,8 @@ struct VideoInspector: View {
                                 store.openCreatorDetail(channelId: channelId)
                             } label: {
                                 Text(detail.channelName)
-                                    .font(.title2.weight(.semibold))
+                                    .appHeroTitle()
+                                    .fontWeight(.semibold)
                                     .underline()
                             }
                             .buttonStyle(.plain)
@@ -356,22 +405,22 @@ struct VideoInspector: View {
                             .accessibilityIdentifier("openCreatorDetailFromInspector")
                         } else {
                             Text(detail.channelName)
-                                .font(.title2.weight(.semibold))
+                                .appHeroTitle()
+                                .fontWeight(.semibold)
                                 .textSelection(.enabled)
                         }
 
                         if let subs = detail.formattedSubscribers, let tier = detail.subscriberTier {
                             Text("\(subs) · \(tier)")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .appSecondary()
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
 
-                    Divider()
+                    sectionDivider()
 
                     // Stats
-                    Grid(alignment: .leading, verticalSpacing: 10) {
+                    Grid(alignment: .leading, verticalSpacing: 8) {
                         metadataRow(icon: "video", label: "Saved", value: "\(detail.totalVideoCount) videos")
                         if let coverage = detail.coverageText {
                             metadataRow(icon: "chart.pie", label: "Coverage", value: coverage)
@@ -390,32 +439,34 @@ struct VideoInspector: View {
                         }
                     }
 
-                    Divider()
+                    sectionDivider()
 
                     // Topic breakdown
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Topics")
-                            .font(.subheadline.weight(.semibold))
+                            .appSectionHeader()
                             .foregroundStyle(.secondary)
 
                         ForEach(detail.videosByTopic, id: \.topicName) { entry in
                             HStack {
                                 Image(systemName: TopicTheme.iconName(for: entry.topicName))
-                                    .font(.subheadline)
+                                    .font(Typography.metadata)
                                     .foregroundStyle(TopicTheme.iconColor(for: entry.topicName))
                                     .frame(width: 20)
                                 Text(entry.topicName)
-                                    .font(.callout)
+                                    .appPrimary()
                                     .lineLimit(1)
                                 Spacer()
                                 Text("\(entry.videos.count)")
-                                    .font(.callout.monospacedDigit())
+                            .font(Typography.primary.monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
                         }
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 20)
             }
         }
     }
@@ -454,29 +505,37 @@ struct VideoInspector: View {
     private func moreFromChannel(_ videos: [VideoViewModel], channelName: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("More from \(channelName ?? "this channel")")
-                .font(.subheadline.weight(.semibold))
+                .appSectionHeader()
                 .foregroundStyle(.secondary)
 
             ForEach(videos, id: \.videoId) { v in
                 Button {
                     store.selectedVideoId = v.videoId
                 } label: {
-                    HStack(spacing: 10) {
-                        ThumbnailView(videoId: v.videoId, thumbnailUrl: v.thumbnailUrl, cacheDir: thumbnailCache.cacheDirURL)
-                            .frame(width: 80, height: 45)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 10) {
+                            ThumbnailView(videoId: v.videoId, thumbnailUrl: v.thumbnailUrl, cacheDir: thumbnailCache.cacheDirURL)
+                                .frame(width: 80, height: 45)
+                                .clipShape(RoundedRectangle(cornerRadius: InspectorMetrics.inlineThumbnailCornerRadius, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(v.title)
-                                .font(.subheadline.weight(.medium))
-                                .lineLimit(2)
-                                .foregroundStyle(.primary)
-                            if let meta = [v.viewCount, v.publishedAt].compactMap({ $0 }).joined(separator: " · ") as String?,
-                               !meta.isEmpty {
-                                Text(meta)
-                                    .font(.footnote)
-                                    .foregroundStyle(.tertiary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(v.title)
+                                    .appPrimary()
+                                    .fontWeight(.medium)
+                                    .lineSpacing(InspectorMetrics.compactLineSpacing)
+                                    .lineLimit(2)
+                                    .foregroundStyle(.primary)
+                                if let meta = [v.viewCount, v.publishedAt].compactMap({ $0 }).joined(separator: " • ") as String?,
+                                   !meta.isEmpty {
+                                    Text(meta)
+                                        .appMetadata()
+                                }
                             }
+                        }
+                        .padding(.vertical, 6)
+
+                        if v.videoId != videos.last?.videoId {
+                            Divider()
                         }
                     }
                 }
@@ -507,7 +566,8 @@ private struct FlexibleTagList: View {
     @ViewBuilder
     private func tagChip(_ tag: String) -> some View {
         let chip = Text(tag)
-            .font(.subheadline.weight(.medium))
+            .appMetadata()
+            .fontWeight(.medium)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(

@@ -13,7 +13,7 @@ struct SectionHeaderView: View {
         HStack(spacing: 10) {
             Image(systemName: TopicTheme.iconName(for: name))
                 .font(.title3)
-                .foregroundStyle(TopicTheme.iconColor(for: name))
+                .foregroundStyle(.white)
 
             HighlightedText(name, terms: highlightTerms)
                 .font(.title3.bold())

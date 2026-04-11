@@ -174,10 +174,11 @@ struct SectionHeaderContent: View {
                     )
                 }
             }
-        case let .creator(channelName, channelIconUrl, channelUrl, count, totalCount, topicNames, sectionId, scrollProgress, highlightTerms, onInspect):
+        case let .creator(channelName, channelIconUrl, channelIconData, channelUrl, count, totalCount, topicNames, sectionId, scrollProgress, highlightTerms, onInspect):
             CreatorSectionHeaderView(
                 channelName: channelName,
                 channelIconUrl: channelIconUrl,
+                channelIconData: channelIconData,
                 channelUrl: channelUrl,
                 count: count,
                 totalCount: totalCount,

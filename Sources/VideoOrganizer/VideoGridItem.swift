@@ -102,20 +102,11 @@ struct VideoGridItem: View {
 
     @ViewBuilder
     private var channelIconView: some View {
-        if let iconUrl = video.channelIconUrl {
-            AsyncImage(url: iconUrl) { phase in
-                if case .success(let image) = phase {
-                    image.resizable()
-                } else {
-                    Image(systemName: "person.circle.fill")
-                        .resizable()
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        } else {
-            Image(systemName: "person.circle.fill")
-                .resizable()
-                .foregroundStyle(.tertiary)
-        }
+        // Cached blob first, then network. Without this every visible card
+        // in the grid hit the YouTube CDN on every render.
+        ChannelIconView(
+            iconData: video.channelIconData,
+            fallbackUrl: video.channelIconUrl
+        )
     }
 }
