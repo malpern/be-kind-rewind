@@ -21,8 +21,10 @@ struct CreatorDetailView: View {
     ]
     @State private var allVideosSelection: CreatorVideoCard.ID?
     /// View-mode preference is sticky across navigations and app launches via UserDefaults.
-    /// Same enum used by both creator-page surfaces and any future per-section toggle.
-    @AppStorage("creatorAllVideosViewMode") private var allVideosViewMode: AllVideosViewMode = .table
+    /// Default is `.byTheme` so videos are grouped by their LLM theme cluster — gives
+    /// the most useful initial view when themes are populated, and falls back to a
+    /// flat grid for creators whose themes haven't been classified yet.
+    @AppStorage("creatorAllVideosViewMode") private var allVideosViewMode: AllVideosViewMode = .byTheme
 
     // Hits used to have a sort toggle (All time / Recent) but having two
     // perspectives in one section was overkill — they're nearly identical for
@@ -101,6 +103,11 @@ struct CreatorDetailView: View {
     /// this via .onChange and clears the flag after performing the scroll.
     @State private var pendingScrollAnchor: SectionAnchor?
 
+    /// True when the user has clicked the "+N more" pill in the themes
+    /// column to reveal the long-tail themes alongside the head/middle.
+    /// Resets per channel switch so each creator's view starts collapsed.
+    @State private var themesExpanded: Bool = false
+
     // MARK: - Skeleton loading
 
     /// Phase 3: any background load that mutates the page model is in flight.
@@ -122,9 +129,10 @@ struct CreatorDetailView: View {
     /// Phase 3: sort order for the All Videos GRID view. The table view has
     /// built-in sortable column headers, but the grid needs an explicit picker
     /// to match the main save window's sort menu. Sticky across launches.
-    @AppStorage("creatorAllVideosGridSort") private var allVideosGridSort: AllVideosGridSort = .dateNewest
+    @AppStorage("creatorAllVideosGridSort") private var allVideosGridSort: AllVideosGridSort = .byTopic
 
     enum AllVideosGridSort: String, CaseIterable, Identifiable {
+        case byTopic
         case dateNewest
         case dateOldest
         case viewsHigh
@@ -138,6 +146,7 @@ struct CreatorDetailView: View {
 
         var label: String {
             switch self {
+            case .byTopic: return "By topic"
             case .dateNewest: return "Newest first"
             case .dateOldest: return "Oldest first"
             case .viewsHigh: return "Most viewed"
@@ -151,6 +160,7 @@ struct CreatorDetailView: View {
 
         var symbolName: String {
             switch self {
+            case .byTopic: return "rectangle.stack"
             case .dateNewest, .dateOldest: return "calendar"
             case .viewsHigh, .viewsLow: return "chart.bar.fill"
             case .durationLong, .durationShort: return "timer"
@@ -176,20 +186,33 @@ struct CreatorDetailView: View {
     }
 
     enum AllVideosViewMode: String, CaseIterable, Identifiable {
-        case table
+        case byTheme
         case grid
+        case table
 
         var id: String { rawValue }
-        var label: String { self == .table ? "Table" : "Grid" }
-        var symbolName: String { self == .table ? "tablecells" : "square.grid.2x2" }
+        var label: String {
+            switch self {
+            case .byTheme: return "By Theme"
+            case .grid: return "Grid"
+            case .table: return "Table"
+            }
+        }
+        var symbolName: String {
+            switch self {
+            case .byTheme: return "rectangle.3.group"
+            case .grid: return "square.grid.2x2"
+            case .table: return "tablecells"
+            }
+        }
     }
 
     /// Section anchors for ⌘1–⌘0 jump shortcuts. The order matches the visual order
     /// of sections in the page body and the keyboard shortcuts in `sectionShortcuts`.
-    /// `notes` is the 9th section so it gets ⌘9; ⌘0 is unused now that the standalone
-    /// themes section was folded into the identity card.
+    /// The standalone "By theme" section was removed: theme browsing now lives
+    /// inside the All Videos byTheme view mode and the identity-card tag list.
     enum SectionAnchor: Hashable {
-        case identity, whatsNew, hits, allVideos, byTheme, playlists, niches, leaderboard, notes
+        case identity, whatsNew, hits, allVideos, playlists, niches, leaderboard, notes
     }
 
     var body: some View {
@@ -200,7 +223,6 @@ struct CreatorDetailView: View {
                     whatsNewSection.id(SectionAnchor.whatsNew)
                     hitsSection.id(SectionAnchor.hits)
                     allVideosSection.id(SectionAnchor.allVideos)
-                    byThemeSection.id(SectionAnchor.byTheme)
                     playlistsSection.id(SectionAnchor.playlists)
                     nichesAndCadenceSection.id(SectionAnchor.niches)
                     leaderboardSection.id(SectionAnchor.leaderboard)
@@ -234,6 +256,7 @@ struct CreatorDetailView: View {
         .task(id: channelId) {
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
             notesDraft = page.notes ?? ""
+            themesExpanded = false
             // Phase 3 perf: refresh the cached keychain check once per page open.
             // The themesEmptyStateRow used to call ClaudeClient.hasStoredAPIKey()
             // directly from its view body, which fired a keychain query on every
@@ -262,6 +285,38 @@ struct CreatorDetailView: View {
                     channelId: channelId,
                     channelName: page.channelName
                 )
+            }
+
+            // Phase 3: auto-scrape channel links on first visit. Cheap, gated
+            // by ScrapeRateLimiter and the cached-row check inside the loader.
+            store.loadChannelLinksIfNeeded(channelId: channelId)
+
+            // Phase 3: also opportunistically check whether themes/about
+            // need (re)generation. The function checks both caches
+            // independently and bails out early if both are fresh — so
+            // creators with cached archives but pre-existing classification
+            // won't re-run the LLM. This handles the case where a creator
+            // was visited before theme classification was added: the
+            // archive is on disk but themes have never been generated.
+            store.classifyCreatorThemesIfNeeded(channelId: channelId, channelName: page.channelName)
+
+            // Offline-first thumbnails: prefetch every video shown on this
+            // page into the on-disk thumbnail cache. Without this, only the
+            // saved videos for the user's currently-selected topic ever get
+            // cached — so opening a creator page while offline used to
+            // leave most rows blank. Union the four sources visible on the
+            // page: allVideos (master list for table/grid/byTheme/byTopic),
+            // theirHits, recentVideos, essentials. Prefetch is a no-op for
+            // already-cached IDs so this is cheap on revisits.
+            Task.detached { [thumbnailCache, page] in
+                var ids = Set<String>()
+                for card in page.allVideos { ids.insert(card.videoId) }
+                for card in page.theirHits { ids.insert(card.videoId) }
+                for card in page.recentVideos { ids.insert(card.videoId) }
+                for card in page.essentials { ids.insert(card.videoId) }
+                let videoIds = Array(ids)
+                guard !videoIds.isEmpty else { return }
+                await thumbnailCache.prefetch(videoIds: videoIds)
             }
             // Reset leaderboard scope to the page creator's primary topic on every
             // navigation. The user can flip the picker to look at other topics, but
@@ -302,6 +357,11 @@ struct CreatorDetailView: View {
         .onChange(of: store.excludedCreators.map(\.channelId)) { _, _ in
             page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
         }
+        .onChange(of: store.channelLinksVersion) { _, _ in
+            // A channel-link scrape just completed for *some* creator. Cheap
+            // to rebuild — the page builder is sub-100ms.
+            page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+        }
         .onChange(of: store.classifyingThemeChannels.contains(channelId)) { wasClassifying, isClassifying in
             // When classification finishes (true → false), rebuild the page so the
             // newly-cached themes and about paragraph appear.
@@ -328,11 +388,10 @@ struct CreatorDetailView: View {
             ("2", .whatsNew),
             ("3", .hits),
             ("4", .allVideos),
-            ("5", .byTheme),
-            ("6", .playlists),
-            ("7", .niches),
-            ("8", .leaderboard),
-            ("9", .notes),
+            ("5", .playlists),
+            ("6", .niches),
+            ("7", .leaderboard),
+            ("8", .notes),
         ]
         ZStack {
             ForEach(bindings, id: \.1) { key, anchor in
@@ -389,7 +448,7 @@ struct CreatorDetailView: View {
                         Text(about)
                             .font(.body)
                             .foregroundStyle(.secondary)
-                            .lineSpacing(7)
+                            .lineSpacing(4)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .padding(.top, 8)
@@ -408,6 +467,10 @@ struct CreatorDetailView: View {
                     statsLine
                     headerActionButtons
                         .padding(.top, 8)
+                    if !page.channelLinks.isEmpty {
+                        channelLinksRow
+                            .padding(.top, 4)
+                    }
                 }
                 .padding(.top, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -416,10 +479,11 @@ struct CreatorDetailView: View {
                 // Right column: themes capsules. Moved up here from a separate
                 // mid-page section so the description column is naturally
                 // narrower (better legibility) and tags are visible at a glance
-                // alongside the channel description. Capped at 280pt wide so
-                // the description gets the lion's share of available space.
+                // alongside the channel description. Width tuned to fit ~2
+                // capsules per row in the FlowLayout for typical labels (1-3
+                // words, max 24 chars per the prompt rules).
                 themesIdentityColumn
-                    .frame(width: 280, alignment: .topLeading)
+                    .frame(width: 320, alignment: .topLeading)
             }
             .contentShape(Rectangle())
             .contextMenu {
@@ -448,7 +512,7 @@ struct CreatorDetailView: View {
                         selectedThemeLabel = nil
                     } label: {
                         Image(systemName: "xmark.circle")
-                            .font(.caption)
+                            .font(.subheadline)
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.tint)
@@ -463,7 +527,7 @@ struct CreatorDetailView: View {
                         )
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.caption)
+                            .font(.subheadline)
                     }
                     .buttonStyle(.borderless)
                     .help("Re-run theme classification with the latest video list")
@@ -476,19 +540,10 @@ struct CreatorDetailView: View {
                    cachedCount > 0,
                    page.totalUploadsKnown > cachedCount {
                     Text("\(page.totalUploadsKnown - cachedCount) new since last classification")
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(.tertiary)
                 }
-                // One theme per row — gives each capsule a clean horizontal
-                // hit area and lets long labels truncate predictably without
-                // disrupting neighbor layout. Click jumps to All Videos and
-                // applies the theme as a filter (see themeCapsule action).
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(page.themes, id: \.label) { theme in
-                        themeCapsule(theme)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+                themesTagList
             } else if page.isClassifyingThemes || isLoadingArchive {
                 // Skeleton: 6 redacted capsules with the same vertical rhythm
                 // as real themes. Replaces the inline progress row that used
@@ -501,36 +556,292 @@ struct CreatorDetailView: View {
         }
     }
 
-    /// Skeleton placeholder for the themes column. Six stub capsule rows with
-    /// `.redacted(reason: .placeholder)` so each one occupies the same vertical
-    /// space a real capsule would. Reserves ~180pt of height which approximates
-    /// the average loaded state.
+    // MARK: - Themes radial chart
+
+    /// Curated palette for the themes donut chart. Eight stops cycling through
+    /// macOS-friendly hues with similar saturation/value so adjacent slices
+    /// stay distinguishable in both light and dark mode. Major themes get
+    /// indices 0..7 from this palette; the "Other" slice always uses .gray.
+    private var themePalette: [Color] {
+        [
+            Color(red: 0.40, green: 0.60, blue: 0.95),  // blue
+            Color(red: 0.95, green: 0.55, blue: 0.40),  // orange
+            Color(red: 0.55, green: 0.80, blue: 0.55),  // green
+            Color(red: 0.80, green: 0.50, blue: 0.85),  // pink
+            Color(red: 0.95, green: 0.78, blue: 0.40),  // gold
+            Color(red: 0.50, green: 0.78, blue: 0.85),  // teal
+            Color(red: 0.85, green: 0.45, blue: 0.55),  // crimson
+            Color(red: 0.65, green: 0.55, blue: 0.85),  // violet
+        ]
+    }
+
+    /// Wraps a single chart slice — either a real theme or the catch-all
+    /// "Other" bucket. Sized by `videoCount`, painted by `color`. Used by
+    /// both the donut chart and the legend list so they stay in sync.
+    struct ThemeChartSlice: Identifiable, Equatable {
+        let id: String          // theme label, or "__other__" for the bucket
+        let label: String
+        let videoCount: Int
+        let color: Color
+        let themeRecord: CreatorThemeRecord?  // nil for the "Other" bucket
+    }
+
+    /// Compute the chart slices: top N themes with ≥3 videos each, capped at
+    /// 8, plus an "Other" bucket aggregating the long tail. Both the radial
+    /// chart and the by-theme grouping in All Videos consume this same
+    /// derivation so the visual story is consistent.
+    private var majorThemeSlices: [ThemeChartSlice] {
+        let sorted = page.themes.sorted { $0.videoIds.count > $1.videoIds.count }
+        let candidates = sorted.filter { $0.videoIds.count >= 3 }
+        let majors = Array(candidates.prefix(8))
+        let majorIds = Set(majors.map(\.label))
+        let otherCount = page.themes
+            .filter { !majorIds.contains($0.label) }
+            .reduce(0) { $0 + $1.videoIds.count }
+
+        var slices: [ThemeChartSlice] = majors.enumerated().map { index, theme in
+            ThemeChartSlice(
+                id: theme.label,
+                label: theme.label,
+                videoCount: theme.videoIds.count,
+                color: themePalette[index % themePalette.count],
+                themeRecord: theme
+            )
+        }
+        if otherCount > 0 {
+            slices.append(ThemeChartSlice(
+                id: "__other__",
+                label: "Other",
+                videoCount: otherCount,
+                color: Color.gray.opacity(0.5),
+                themeRecord: nil
+            ))
+        }
+        return slices
+    }
+
+    /// Themes column body: large clickable tag capsules in a wrapping flow.
+    /// Replaces the radial donut chart that lived here in earlier iterations.
+    /// Default-collapsed view shows the head + middle of the theme
+    /// distribution (data-driven, not a fixed N) followed by a "+N more"
+    /// pill that expands to reveal the long tail as individual tags.
     @ViewBuilder
-    private var themesSkeletonRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(0..<6, id: \.self) { _ in
-                HStack(spacing: 6) {
-                    Text("Loading theme")
-                        .font(.callout.weight(.medium))
-                    Spacer(minLength: 0)
-                    Text("00")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+    private var themesTagList: some View {
+        let visible = themesPartition.visible
+        let hidden = themesPartition.hidden
+        FlowLayout(spacing: 8, lineSpacing: 8) {
+            ForEach(visible, id: \.label) { theme in
+                themeLargeTag(theme)
+            }
+            if themesExpanded {
+                ForEach(hidden, id: \.label) { theme in
+                    themeLargeTag(theme)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(Color.gray.opacity(0.10))
-                )
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.gray.opacity(0.25), lineWidth: 0.5)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
+                if !hidden.isEmpty {
+                    themesExpandPill(label: "Show fewer", systemImage: "minus.circle") {
+                        withAnimation(.easeInOut(duration: 0.2)) { themesExpanded = false }
+                    }
+                }
+            } else if !hidden.isEmpty {
+                themesExpandPill(label: "+\(hidden.count) more", systemImage: "plus.circle") {
+                    withAnimation(.easeInOut(duration: 0.2)) { themesExpanded = true }
+                }
             }
         }
+        .padding(.top, 4)
+    }
+
+    /// Split the themes into "visible" (head + middle of the distribution)
+    /// and "hidden" (long tail) using an 80% Pareto cumulative-sum rule.
+    ///
+    /// - **Sort** by video count desc
+    /// - **Cumulative sum** until ≥80% of total videos are covered
+    /// - That's the visible set
+    /// - Anything past that point is the long tail
+    ///
+    /// Two safety bounds:
+    /// - **Floor 3**: always show at least 3 themes when available, even
+    ///   when one theme dominates (otherwise a creator with 90% of videos
+    ///   in one theme would show just that one tag — unhelpful)
+    /// - **Ceiling 8**: never show more than 8 themes by default, even when
+    ///   the distribution is unusually flat (avoid blowing out the column)
+    private var themesPartition: (visible: [CreatorThemeRecord], hidden: [CreatorThemeRecord]) {
+        let sorted = page.themes.sorted { $0.videoIds.count > $1.videoIds.count }
+        guard sorted.count > 1 else { return (sorted, []) }
+
+        let total = sorted.reduce(0) { $0 + $1.videoIds.count }
+        guard total > 0 else { return (sorted, []) }
+        let target = Double(total) * 0.80
+
+        var cumulative = 0
+        var visibleCount = 0
+        for theme in sorted {
+            cumulative += theme.videoIds.count
+            visibleCount += 1
+            if Double(cumulative) >= target { break }
+        }
+
+        let floor = min(3, sorted.count)
+        let ceiling = 8
+        let bounded = max(floor, min(visibleCount, ceiling))
+        let visible = Array(sorted.prefix(bounded))
+        let hidden = Array(sorted.dropFirst(bounded))
+        return (visible, hidden)
+    }
+
+    /// Large tag capsule for a single theme. Body-weight semibold text,
+    /// generous padding, accent fill when selected. Click toggles the
+    /// All Videos theme filter and scrolls to it.
+    @ViewBuilder
+    private func themeLargeTag(_ theme: CreatorThemeRecord) -> some View {
+        let isSelected = selectedThemeLabel == theme.label
+        Button {
+            if isSelected {
+                selectedThemeLabel = nil
+            } else {
+                selectedThemeLabel = theme.label
+                pendingScrollAnchor = .allVideos
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if theme.isSeries {
+                    Image(systemName: "list.number")
+                        .font(.subheadline.weight(.semibold))
+                }
+                Text(theme.label)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text("\(theme.videoIds.count)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : .secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+            .background(
+                Capsule()
+                    .fill(isSelected ? Color.accentColor : Color.accentColor.opacity(0.12))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.accentColor.opacity(isSelected ? 0 : 0.35), lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(theme.description ?? theme.label)
+    }
+
+    /// "+N more" / "Show fewer" pill button styled as a control rather than
+    /// a real theme tag. Same height as `themeLargeTag` so the row reads
+    /// as a coherent strip, but uses neutral colors so it doesn't look
+    /// like a theme.
+    @ViewBuilder
+    private func themesExpandPill(label: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                Text(label)
+                    .font(.body.weight(.medium))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .foregroundStyle(.secondary)
+            .background(
+                Capsule()
+                    .fill(Color.primary.opacity(0.08))
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(.quaternary, lineWidth: 0.5)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Toggle the long-tail themes")
+    }
+
+    /// Skeleton placeholder for the themes column. Mirrors the new tag-list
+    /// loaded state — a wrapping FlowLayout of stub tag capsules at the
+    /// same dimensions as the real `themeLargeTag`, so the identity card
+    /// row's height stays stable when the real tags slot in.
+    @ViewBuilder
+    private var themesSkeletonRows: some View {
+        FlowLayout(spacing: 8, lineSpacing: 8) {
+            ForEach(0..<6, id: \.self) { i in
+                let stub = i.isMultiple(of: 3) ? "Loading tag" : (i.isMultiple(of: 2) ? "Theme" : "Topic name")
+                HStack(spacing: 6) {
+                    Text(stub)
+                        .font(.body.weight(.semibold))
+                    Text("00")
+                        .font(.subheadline.monospacedDigit())
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    Capsule().fill(Color.accentColor.opacity(0.12))
+                )
+                .overlay(
+                    Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
+                )
+            }
+        }
+        .padding(.top, 4)
         .redacted(reason: .placeholder)
+    }
+
+    /// Phase 3: external link buttons row. Renders the channel's scraped
+    /// social/professional URLs as a wrapped row of small bordered buttons —
+    /// each labeled with a friendly platform name (GitHub, Twitter/X, etc.)
+    /// and a matching SF Symbol. Click opens the URL in the user's default
+    /// browser. Wraps to multiple rows when there are too many to fit, so
+    /// creators with a long social presence don't blow up the layout.
+    @ViewBuilder
+    private var channelLinksRow: some View {
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(page.channelLinks, id: \.url) { link in
+                channelLinkButton(link)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func channelLinkButton(_ link: ChannelLink) -> some View {
+        Link(destination: URL(string: link.url) ?? URL(string: "https://www.youtube.com")!) {
+            Label(compactURLDisplay(link.url), systemImage: link.symbolName)
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .help(link.url)
+    }
+
+    /// Display-cleaned URL for the link button. Strips the scheme and `www.`
+    /// prefix, drops a trailing slash, and truncates with a middle ellipsis
+    /// when the result is wider than 32 chars so creators with long URLs
+    /// don't blow out the row layout.
+    ///
+    /// Examples:
+    ///   "https://github.com/benfrain" → "github.com/benfrain"
+    ///   "https://www.benfrain.com/blog/2024/some-post-title" → "benfrain.com/blog/…/some-post-title"
+    private func compactURLDisplay(_ raw: String) -> String {
+        var url = raw
+        if url.hasPrefix("https://") { url = String(url.dropFirst(8)) }
+        else if url.hasPrefix("http://") { url = String(url.dropFirst(7)) }
+        if url.hasPrefix("www.") { url = String(url.dropFirst(4)) }
+        if url.hasSuffix("/") { url = String(url.dropLast()) }
+
+        let maxLength = 32
+        if url.count <= maxLength {
+            return url
+        }
+        // Middle truncation: keep the host + first path segment + the tail.
+        let head = url.prefix(maxLength / 2 - 1)
+        let tail = url.suffix(maxLength / 2 - 2)
+        return "\(head)…\(tail)"
     }
 
     /// Inline action buttons that live in the header next to the avatar/title.
@@ -570,10 +881,20 @@ struct CreatorDetailView: View {
     /// the small thumbnails elsewhere in the app — typically 88-240px. The page
     /// header at 160pt × 2x retina needs at least 320px to avoid looking soft.
     /// We fall back to the cached blob only when no URL is available.
+    ///
+    /// Offline-first ordering: when we already have an `avatarData` blob and
+    /// the user is potentially offline, we render the blob *immediately*
+    /// instead of flashing through `AsyncImage`'s `.empty` → `.failure`
+    /// transition. The high-res network upgrade only kicks in when there's
+    /// no blob yet (first visit to a creator on a fresh install). This
+    /// trades a slightly soft avatar on revisits-while-online for a flicker-
+    /// free fully-offline UX, which matches the rest of the app.
     @ViewBuilder
     private var avatar: some View {
         Group {
-            if let url = page.avatarUrl {
+            if page.avatarData != nil {
+                avatarLowResOrFallback
+            } else if let url = page.avatarUrl {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .empty:
@@ -675,13 +996,13 @@ struct CreatorDetailView: View {
                         Text("Recent uploads")
                             .font(.title3.weight(.semibold))
                         Text("last 14 days")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     if page.recentVideosTotalInWindow > page.recentVideos.count {
                         Text("+ \(page.recentVideosTotalInWindow - page.recentVideos.count) more")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -725,7 +1046,7 @@ struct CreatorDetailView: View {
                     .font(.body.weight(.medium))
                     .lineLimit(2, reservesSpace: true)
                 Text("00 views · 0d ago")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
@@ -755,7 +1076,7 @@ struct CreatorDetailView: View {
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
                         Text(errorMessage)
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
@@ -764,7 +1085,7 @@ struct CreatorDetailView: View {
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.primary)
                         Text("This creator's recent uploads aren't in your library yet. Scrape them from YouTube — no API quota cost.")
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -824,16 +1145,16 @@ struct CreatorDetailView: View {
         if page.newSinceLastVisitCount > 0, let prevDate = page.previousVisitDate {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles")
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tint)
                 Text("\(page.newSinceLastVisitCount) new since your last visit")
-                    .font(.caption.weight(.medium))
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 Text("·")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
                 Text(relativeVisitDate(prevDate))
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
             }
@@ -928,22 +1249,16 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private func thumbnail(for card: CreatorVideoCard) -> some View {
-        if let url = card.thumbnailUrl {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty:
-                    thumbnailPlaceholder
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                case .failure:
-                    thumbnailPlaceholder
-                @unknown default:
-                    thumbnailPlaceholder
-                }
-            }
-        } else {
-            thumbnailPlaceholder
-        }
+        // Routes through ThumbnailView so we hit the on-disk cache first
+        // (~/Library/Caches/VideoOrganizer/thumbnails/{videoId}.jpg) and
+        // only fall back to AsyncImage when the file isn't there. Critical
+        // for offline use — without this, every Hits/What's-New row went
+        // straight to i.ytimg.com on every render.
+        ThumbnailView(
+            videoId: card.videoId,
+            thumbnailUrl: card.thumbnailUrl,
+            cacheDir: thumbnailCache.cacheDirURL
+        )
     }
 
     private var thumbnailPlaceholder: some View {
@@ -982,7 +1297,7 @@ struct CreatorDetailView: View {
                     Text("Hits")
                         .font(.title3.weight(.semibold))
                     Text(hitsHelpText)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -1031,7 +1346,7 @@ struct CreatorDetailView: View {
                 .lineLimit(2, reservesSpace: true)
                 .frame(width: 200, alignment: .topLeading)
             Text("000K views")
-                .font(.caption.monospacedDigit())
+                .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 200, alignment: .leading)
         }
@@ -1074,7 +1389,7 @@ struct CreatorDetailView: View {
                 // sits at the same baseline. Use an em-dash placeholder when view
                 // count is unknown so the row never collapses to zero height.
                 Text(card.viewCountParsed > 0 ? card.viewCountFormatted : "—")
-                    .font(.caption.monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(card.viewCountParsed > 0 ? .secondary : .tertiary)
                     .frame(width: 200, alignment: .leading)
             }
@@ -1095,7 +1410,7 @@ struct CreatorDetailView: View {
             Image(systemName: "arrow.up")
             Text(label)
         }
-        .font(.caption2.weight(.semibold))
+        .font(.footnote.weight(.semibold))
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(.thinMaterial, in: Capsule())
@@ -1150,11 +1465,11 @@ struct CreatorDetailView: View {
         let hasKey = hasClaudeKeyCached
         HStack(spacing: 10) {
             Image(systemName: "tag")
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             if !hasKey {
                 Text("Add a Claude API key to generate tags for this creator")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Open Settings") { openSettings() }
@@ -1162,7 +1477,7 @@ struct CreatorDetailView: View {
                     .controlSize(.small)
             } else if !store.claudeThemeClassificationEnabled {
                 Text("Theme classification is off. Enable it to tag this creator's videos.")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Enable") {
@@ -1176,7 +1491,7 @@ struct CreatorDetailView: View {
                 // first, then theme classification fires automatically when
                 // the load completes (see the .onChange in emptyArchiveBanner).
                 Text("Load this creator's uploads to generate tags")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -1192,7 +1507,7 @@ struct CreatorDetailView: View {
                 .disabled(store.loadingFullHistoryChannels.contains(channelId))
             } else {
                 Text("No tags generated yet for this creator")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
@@ -1236,12 +1551,12 @@ struct CreatorDetailView: View {
             HStack(spacing: 6) {
                 if theme.isSeries {
                     Image(systemName: "list.number")
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                 }
                 Text(theme.label)
                     .font(.callout.weight(.medium))
                 Text("\(theme.videoIds.count)")
-                    .font(.caption.monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12)
@@ -1270,35 +1585,57 @@ struct CreatorDetailView: View {
                     Text("All videos")
                         .font(.title3.weight(.semibold))
                     Text(allVideosCountLabel)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                     creatorSearchField
-                    if allVideosViewMode == .grid {
+                    if allVideosViewMode == .grid || allVideosViewMode == .byTheme {
                         allVideosGridSortMenu
                     }
-                    Picker("", selection: $allVideosViewMode) {
+                    // Menu picker (not segmented) — segmented Pickers crash
+                    // during SwiftUI scroll prefetch on macOS 26 when the
+                    // enum case count changes between releases. Menus don't
+                    // have this issue and read just as cleanly for a
+                    // 3-option toggle.
+                    Menu {
                         ForEach(AllVideosViewMode.allCases) { mode in
-                            Image(systemName: mode.symbolName)
-                                .help(mode.label)
-                                .tag(mode)
+                            Button {
+                                allVideosViewMode = mode
+                            } label: {
+                                if allVideosViewMode == mode {
+                                    Label(mode.label, systemImage: "checkmark")
+                                } else {
+                                    Label(mode.label, systemImage: mode.symbolName)
+                                }
+                            }
                         }
+                    } label: {
+                        Label(allVideosViewMode.label, systemImage: allVideosViewMode.symbolName)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 88)
-                    .help("Switch between table and grid views")
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Switch between By Theme, Grid, and Table views")
                 }
 
                 switch allVideosViewMode {
                 case .table:
                     allVideosTable
                 case .grid:
-                    allVideosGrid
+                    // Special-case the "by topic" sort: render with topic
+                    // section headers (matching the saved-view's topic
+                    // grouping) instead of a flat grid. The other sorts
+                    // stay flat — they only define ordering, not grouping.
+                    if allVideosGridSort == .byTopic {
+                        allVideosByTopic
+                    } else {
+                        allVideosGrid
+                    }
+                case .byTheme:
+                    allVideosByTheme
                 }
 
                 Text("↑ marks videos punching above this creator's median view count")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
         }
@@ -1311,7 +1648,7 @@ struct CreatorDetailView: View {
     private var creatorSearchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
             TextField("Search videos", text: $creatorSearchText)
                 .textFieldStyle(.plain)
@@ -1361,7 +1698,7 @@ struct CreatorDetailView: View {
                                 .lineLimit(1)
                             if card.isOutlier {
                                 Image(systemName: "arrow.up")
-                                    .font(.caption.weight(.bold))
+                                    .font(.subheadline.weight(.bold))
                                     .foregroundStyle(.tint)
                                     .help(outlierTooltip(card))
                                     .accessibilityLabel("Outlier")
@@ -1369,7 +1706,7 @@ struct CreatorDetailView: View {
                         }
                         if let topic = card.topicName {
                             Text(topic)
-                                .font(.caption)
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -1455,7 +1792,7 @@ struct CreatorDetailView: View {
         } label: {
             Label(allVideosGridSort.label, systemImage: allVideosGridSort.symbolName)
                 .labelStyle(.titleAndIcon)
-                .font(.caption)
+                .font(.subheadline)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -1468,24 +1805,237 @@ struct CreatorDetailView: View {
         let columns = [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)]
         LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
             ForEach(gridSortedAllVideos) { card in
-                Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
-                    VideoGridItem(
-                        video: gridModel(for: card),
-                        isSelected: false,
-                        isHovering: false,
-                        cacheDir: thumbnailCache.cacheDirURL,
-                        showMetadata: true,
-                        size: 200,
-                        highlightTerms: [],
-                        forceShowTitle: false
-                    )
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    videoContextMenuItems(for: [card])
+                allVideosGridCard(card)
+            }
+        }
+    }
+
+    /// By Topic grouping. Each user-collection topic becomes a section header
+    /// followed by a LazyVGrid of the creator's videos saved into that topic.
+    /// Mirrors the saved-view's topic-section UX so the All Videos byTopic
+    /// sort feels native. Videos that don't have a topic (archive entries the
+    /// user hasn't saved into a topic yet) sink into a final "Unsaved" bucket.
+    @ViewBuilder
+    private var allVideosByTopic: some View {
+        let groups = byTopicGroups
+        if groups.isEmpty {
+            // No topic data at all — fall back to a flat grid so the user
+            // still sees something instead of an empty section.
+            allVideosGrid
+        } else {
+            VStack(alignment: .leading, spacing: 24) {
+                ForEach(groups) { group in
+                    byTopicGroupSection(group)
                 }
             }
         }
+    }
+
+    /// One topic bucket inside the byTopic view: section header (topic name +
+    /// count) and the topic's videos rendered as a LazyVGrid using the same
+    /// card treatment as the flat grid.
+    @ViewBuilder
+    private func byTopicGroupSection(_ group: ByTopicGroup) -> some View {
+        let columns = [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)]
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(group.label)
+                    .font(.headline)
+                Text("\(group.cards.count) video\(group.cards.count == 1 ? "" : "s")")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                ForEach(group.cards) { card in
+                    allVideosGridCard(card)
+                }
+            }
+        }
+    }
+
+    /// One section in the byTopic view. Topic-name keyed; the "Unsaved" bucket
+    /// uses id="__unsaved__" so it sorts last and is identifiable.
+    struct ByTopicGroup: Identifiable {
+        let id: String
+        let label: String
+        let cards: [CreatorVideoCard]
+    }
+
+    /// Build the byTopic groups from the filtered card set. Topics are sorted
+    /// alphabetically (matching the saved view); the "Unsaved" bucket — if it
+    /// exists — is appended last so users see their organized topics first.
+    private var byTopicGroups: [ByTopicGroup] {
+        let cards = filteredAllVideos
+        guard !cards.isEmpty else { return [] }
+
+        var bucketsByTopic: [String: [CreatorVideoCard]] = [:]
+        var unsaved: [CreatorVideoCard] = []
+        for card in cards {
+            if let topic = card.topicName {
+                bucketsByTopic[topic, default: []].append(card)
+            } else {
+                unsaved.append(card)
+            }
+        }
+
+        let sortedTopicNames = bucketsByTopic.keys.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        var groups: [ByTopicGroup] = sortedTopicNames.map { name in
+            let topicCards = (bucketsByTopic[name] ?? []).sorted {
+                ($0.ageDays ?? .max) < ($1.ageDays ?? .max)
+            }
+            return ByTopicGroup(id: name, label: name, cards: topicCards)
+        }
+        if !unsaved.isEmpty {
+            let sortedUnsaved = unsaved.sorted {
+                ($0.ageDays ?? .max) < ($1.ageDays ?? .max)
+            }
+            groups.append(ByTopicGroup(id: "__unsaved__", label: "Unsaved", cards: sortedUnsaved))
+        }
+        return groups
+    }
+
+    /// By Theme grouping. Each major theme becomes a section header followed
+    /// by a LazyVGrid of its videos. Long-tail themes (themes with fewer than
+    /// 3 videos OR not in the top 8) collapse into a final "Other" section.
+    /// Falls back to a flat grid when the creator has no themes yet — that
+    /// way the byTheme mode is safe to use as the default even on creators
+    /// whose themes haven't been classified.
+    @ViewBuilder
+    private var allVideosByTheme: some View {
+        let groups = byThemeGroups
+        if groups.isEmpty {
+            // No themes available — fall back to the flat grid so the user
+            // still sees something while the byTheme mode is the default.
+            allVideosGrid
+        } else {
+            VStack(alignment: .leading, spacing: 24) {
+                ForEach(groups) { group in
+                    byThemeGroupSection(group)
+                }
+            }
+        }
+    }
+
+    /// One theme bucket inside the byTheme view: a section header (theme
+    /// label + count + optional series icon) and the videos belonging to
+    /// the theme rendered as a LazyVGrid.
+    @ViewBuilder
+    private func byThemeGroupSection(_ group: ByThemeGroup) -> some View {
+        let columns = [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)]
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                if let color = group.color {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(color)
+                        .frame(width: 12, height: 12)
+                }
+                if group.isSeries {
+                    Image(systemName: "list.number")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Text(group.label)
+                    .font(.headline)
+                Text("\(group.cards.count) video\(group.cards.count == 1 ? "" : "s")")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                ForEach(group.cards) { card in
+                    allVideosGridCard(card)
+                }
+            }
+        }
+    }
+
+    /// Single grid card with the standard hover/context-menu treatment. Both
+    /// the flat grid view and the byTheme grouped view use this so the card
+    /// behavior stays consistent.
+    @ViewBuilder
+    private func allVideosGridCard(_ card: CreatorVideoCard) -> some View {
+        Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
+            VideoGridItem(
+                video: gridModel(for: card),
+                isSelected: false,
+                isHovering: false,
+                cacheDir: thumbnailCache.cacheDirURL,
+                showMetadata: true,
+                size: 200,
+                highlightTerms: [],
+                forceShowTitle: false
+            )
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            videoContextMenuItems(for: [card])
+        }
+    }
+
+    /// One section in the byTheme view. `themeLabel` and `videoIds` come
+    /// directly from a CreatorThemeRecord; `cards` is the resolved subset of
+    /// the page's all-videos list belonging to this theme. The `Other` bucket
+    /// uses themeLabel="Other" with a nil color.
+    struct ByThemeGroup: Identifiable {
+        let id: String                  // theme label or "__other__"
+        let label: String
+        let color: Color?
+        let isSeries: Bool
+        let cards: [CreatorVideoCard]
+    }
+
+    /// Build the byTheme groups from the filtered+sorted card list. Iterates
+    /// `majorThemeSlices` first so the section ordering matches the radial
+    /// chart's slice ordering. Each video is assigned to its FIRST matching
+    /// theme to keep groups disjoint. Videos belonging to no major theme go
+    /// into the "Other" bucket. Within each section, cards are sorted by the
+    /// active grid sort preference so the existing sort menu still works.
+    private var byThemeGroups: [ByThemeGroup] {
+        let slices = majorThemeSlices
+        guard !slices.isEmpty else { return [] }
+
+        let sortedCards = gridSortedAllVideos
+        var seenVideoIds = Set<String>()
+        var groups: [ByThemeGroup] = []
+
+        for slice in slices where slice.themeRecord != nil {
+            let themeIds = Set(slice.themeRecord!.videoIds)
+            let cards = sortedCards.filter { card in
+                guard themeIds.contains(card.videoId), !seenVideoIds.contains(card.videoId) else {
+                    return false
+                }
+                seenVideoIds.insert(card.videoId)
+                return true
+            }
+            if !cards.isEmpty {
+                groups.append(ByThemeGroup(
+                    id: slice.label,
+                    label: slice.label,
+                    color: slice.color,
+                    isSeries: slice.themeRecord?.isSeries ?? false,
+                    cards: cards
+                ))
+            }
+        }
+
+        // Anything not yet claimed goes into the Other bucket. Includes both
+        // the long-tail themes (slices with themeRecord == nil never have a
+        // member set, so their videos fall through to here) and any video
+        // that isn't in any classified theme at all.
+        let otherCards = sortedCards.filter { !seenVideoIds.contains($0.videoId) }
+        if !otherCards.isEmpty {
+            groups.append(ByThemeGroup(
+                id: "__other__",
+                label: "Other",
+                color: Color.gray.opacity(0.5),
+                isSeries: false,
+                cards: otherCards
+            ))
+        }
+        return groups
     }
 
     private func gridModel(for card: CreatorVideoCard) -> VideoGridItemModel {
@@ -1504,7 +2054,10 @@ struct CreatorDetailView: View {
             candidateScore: nil,
             stateTag: card.isOutlier ? "OUTLIER" : nil,
             isPlaceholder: false,
-            placeholderMessage: nil
+            placeholderMessage: nil,
+            // All cards on this page belong to the same creator, so the
+            // page channel's cached icon bytes apply to every card.
+            channelIconData: store.knownChannelsById[channelId]?.iconData
         )
     }
 
@@ -1545,6 +2098,24 @@ struct CreatorDetailView: View {
     private var gridSortedAllVideos: [CreatorVideoCard] {
         let base = filteredAllVideos
         switch allVideosGridSort {
+        case .byTopic:
+            // Group videos under their owning user-topic. Cards with a topic
+            // sort alphabetically by topic name; within each topic the
+            // secondary sort is newest-first so the most recent saved video
+            // in each bucket leads. Cards with no topic (archive entries the
+            // user hasn't saved into a topic yet) sink to the bottom.
+            return base.sorted { lhs, rhs in
+                switch (lhs.topicName, rhs.topicName) {
+                case let (l?, r?) where l != r:
+                    return l.localizedStandardCompare(r) == .orderedAscending
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return (lhs.ageDays ?? .max) < (rhs.ageDays ?? .max)
+                }
+            }
         case .dateNewest:
             return base.sorted { ($0.ageDays ?? .max) < ($1.ageDays ?? .max) }
         case .dateOldest:
@@ -1583,20 +2154,13 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private func tableThumbnail(for card: CreatorVideoCard) -> some View {
-        Group {
-            if let url = card.thumbnailUrl {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    default:
-                        Color.clear
-                    }
-                }
-            } else {
-                Color.clear
-            }
-        }
+        // Same on-disk-cache-first treatment as `thumbnail(for:)`. Without
+        // this, every visible Table row punched the network on every render.
+        ThumbnailView(
+            videoId: card.videoId,
+            thumbnailUrl: card.thumbnailUrl,
+            cacheDir: thumbnailCache.cacheDirURL
+        )
         .frame(width: 56, height: 32)
         .background(.quaternary)
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
@@ -1608,114 +2172,6 @@ struct CreatorDetailView: View {
         let actual = formatCompact(card.viewCountParsed)
         let median = formatCompact(page.channelMedianViews)
         return "View count is \(multiplier) this creator's median (\(actual) vs \(median) median)"
-    }
-
-    // MARK: - By theme (LLM-driven browse)
-
-    @ViewBuilder
-    private var byThemeSection: some View {
-        if !page.themes.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("By theme")
-                    .font(.title3.weight(.semibold))
-
-                VStack(spacing: 0) {
-                    ForEach(Array(page.themes.enumerated()), id: \.element.label) { index, theme in
-                        DisclosureGroup {
-                            byThemeVideoList(for: theme)
-                        } label: {
-                            byThemeRowLabel(theme)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        if index < page.themes.count - 1 {
-                            Divider()
-                        }
-                    }
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.background.secondary)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 0.5)
-                )
-            }
-        }
-    }
-
-    private func byThemeRowLabel(_ theme: CreatorThemeRecord) -> some View {
-        HStack(spacing: 8) {
-            if theme.isSeries {
-                Image(systemName: "list.number")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tint)
-                    .help(theme.orderingSignal == "numeric" ? "Numbered series" :
-                          theme.orderingSignal == "date" ? "Date-ordered series" : "Recurring series")
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(theme.label)
-                    .font(.body.weight(.medium))
-                if let description = theme.description, !description.isEmpty {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-            Spacer(minLength: 0)
-            Text("\(theme.videoIds.count)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(.gray.opacity(0.15)))
-        }
-    }
-
-    @ViewBuilder
-    private func byThemeVideoList(for theme: CreatorThemeRecord) -> some View {
-        let allowed = Set(theme.videoIds)
-        let videosInTheme = page.allVideos.filter { allowed.contains($0.videoId) }
-        let standoutId = page.standoutEpisodesBySeriesLabel[theme.label]
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(videosInTheme) { card in
-                Link(destination: card.youtubeUrl ?? URL(string: "https://www.youtube.com")!) {
-                    HStack(spacing: 8) {
-                        if card.videoId == standoutId {
-                            Image(systemName: "star.fill")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.yellow)
-                                .help("Standout episode of this series")
-                        }
-                        Text(card.title)
-                            .font(.callout)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
-                        if card.viewCountParsed > 0 {
-                            Text(card.viewCountFormatted)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        if let age = card.ageFormatted {
-                            Text(age)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    videoContextMenuItems(for: [card])
-                }
-            }
-        }
-        .padding(.top, 6)
-        .padding(.leading, 8)
     }
 
     // MARK: - In your playlists
@@ -1763,12 +2219,12 @@ struct CreatorDetailView: View {
                         .font(.body)
                         .foregroundStyle(.primary)
                     Text("\(entry.creatorVideoCount) video\(entry.creatorVideoCount == 1 ? "" : "s") from this creator")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 14)
@@ -1839,7 +2295,7 @@ struct CreatorDetailView: View {
                     .foregroundStyle(.primary)
                 Spacer()
                 Text("last 24 months")
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -1850,7 +2306,7 @@ struct CreatorDetailView: View {
                 )
                 .frame(height: 140)
             Text("0 videos · peak 0 in a single month")
-                .font(.caption2.monospacedDigit())
+                .font(.footnote.monospacedDigit())
                 .foregroundStyle(.tertiary)
         }
         .frame(minWidth: 280, idealWidth: 360, alignment: .leading)
@@ -1905,7 +2361,7 @@ struct CreatorDetailView: View {
                 .accessibilityLabel("Topic share for \(page.channelName)")
 
                 Text("their share · library share")
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 2)
             }
@@ -1932,7 +2388,7 @@ struct CreatorDetailView: View {
                     Image(systemName: topicShareWindow.symbolName)
                     Text(topicShareWindow.label)
                 }
-                .font(.caption2.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
@@ -1959,10 +2415,10 @@ struct CreatorDetailView: View {
                         .foregroundStyle(.primary)
                         .contentTransition(.numericText())
                     Text("·")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.tertiary)
                     Text(percentageString(share.shareOfVoice))
-                        .font(.caption.monospacedDigit())
+                        .font(.subheadline.monospacedDigit())
                         .foregroundStyle(shareOfVoiceColor(share.shareOfVoice))
                 }
                 .help("\(share.videoCount) of this creator's saved videos · \(share.videoCount) of \(share.topicTotalSavedCount) total \(share.topicName) videos in your library (\(percentageString(share.shareOfVoice)) share of voice)")
@@ -2014,7 +2470,7 @@ struct CreatorDetailView: View {
                     .foregroundStyle(.primary)
                 Spacer()
                 Text("last 24 months")
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
 
@@ -2050,7 +2506,7 @@ struct CreatorDetailView: View {
                             .foregroundStyle(Color.primary.opacity(0.25))
                         if value.as(Date.self) != nil {
                             AxisValueLabel(format: .dateTime.month(.abbreviated).year(.twoDigits))
-                                .font(.caption.monospacedDigit())
+                                .font(.subheadline.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -2060,7 +2516,7 @@ struct CreatorDetailView: View {
                         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
                             .foregroundStyle(Color.primary.opacity(0.12))
                         AxisValueLabel()
-                            .font(.caption.monospacedDigit())
+                            .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -2075,7 +2531,7 @@ struct CreatorDetailView: View {
                 .accessibilityLabel("Monthly upload cadence for \(page.channelName), peak \(maxCount) in a single month")
 
                 Text("\(totalDated) videos · peak \(maxCount) in a single month")
-                    .font(.caption2.monospacedDigit())
+                    .font(.footnote.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
         }
@@ -2105,7 +2561,7 @@ struct CreatorDetailView: View {
                 }
 
                 Text("\(scope.creatorCount) creators publish \(scope.topicName) videos in your library — ranked by \(metricDescription)")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 2)
 
@@ -2196,18 +2652,29 @@ struct CreatorDetailView: View {
         }
     }
 
-    /// Metric picker — segmented Picker for [Saved | Outliers | Views].
+    /// Metric picker — Menu (not segmented) for [Saved | Outliers | Views].
+    /// Same crash-avoidance reasoning as the All Videos view-mode picker:
+    /// segmented Pickers can crash during SwiftUI scroll prefetch on macOS
+    /// 26 when their enum case count varies, and Menus avoid the issue
+    /// entirely.
     private var leaderboardMetricPicker: some View {
-        Picker("", selection: $leaderboardMetric) {
+        Menu {
             ForEach(LeaderboardMetric.allCases) { metric in
-                Image(systemName: metric.symbolName)
-                    .help(metric.label)
-                    .tag(metric)
+                Button {
+                    leaderboardMetric = metric
+                } label: {
+                    if leaderboardMetric == metric {
+                        Label(metric.label, systemImage: "checkmark")
+                    } else {
+                        Label(metric.label, systemImage: metric.symbolName)
+                    }
+                }
             }
+        } label: {
+            Label(leaderboardMetric.label, systemImage: leaderboardMetric.symbolName)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .frame(width: 110)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
         .help("Rank by saved video count, outlier count, or total views")
     }
 
@@ -2234,7 +2701,7 @@ struct CreatorDetailView: View {
                             .lineLimit(1)
                         if entry.isPageCreator {
                             Text("YOU")
-                                .font(.caption2.weight(.bold))
+                                .font(.footnote.weight(.bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
@@ -2242,7 +2709,7 @@ struct CreatorDetailView: View {
                         }
                     }
                     Text(leaderboardSubtitle(for: entry))
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -2256,13 +2723,13 @@ struct CreatorDetailView: View {
                         .foregroundStyle(.primary)
                         .contentTransition(.numericText())
                     Text(metricUnitText)
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(.tertiary)
                 }
 
                 if !entry.isPageCreator {
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 } else {
                     Color.clear.frame(width: 7)
@@ -2307,20 +2774,14 @@ struct CreatorDetailView: View {
 
     @ViewBuilder
     private func leaderboardAvatar(_ entry: CreatorLeaderboardEntry) -> some View {
-        Group {
-            if let url = entry.channelIconUrl {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    default:
-                        leaderboardAvatarFallback
-                    }
-                }
-            } else {
-                leaderboardAvatarFallback
-            }
-        }
+        // Routes through ChannelIconView so we use the SQLite iconData blob
+        // when available and only fall back to network when we don't have
+        // bytes locally. The leaderboard entry doesn't carry iconData
+        // itself, so we look it up from the store's in-memory channel cache.
+        ChannelIconView(
+            iconData: store.knownChannelsById[entry.channelId]?.iconData,
+            fallbackUrl: entry.channelIconUrl
+        )
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(.quaternary, lineWidth: 0.5))
     }
@@ -2406,7 +2867,7 @@ struct CreatorDetailView: View {
                 }
 
             Text("Notes are saved when you click outside the field or press ⌘↩. Saving notes implicitly pins this creator.")
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.tertiary)
         }
     }
@@ -2499,11 +2960,11 @@ struct CreatorDetailView: View {
                 ProgressView()
                     .controlSize(.small)
                 Text("Loading…")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else if let lastCount {
                 Text(lastCount == 0 ? "No new videos" : "Loaded \(lastCount) more")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .transition(.opacity)
             }
@@ -2574,7 +3035,7 @@ struct CreatorDetailView: View {
                 Link(url.absoluteString, destination: url)
                     .font(.body)
                 Image(systemName: "arrow.up.right.square")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
         }

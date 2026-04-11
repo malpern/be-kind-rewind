@@ -118,6 +118,11 @@ struct CreatorPageViewModel {
     /// last_visited_at before this page open bumped it). nil on first visit.
     let previousVisitDate: Date?
 
+    /// Phase 3: external links scraped from the creator's YouTube channel
+    /// home page. Empty when not yet scraped OR when the creator has no URLs
+    /// in their description. Cached in `channel_links` SQLite table.
+    let channelLinks: [ChannelLink]
+
     init(
         channelId: String,
         channelName: String,
@@ -160,7 +165,8 @@ struct CreatorPageViewModel {
         isExcluded: Bool,
         notes: String?,
         newSinceLastVisitCount: Int = 0,
-        previousVisitDate: Date? = nil
+        previousVisitDate: Date? = nil,
+        channelLinks: [ChannelLink] = []
     ) {
         self.channelId = channelId
         self.channelName = channelName
@@ -204,6 +210,7 @@ struct CreatorPageViewModel {
         self.notes = notes
         self.newSinceLastVisitCount = newSinceLastVisitCount
         self.previousVisitDate = previousVisitDate
+        self.channelLinks = channelLinks
     }
 
     static let placeholderEmpty = CreatorPageViewModel(
@@ -603,7 +610,8 @@ enum CreatorPageBuilder {
             isExcluded: store.isExcludedCreator(channelId),
             notes: store.favoriteCreators.first(where: { $0.channelId == channelId })?.notes,
             newSinceLastVisitCount: newSinceCount,
-            previousVisitDate: prevVisit
+            previousVisitDate: prevVisit,
+            channelLinks: ((try? store.store.channelLinksForChannel(channelId)) ?? nil) ?? []
         )
     }
 

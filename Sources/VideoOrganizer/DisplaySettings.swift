@@ -58,13 +58,28 @@ enum SortOrder: String, CaseIterable {
 @MainActor
 @Observable
 final class DisplaySettings {
-    var thumbnailSize: Double = 220
+    private enum DefaultsKey {
+        static let thumbnailSize = "display.thumbnailSize"
+        static let showMetadata = "display.showMetadata"
+        static let showInspector = "display.showInspector"
+    }
+
+    var thumbnailSize: Double = 220 {
+        didSet {
+            UserDefaults.standard.set(thumbnailSize, forKey: DefaultsKey.thumbnailSize)
+        }
+    }
     var showMetadata: Bool = true {
         didSet {
             if !showMetadata { showInspector = true }
+            UserDefaults.standard.set(showMetadata, forKey: DefaultsKey.showMetadata)
         }
     }
-    var showInspector: Bool = false
+    var showInspector: Bool = false {
+        didSet {
+            UserDefaults.standard.set(showInspector, forKey: DefaultsKey.showInspector)
+        }
+    }
     var sortOrder: SortOrder? = nil
     var sortAscending: Bool = false
     var toast = ActionToastState()
@@ -75,6 +90,26 @@ final class DisplaySettings {
     var scrollToTopicRequested: Int64?
     var scrollToSectionRequested: String?
     var alert: AppAlertState?
+
+    init() {
+        let defaults = UserDefaults.standard
+
+        if defaults.object(forKey: DefaultsKey.thumbnailSize) != nil {
+            thumbnailSize = defaults.double(forKey: DefaultsKey.thumbnailSize)
+        }
+
+        if defaults.object(forKey: DefaultsKey.showMetadata) != nil {
+            showMetadata = defaults.bool(forKey: DefaultsKey.showMetadata)
+        }
+
+        if defaults.object(forKey: DefaultsKey.showInspector) != nil {
+            showInspector = defaults.bool(forKey: DefaultsKey.showInspector)
+        }
+
+        if !showMetadata {
+            showInspector = true
+        }
+    }
 }
 
 struct AppAlertState: Identifiable, Equatable {

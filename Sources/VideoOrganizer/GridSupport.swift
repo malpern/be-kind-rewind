@@ -35,11 +35,53 @@ struct VideoGridItemModel: Identifiable, Equatable {
     let publishedAt: String?
     let duration: String?
     let channelIconUrl: URL?
+    /// Locally cached channel icon bytes (from `ChannelRecord.iconData`).
+    /// When present, `ChannelIconView` renders this directly instead of
+    /// hitting the network — required for offline channel avatars in the
+    /// grid. Optional and defaulted to nil so existing call sites that
+    /// don't have a store handy still compile.
+    let channelIconData: Data?
     let channelId: String?
     let candidateScore: Double?
     let stateTag: String?
     let isPlaceholder: Bool
     let placeholderMessage: String?
+
+    init(
+        id: String,
+        topicId: Int64?,
+        title: String,
+        channelName: String?,
+        topicName: String?,
+        thumbnailUrl: URL?,
+        viewCount: String?,
+        publishedAt: String?,
+        duration: String?,
+        channelIconUrl: URL?,
+        channelId: String?,
+        candidateScore: Double?,
+        stateTag: String?,
+        isPlaceholder: Bool,
+        placeholderMessage: String?,
+        channelIconData: Data? = nil
+    ) {
+        self.id = id
+        self.topicId = topicId
+        self.title = title
+        self.channelName = channelName
+        self.topicName = topicName
+        self.thumbnailUrl = thumbnailUrl
+        self.viewCount = viewCount
+        self.publishedAt = publishedAt
+        self.duration = duration
+        self.channelIconUrl = channelIconUrl
+        self.channelIconData = channelIconData
+        self.channelId = channelId
+        self.candidateScore = candidateScore
+        self.stateTag = stateTag
+        self.isPlaceholder = isPlaceholder
+        self.placeholderMessage = placeholderMessage
+    }
 }
 
 extension View {

@@ -142,17 +142,17 @@ struct TopicSidebar: View {
                         Spacer()
                         if store.parsedQuery.isEmpty {
                             Text("\(store.totalVideoCount) videos")
-                                .font(.caption)
+                                .font(.subheadline)
                                 .foregroundStyle(.tertiary)
                         } else {
                             Text("\(store.searchResultCount) results")
-                                .font(.caption.weight(.medium))
+                                .font(.subheadline.weight(.medium))
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
                     .padding(.horizontal, 6)
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: SidebarMetrics.listSpacing) {
                         ForEach(filteredTopics) { topic in
                             topicRowContent(topic)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -214,7 +214,7 @@ struct TopicSidebar: View {
                                         }
                                         .accessibilityIdentifier("creator-\(creator.sectionId)")
                                         .accessibilityLabel("\(creator.creatorName), \(creator.count) videos")
-                                        .padding(.leading, 20)
+                                        .padding(.leading, SidebarMetrics.childIndent)
                                         .id(creator.sectionId)
                                     }
                                 } else if !isWatchMode && !topic.subtopics.isEmpty {
@@ -224,6 +224,7 @@ struct TopicSidebar: View {
                                             count: displayedCount(forSubtopic: sub, parentTopicId: topic.id),
                                             highlightTerms: store.parsedQuery.includeTerms,
                                             isSubtopic: true,
+                                            isExpanded: false,
                                             isSelected: isSelected(sub),
                                             isViewport: store.viewportSubtopicId == sub.id
                                         )
@@ -240,7 +241,7 @@ struct TopicSidebar: View {
                                         .accessibilityAction {
                                             applySidebarSelection(topicId: topic.id, subtopicId: sub.id)
                                         }
-                                        .padding(.leading, 20)
+                                        .padding(.leading, SidebarMetrics.childIndent)
                                         .transition(.move(edge: .top).combined(with: .opacity))
                                     }
                                 }
@@ -429,7 +430,7 @@ struct TopicSidebar: View {
             HStack(spacing: 10) {
                 Image(systemName: TopicTheme.iconName(for: topic.name))
                     .font(.title3)
-                    .foregroundStyle(TopicTheme.iconColor(for: topic.name))
+                    .foregroundStyle(.white)
                     .frame(width: 24)
 
                 TextField("Topic name", text: $renameText)
@@ -449,6 +450,7 @@ struct TopicSidebar: View {
                 topic: topic,
                 count: displayedCount(for: topic),
                 highlightTerms: store.parsedQuery.includeTerms,
+                isExpanded: isExpanded(topic),
                 isSelected: isSelected(topic),
                 isViewport: isViewportTopic(topic)
             )
@@ -531,7 +533,8 @@ struct TopicSidebar: View {
                     creatorName: first.channelName ?? "Unknown Creator",
                     count: count,
                     channelUrl: knownChannel?.channelUrl.flatMap(URL.init(string:)) ?? first.channelId.flatMap { URL(string: "https://www.youtube.com/channel/\($0)") },
-                    channelIconUrl: knownChannel?.iconUrl.flatMap(URL.init(string:)) ?? first.channelIconUrl.flatMap(URL.init(string:))
+                    channelIconUrl: knownChannel?.iconUrl.flatMap(URL.init(string:)) ?? first.channelIconUrl.flatMap(URL.init(string:)),
+                    channelIconData: knownChannel?.iconData
                 )
             }
             .sorted {
@@ -553,7 +556,8 @@ struct TopicSidebar: View {
                 creatorName: channel.name,
                 count: count,
                 channelUrl: channel.channelUrl.flatMap(URL.init(string:)),
-                channelIconUrl: channel.iconUrl.flatMap(URL.init(string:))
+                channelIconUrl: channel.iconUrl.flatMap(URL.init(string:)),
+                channelIconData: channel.iconData
             )
         }
     }
@@ -586,6 +590,16 @@ struct TopicSidebar: View {
     }
 }
 
+private enum SidebarMetrics {
+    static let listSpacing: CGFloat = 6
+    static let childIndent: CGFloat = 40
+    static let rowSpacing: CGFloat = 16
+    static let rowHorizontalPadding: CGFloat = 14
+    static let rowVerticalPadding: CGFloat = 12
+    static let rowCornerRadius: CGFloat = 18
+    static let iconWidth: CGFloat = 26
+}
+
 private struct SidebarPullDistancePreferenceKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
 
@@ -612,11 +626,11 @@ private struct DisplayPopover: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: "photo")
-                        .font(.caption2)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                     Slider(value: $displaySettings.thumbnailSize, in: 120...400, step: 20)
                     Image(systemName: "photo")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -646,39 +660,58 @@ private struct TopicRow: View {
     let count: Int
     var highlightTerms: [String] = []
     var isSubtopic: Bool = false
+    var isExpanded: Bool = false
     var isSelected: Bool = false
     var isViewport: Bool = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: TopicTheme.iconName(for: topic.name))
-                .font(.title3)
-                .foregroundStyle(TopicTheme.iconColor(for: topic.name))
-                .frame(width: 24)
+        HStack(spacing: SidebarMetrics.rowSpacing) {
+            if isSubtopic {
+                Color.clear
+                    .frame(width: SidebarMetrics.iconWidth, height: 1)
+            } else {
+                Image(systemName: TopicTheme.iconName(for: topic.name))
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(topicForegroundColor)
+                    .frame(width: SidebarMetrics.iconWidth)
+            }
 
-            HighlightedText(topic.name, terms: highlightTerms)
+            HighlightedText(TopicTheme.displayName(for: topic.name), terms: highlightTerms)
+                .appPrimary()
+                .fontWeight(isSelected ? .medium : .regular)
+                .foregroundStyle(topicForegroundColor)
                 .lineLimit(1)
 
             Spacer()
 
             Text("\(count)")
-                .font(.subheadline.monospacedDigit())
+                .font(Typography.metadata.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, 6)
+        .padding(.vertical, SidebarMetrics.rowVerticalPadding)
+        .padding(.horizontal, SidebarMetrics.rowHorizontalPadding)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: SidebarMetrics.rowCornerRadius, style: .continuous)
                 .fill(backgroundColor)
         )
     }
 
+    private var topicForegroundColor: Color {
+        if isSelected {
+            return .white
+        }
+        if isExpanded {
+            return Color.white.opacity(0.68)
+        }
+        return .white
+    }
+
     private var backgroundColor: Color {
         if isSelected {
-            return Color.accentColor.opacity(0.25)
+            return Color.accentColor.opacity(0.24)
         }
         if isViewport {
-            return Color.accentColor.opacity(0.12)
+            return Color.accentColor.opacity(0.10)
         }
         return .clear
     }
@@ -692,6 +725,9 @@ private struct CreatorSidebarEntry: Identifiable {
     let count: Int
     let channelUrl: URL?
     let channelIconUrl: URL?
+    /// Locally cached icon bytes for offline rendering. Read from
+    /// `ChannelRecord.iconData` when the channel is in the user's library.
+    let channelIconData: Data?
 
     var id: String { sectionId }
 }
@@ -703,54 +739,54 @@ private struct CreatorSidebarRow: View {
     var isViewport: Bool = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SidebarMetrics.rowSpacing) {
             channelIcon
 
             VStack(alignment: .leading, spacing: 2) {
                 HighlightedText(creator.creatorName, terms: highlightTerms)
+                    .appPrimary()
+                    .fontWeight(isSelected ? .medium : .regular)
                     .lineLimit(1)
             }
 
             Spacer()
 
             Text("\(creator.count)")
-                .font(.subheadline.monospacedDigit())
+                .font(Typography.metadata.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 6)
+        .padding(.vertical, SidebarMetrics.rowVerticalPadding)
+        .padding(.horizontal, SidebarMetrics.rowHorizontalPadding)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: SidebarMetrics.rowCornerRadius, style: .continuous)
                 .fill(backgroundColor)
         )
     }
 
     private var backgroundColor: Color {
         if isSelected {
-            return Color.accentColor.opacity(0.25)
+            return Color.accentColor.opacity(0.24)
         }
         if isViewport {
-            return Color.accentColor.opacity(0.12)
+            return Color.accentColor.opacity(0.10)
         }
         return .clear
     }
 
     @ViewBuilder
     private var channelIcon: some View {
-        if let channelIconUrl = creator.channelIconUrl {
-            AsyncImage(url: channelIconUrl) { image in
-                image.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Image(systemName: "person.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 24, height: 24)
+        if creator.channelIconData != nil || creator.channelIconUrl != nil {
+            ChannelIconView(
+                iconData: creator.channelIconData,
+                fallbackUrl: creator.channelIconUrl
+            )
+            .frame(width: SidebarMetrics.iconWidth, height: SidebarMetrics.iconWidth)
             .clipShape(Circle())
         } else {
             Image(systemName: "person.circle.fill")
-                .font(.title3)
+                .font(.system(size: 21, weight: .regular))
                 .foregroundStyle(.secondary)
-                .frame(width: 24)
+                .frame(width: SidebarMetrics.iconWidth)
         }
     }
 }

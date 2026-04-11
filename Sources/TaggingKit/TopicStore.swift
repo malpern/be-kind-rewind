@@ -23,6 +23,7 @@ public final class TopicStore: Sendable {
     private let favoriteChannels = Table("favorite_channels")
     private let creatorThemes = Table("creator_themes")
     private let creatorAbout = Table("creator_about")
+    private let channelLinks = Table("channel_links")
 
     // Topic columns
     private let topicId = SQLite.Expression<Int64>("id")
@@ -147,6 +148,11 @@ public final class TopicStore: Sendable {
     private let creatorAboutSummary = SQLite.Expression<String>("summary")
     private let creatorAboutGeneratedAt = SQLite.Expression<String>("generated_at")
     private let creatorAboutSourceVideoCount = SQLite.Expression<Int>("source_video_count")
+
+    // Channel links columns (Phase 3 — scraped from channel home page)
+    private let channelLinksChannelId = SQLite.Expression<String>("channel_id")
+    private let channelLinksJSON = SQLite.Expression<String>("links_json")
+    private let channelLinksFetchedAt = SQLite.Expression<String>("fetched_at")
 
     // Commit log columns
     private let commitId = SQLite.Expression<Int64>("id")
@@ -399,6 +405,12 @@ public final class TopicStore: Sendable {
             t.column(creatorAboutSummary)
             t.column(creatorAboutGeneratedAt)
             t.column(creatorAboutSourceVideoCount)
+        })
+
+        try db.run(channelLinks.create(ifNotExists: true) { t in
+            t.column(channelLinksChannelId, primaryKey: true)
+            t.column(channelLinksJSON)
+            t.column(channelLinksFetchedAt)
         })
 
         try db.run("CREATE INDEX IF NOT EXISTS idx_topics_parent_id ON topics(parent_id)")
@@ -881,6 +893,45 @@ public final class TopicStore: Sendable {
         try db.run(creatorAbout.filter(creatorAboutChannelId == id).delete())
     }
 
+    // MARK: - Channel links (Phase 3)
+
+    /// Replace a channel's cached external links. Stores the JSON-encoded
+    /// `[ChannelLink]` array verbatim plus a fetched_at timestamp so the
+    /// caller can decide when to re-scrape. Empty array is a valid value
+    /// (the channel may have no published links).
+    public func setChannelLinks(channelId id: String, links: [ChannelLink]) throws {
+        let data = try JSONEncoder().encode(links)
+        let json = String(data: data, encoding: .utf8) ?? "[]"
+        let now = ISO8601DateFormatter().string(from: Date())
+        try db.run(channelLinks.insert(or: .replace,
+            channelLinksChannelId <- id,
+            channelLinksJSON <- json,
+            channelLinksFetchedAt <- now
+        ))
+    }
+
+    /// Read a channel's cached external links. Returns nil when there's no
+    /// cached row at all (caller knows to scrape). Returns an empty array
+    /// when there's a row but the creator has no links — distinguishes "not
+    /// scraped yet" from "scraped, no links found".
+    public func channelLinksForChannel(_ id: String) throws -> [ChannelLink]? {
+        guard let row = try db.pluck(channelLinks.filter(channelLinksChannelId == id)) else {
+            return nil
+        }
+        let json = row[channelLinksJSON]
+        guard let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([ChannelLink].self, from: data)) ?? []
+    }
+
+    /// Read the fetched_at timestamp for the cached link row, used by the
+    /// caller to decide whether to re-scrape stale data.
+    public func channelLinksFetchedAtFor(_ id: String) throws -> String? {
+        guard let row = try db.pluck(channelLinks.filter(channelLinksChannelId == id)) else {
+            return nil
+        }
+        return row[channelLinksFetchedAt]
+    }
+
     // MARK: - JSON helpers (used by creator_themes video_ids)
 
     private func jsonStringForArray(_ array: [String]) throws -> String {
@@ -940,6 +991,15 @@ public final class TopicStore: Sendable {
     /// Return all channel IDs in the channels table.
     public func allChannelIds() throws -> [String] {
         try db.prepare(channels.select(channelId)).map { $0[channelId] }
+    }
+
+    /// Return every channel record in the channels table, regardless of whether
+    /// the channel is currently referenced by any topic. Used by the offline
+    /// backfill to find channels with missing `iconData` blobs that the
+    /// per-topic loaders never see (e.g., creators discovered via candidate
+    /// search but never saved into a topic).
+    public func allChannels() throws -> [ChannelRecord] {
+        try db.prepare(channels).map(channelFromRow)
     }
 
     /// Return video IDs that don't have a channel_id set yet.

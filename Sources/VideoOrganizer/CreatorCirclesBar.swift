@@ -12,6 +12,22 @@ struct CreatorCirclesBar: View {
     let hasRecentContent: (String) -> Bool  // true if creator has video from last 7 days
     let latestPublishedAtForChannel: (String) -> Date?
     let onSelect: (String) -> Void
+    /// Double-click and context-menu "Open Creator Page" handler. Distinct
+    /// from `onSelect` (which toggles the topic-grid filter on single click)
+    /// so the two interactions don't fight each other. Optional so existing
+    /// callers that don't need detail-page navigation can pass nil.
+    var onOpenDetail: ((String) -> Void)? = nil
+
+    /// Phase 3: top theme labels for a creator, used by the active-filter
+    /// preview chip to show "what they make". Reads from the LLM-cached
+    /// `creator_themes` SQLite table at the call site. Empty when the
+    /// creator hasn't been classified yet.
+    var themeLabelsForChannel: ((String) -> [String])? = nil
+
+    /// Phase 3: subscriber count for a creator (already formatted as a
+    /// display string like "150K subscribers"), used by the active-filter
+    /// preview chip. Optional so existing callers can pass nil.
+    var subscriberCountForChannel: ((String) -> String?)? = nil
 
     @State private var isExpanded = false
 
@@ -36,13 +52,10 @@ struct CreatorCirclesBar: View {
 
     var body: some View {
         if channels.isEmpty { EmptyView() } else {
-            VStack(spacing: 4) {
-                scrollableCircles
-                filterChip
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, GridConstants.horizontalPadding)
-            .background(.bar)
+            scrollableCircles
+                .padding(.vertical, 8)
+                .padding(.horizontal, GridConstants.horizontalPadding)
+                .background(.bar)
         }
     }
 
@@ -149,7 +162,7 @@ struct CreatorCirclesBar: View {
                         .foregroundStyle(.secondary)
                 }
                 Text("more")
-                    .font(.caption2)
+                    .font(.footnote)
                     .foregroundStyle(.tertiary)
             }
         }
@@ -202,7 +215,7 @@ struct CreatorCirclesBar: View {
                 .frame(width: size, height: size)
 
                 Text(channel.name)
-                    .font(.caption2)
+                    .font(.footnote)
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .lineLimit(1)
                     .frame(maxWidth: size + 16)
@@ -210,7 +223,21 @@ struct CreatorCirclesBar: View {
         }
         .buttonStyle(.plain)
         .help(channelTooltip(channel, count: count, recent: recent))
+        // Double-click → open creator detail page. Attached as a high-priority
+        // gesture so it wins over the Button's single-tap handler before the
+        // double-tap timer expires. The Button's onSelect (single click) only
+        // fires if the double-tap doesn't trigger.
+        .highPriorityGesture(
+            TapGesture(count: 2).onEnded {
+                onOpenDetail?(channel.channelId)
+            }
+        )
         .contextMenu {
+            Button("Open Creator Page") {
+                onOpenDetail?(channel.channelId)
+            }
+            .disabled(onOpenDetail == nil)
+            Divider()
             if let urlString = channel.channelUrl, let url = URL(string: urlString) {
                 Button("Open Channel on YouTube") {
                     NSWorkspace.shared.open(url)
@@ -278,30 +305,8 @@ struct CreatorCirclesBar: View {
         return "\(count) subscribers"
     }
 
-    // MARK: - Filter Chip
-
-    @ViewBuilder
-    private var filterChip: some View {
-        if let selectedId = selectedChannelId,
-           let channel = channels.first(where: { $0.channelId == selectedId }) {
-            let count = videoCountForChannel(selectedId)
-            HStack(spacing: 4) {
-                Text("Showing: \(channel.name) (\(count) video\(count == 1 ? "" : "s"))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        onSelect(selectedId)
-                    }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-            .transition(.opacity.combined(with: .move(edge: .top)))
-        }
-    }
+    // The active-filter chip used to live here below the circles. It's now
+    // rendered at the top of the screen via OrganizerView's safeAreaInset
+    // (modeled on Mail's filter row), so the face-pile and the persistent
+    // filter chrome are decoupled.
 }

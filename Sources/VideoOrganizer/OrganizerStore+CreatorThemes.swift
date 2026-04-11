@@ -36,35 +36,26 @@ extension OrganizerStore {
         let inputs = collectClassifierInputs(forChannelId: channelId)
         guard !inputs.isEmpty else { return }
 
-        // Phase 3: incremental refresh policy.
-        //
-        // - Empty cache → run.
-        // - Manual `force` flag → run unconditionally (for the Refresh button).
-        // - Cached but the creator's input count has grown by ≥25% AND there
-        //   are at least 5 new videos since the last run → run.
-        // - Otherwise → keep the cached results.
-        //
-        // The 25% threshold is a balance between freshness and LLM cost — it
-        // means a creator going from 100→125 or 40→50 videos triggers a refresh
-        // but a creator going from 100→110 does not. Manual override is always
-        // available via the page's Refresh button.
-        if !force {
-            if let existing = try? store.creatorThemes(channelId: channelId), !existing.isEmpty {
-                let cachedCount = existing.first?.classifiedVideoCount ?? 0
-                let growth = inputs.count - cachedCount
-                let growthRatio = cachedCount > 0 ? Double(growth) / Double(cachedCount) : 1.0
-                let isStale = growth >= 5 && growthRatio >= 0.25
-                if !isStale {
-                    return
-                }
-                AppLogger.app.info("Theme cache stale for \(channelName, privacy: .public): \(cachedCount, privacy: .public) → \(inputs.count, privacy: .public) videos (+\(Int(growthRatio * 100), privacy: .public)%)")
-            }
-        } else {
-            AppLogger.app.info("Forcing theme reclassification for \(channelName, privacy: .public) (\(channelId, privacy: .public))")
+        // Independently decide whether themes and about each need to be
+        // (re)generated. The previous version only checked themes — if themes
+        // were fresh but about was missing, the function returned early and
+        // about never got generated. Same the other way around. Now each
+        // cache is queried separately and we only run the LLM calls that are
+        // actually needed.
+        let themesNeeded = force || isThemesCacheStale(channelId: channelId, currentInputCount: inputs.count, channelName: channelName)
+        let aboutNeeded = force || isAboutCacheMissing(channelId: channelId)
+
+        guard themesNeeded || aboutNeeded else {
+            AppLogger.app.info("Both theme + about caches fresh for \(channelName, privacy: .public) — skipping LLM run")
+            return
+        }
+
+        if force {
+            AppLogger.app.info("Forcing theme/about regeneration for \(channelName, privacy: .public) (\(channelId, privacy: .public))")
         }
 
         classifyingThemeChannels.insert(channelId)
-        AppLogger.app.info("Started Claude theme classification for \(channelName, privacy: .public) (\(channelId, privacy: .public)) over \(inputs.count, privacy: .public) videos")
+        AppLogger.app.info("Started Claude run for \(channelName, privacy: .public): themes=\(themesNeeded, privacy: .public) about=\(aboutNeeded, privacy: .public) over \(inputs.count, privacy: .public) videos")
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -76,9 +67,37 @@ extension OrganizerStore {
                 classifier: classifier,
                 channelId: channelId,
                 channelName: channelName,
-                inputs: inputs
+                inputs: inputs,
+                generateThemes: themesNeeded,
+                generateAbout: aboutNeeded
             )
         }
+    }
+
+    /// Returns true when the cached themes for this channel either don't
+    /// exist or are stale enough (≥25% growth AND ≥5 new videos) to warrant
+    /// re-classification. Returns false (cache fresh) for the steady-state
+    /// case where the user is just navigating between cached creators.
+    private func isThemesCacheStale(channelId: String, currentInputCount: Int, channelName: String) -> Bool {
+        guard let existing = try? store.creatorThemes(channelId: channelId), !existing.isEmpty else {
+            return true  // No cache → needs to run
+        }
+        let cachedCount = existing.first?.classifiedVideoCount ?? 0
+        let growth = currentInputCount - cachedCount
+        let growthRatio = cachedCount > 0 ? Double(growth) / Double(cachedCount) : 1.0
+        let isStale = growth >= 5 && growthRatio >= 0.25
+        if isStale {
+            AppLogger.app.info("Theme cache stale for \(channelName, privacy: .public): \(cachedCount, privacy: .public) → \(currentInputCount, privacy: .public) videos (+\(Int(growthRatio * 100), privacy: .public)%)")
+        }
+        return isStale
+    }
+
+    /// Returns true when there's no cached about paragraph for this channel.
+    /// About paragraphs don't have a staleness check — once generated they
+    /// stay until manually refreshed via force=true.
+    private func isAboutCacheMissing(channelId: String) -> Bool {
+        let cached = (try? store.creatorAbout(channelId: channelId))
+        return cached == nil
     }
 
     /// Manually clear the LLM cache for a single creator. Useful for "Refresh themes"
@@ -124,53 +143,78 @@ extension OrganizerStore {
         classifier: CreatorThemeClassifier,
         channelId: String,
         channelName: String,
-        inputs: [CreatorThemeClassifier.CreatorVideoInput]
+        inputs: [CreatorThemeClassifier.CreatorVideoInput],
+        generateThemes: Bool,
+        generateAbout: Bool
     ) async {
-        // Classification + about run in parallel — they're independent calls.
-        async let themesResult = Task {
-            try await classifier.classifyThemes(creatorName: channelName, videos: inputs)
-        }.value
-
-        async let aboutResult = Task {
-            try await classifier.generateAbout(creatorName: channelName, videos: inputs)
-        }.value
-
-        // Themes
-        do {
-            let result = try await themesResult
-            let now = ISO8601DateFormatter().string(from: Date())
-            let records = result.themes.enumerated().map { index, cluster in
-                CreatorThemeRecord(
-                    channelId: channelId,
-                    label: cluster.label,
-                    description: cluster.description.isEmpty ? nil : cluster.description,
-                    order: index,
-                    videoIds: cluster.videoIds,
-                    isSeries: cluster.isSeries,
-                    orderingSignal: cluster.orderingSignal?.rawValue,
-                    classifiedAt: now,
-                    classifiedVideoCount: result.classifiedVideoCount
-                )
+        // Run only the LLM calls that the caller asked for. The two calls
+        // are still parallel via async-let when both are requested. When
+        // only one is needed (typical follow-up case where themes are
+        // cached but about is missing, or vice versa) we save the other
+        // call's tokens entirely.
+        if generateThemes && generateAbout {
+            async let themesResult = Task {
+                try await classifier.classifyThemes(creatorName: channelName, videos: inputs)
+            }.value
+            async let aboutResult = Task {
+                try await classifier.generateAbout(creatorName: channelName, videos: inputs)
+            }.value
+            await persistThemes(try? themesResult, channelId: channelId, channelName: channelName)
+            await persistAbout(try? aboutResult, channelId: channelId, channelName: channelName, inputCount: inputs.count)
+        } else if generateThemes {
+            do {
+                let result = try await classifier.classifyThemes(creatorName: channelName, videos: inputs)
+                await persistThemes(result, channelId: channelId, channelName: channelName)
+            } catch {
+                AppLogger.app.error("Theme classification failed for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
+        } else if generateAbout {
+            do {
+                let summary = try await classifier.generateAbout(creatorName: channelName, videos: inputs)
+                await persistAbout(summary, channelId: channelId, channelName: channelName, inputCount: inputs.count)
+            } catch {
+                AppLogger.app.error("About generation failed for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func persistThemes(_ result: CreatorThemeClassifier.ClassificationResult?, channelId: String, channelName: String) async {
+        guard let result else { return }
+        let now = ISO8601DateFormatter().string(from: Date())
+        let records = result.themes.enumerated().map { index, cluster in
+            CreatorThemeRecord(
+                channelId: channelId,
+                label: cluster.label,
+                description: cluster.description.isEmpty ? nil : cluster.description,
+                order: index,
+                videoIds: cluster.videoIds,
+                isSeries: cluster.isSeries,
+                orderingSignal: cluster.orderingSignal?.rawValue,
+                classifiedAt: now,
+                classifiedVideoCount: result.classifiedVideoCount
+            )
+        }
+        do {
             try store.replaceCreatorThemes(channelId: channelId, themes: records)
             AppLogger.app.info("Cached \(records.count, privacy: .public) themes for \(channelName, privacy: .public)")
         } catch {
-            AppLogger.app.error("Theme classification failed for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            AppLogger.app.error("Failed to persist themes for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+    }
 
-        // About
+    private func persistAbout(_ summary: String?, channelId: String, channelName: String, inputCount: Int) async {
+        guard let summary, !summary.isEmpty else { return }
+        let record = CreatorAboutRecord(
+            channelId: channelId,
+            summary: summary,
+            generatedAt: ISO8601DateFormatter().string(from: Date()),
+            sourceVideoCount: inputCount
+        )
         do {
-            let summary = try await aboutResult
-            let record = CreatorAboutRecord(
-                channelId: channelId,
-                summary: summary,
-                generatedAt: ISO8601DateFormatter().string(from: Date()),
-                sourceVideoCount: inputs.count
-            )
             try store.upsertCreatorAbout(record)
             AppLogger.app.info("Cached about paragraph for \(channelName, privacy: .public) (\(summary.count, privacy: .public) chars)")
         } catch {
-            AppLogger.app.error("About generation failed for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            AppLogger.app.error("Failed to persist about for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 }

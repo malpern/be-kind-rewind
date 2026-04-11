@@ -4,6 +4,10 @@ import SwiftUI
 struct CreatorSectionHeaderView: View {
     let channelName: String
     let channelIconUrl: URL?
+    /// Locally cached icon bytes from `ChannelRecord.iconData`. Required
+    /// for the row to render the avatar offline; the row falls back to the
+    /// network only when this is nil.
+    var channelIconData: Data? = nil
     let channelUrl: URL?
     let count: Int
     var totalCount: Int?
@@ -40,19 +44,10 @@ struct CreatorSectionHeaderView: View {
     }
 
     private var channelIcon: some View {
-        Group {
-            if let url = channelIconUrl {
-                AsyncImage(url: url) { image in
-                    image.resizable()
-                } placeholder: {
-                    Image(systemName: "person.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Image(systemName: "person.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-        }
+        ChannelIconView(
+            iconData: channelIconData,
+            fallbackUrl: channelIconUrl
+        )
         .frame(width: 28, height: 28)
         .clipShape(Circle())
     }

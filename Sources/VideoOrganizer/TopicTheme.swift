@@ -7,6 +7,21 @@ enum TopicTheme {
         let color: Color
     }
 
+    private static let displayNameOverrides: [String: String] = [
+        "Keyboard Reviews & Comparisons": "Keyboard Reviews",
+        "DIY Builds & Custom Projects": "DIY Keyboard Builds",
+        "Keyboard History & Culture": "Keyboard Culture",
+        "Ergonomic & Split Keyboards": "Ergo & Split Keyboards",
+        "Switches & Keycaps": "Switches + Keycaps",
+        "Firmware & Software Setup": "Firmware + Setup",
+        "Keyboard Layouts & Techniques": "Layouts + Techniques",
+        "Tech, Gadgets & Digital Tools": "Tech + Digital Tools",
+        "Programming Languages, CS Fundamentals & Algorithms": "Programming + CS",
+        "AI Models, Research & Industry Trends": "AI Models + Research",
+        "Geopolitics, Current Events & Intelligence": "Geopolitics + Intel",
+        "macOS & Apple Development": "macOS + Apple Dev"
+    ]
+
     private static let themes: [(keywords: [String], theme: Theme)] = [
         (["keyboard"], Theme(icon: "keyboard", color: .purple)),
         (["claude", "anthropic"], Theme(icon: "brain", color: .orange)),
@@ -64,5 +79,9 @@ enum TopicTheme {
 
     static func iconColor(for topicName: String) -> Color {
         theme(for: topicName).color
+    }
+
+    static func displayName(for topicName: String) -> String {
+        displayNameOverrides[topicName] ?? topicName
     }
 }

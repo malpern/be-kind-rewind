@@ -135,7 +135,8 @@ struct CollectionGridView: View {
                                 channelId: candidate.channelId
                             ),
                             isPlaceholder: false,
-                            placeholderMessage: candidate.secondaryText
+                            placeholderMessage: candidate.secondaryText,
+                            channelIconData: candidate.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
                         )
                     }
                 },
@@ -178,7 +179,8 @@ struct CollectionGridView: View {
                 candidateScore: nil,
                 stateTag: store.badgeTagForVideo(v.videoId),
                 isPlaceholder: false,
-                placeholderMessage: nil
+                placeholderMessage: nil,
+                channelIconData: v.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
             )
         }
     }
@@ -209,7 +211,8 @@ struct CollectionGridView: View {
                         channelId: $0.channelId
                     ),
                     isPlaceholder: $0.isPlaceholder,
-                    placeholderMessage: $0.secondaryText
+                    placeholderMessage: $0.secondaryText,
+                    channelIconData: $0.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
                 )
             }
         }
@@ -808,9 +811,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
 
             if let creatorName = section.creatorName {
+                let iconData = section.creatorChannelId.flatMap { store?.knownChannelsById[$0]?.iconData }
                 return .creator(
                     channelName: creatorName,
                     channelIconUrl: section.channelIconUrl,
+                    channelIconData: iconData,
                     channelUrl: section.creatorChannelUrl,
                     count: section.videos.count,
                     totalCount: section.totalCount,
@@ -833,7 +838,79 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     : store?.recentStoredCandidateVideosForTopic(section.topicId) ?? [])
                 : []
 
-            return .topic(
+            // Each closure pulled into an explicitly-typed local binding so the
+            // compiler doesn't have to unify a 16-argument enum case in one
+            // pass — that triggers "expression too complex" errors when any
+            // single closure has implicit captures or uses [weak store].
+            let topicId = section.topicId
+            let displayMode = section.displayMode
+            let videoCount: (String) -> Int = { [weak store] channelId in
+                guard let store else { return 0 }
+                if displayMode == .watchCandidates {
+                    let channel = channels.first(where: { $0.channelId == channelId })
+                    return store.watchCandidateCountForChannel(
+                        channel?.channelId ?? channelId,
+                        channelName: channel?.name,
+                        inCandidates: watchCandidatesForSection
+                    )
+                }
+                return store.videoCountForChannel(channelId, inTopic: topicId)
+            }
+            let hasRecent: (String) -> Bool = { [weak store] channelId in
+                guard let store else { return false }
+                if displayMode == .watchCandidates {
+                    let channel = channels.first(where: { $0.channelId == channelId })
+                    return store.latestWatchCandidateDateForChannel(
+                        channel?.channelId ?? channelId,
+                        channelName: channel?.name,
+                        inCandidates: watchCandidatesForSection
+                    ) != nil
+                }
+                return store.channelHasRecentContent(channelId, inTopic: topicId)
+            }
+            let latestPublishedAt: (String) -> Date? = { [weak store] channelId in
+                guard let store else { return nil }
+                if displayMode == .watchCandidates {
+                    let channel = channels.first(where: { $0.channelId == channelId })
+                    return store.latestWatchCandidateDateForChannel(
+                        channel?.channelId ?? channelId,
+                        channelName: channel?.name,
+                        inCandidates: watchCandidatesForSection
+                    )
+                }
+                return self.latestSavedPublishedDateForChannel(channelId, topicId: topicId)
+            }
+            let themeLabels: (String) -> [String] = { [weak store] channelId in
+                guard let store else { return [] }
+                let themes = (try? store.store.creatorThemes(channelId: channelId)) ?? []
+                return themes
+                    .sorted { $0.videoIds.count > $1.videoIds.count }
+                    .map(\.label)
+            }
+            let subscriberCount: (String) -> String? = { channelId in
+                channels.first(where: { $0.channelId == channelId })?.subscriberCount
+            }
+            let onSelect: (String) -> Void = { [weak store] channelId in
+                guard let store else { return }
+                // Single-click toggles the filter. Click again clears it.
+                if store.selectedChannelId == channelId {
+                    store.selectedChannelId = nil
+                    store.inspectedCreatorName = nil
+                    store.selectedVideoId = nil
+                    return
+                }
+                let channel = channels.first(where: { $0.channelId == channelId })
+                if displayMode == .watchCandidates {
+                    _ = store.navigateToCreatorInWatch(channelId: channel?.channelId ?? channelId, channelName: channel?.name, preferredTopicId: topicId)
+                } else {
+                    _ = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: topicId)
+                }
+            }
+            let onOpenDetail: (String) -> Void = { [weak store] channelId in
+                store?.openCreatorDetail(channelId: channelId)
+            }
+
+            return CollectionSectionHeaderModel.topic(
                 name: section.topicName,
                 count: section.headerCountOverride ?? section.videos.count,
                 totalCount: section.totalCount,
@@ -843,51 +920,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 displayMode: section.displayMode,
                 channels: channels,
                 selectedChannelId: selectedChannelId,
-                videoCountForChannel: { [weak store] channelId in
-                    guard let store else { return 0 }
-                    if section.displayMode == .watchCandidates {
-                        let channel = channels.first(where: { $0.channelId == channelId })
-                        return store.watchCandidateCountForChannel(
-                            channel?.channelId ?? channelId,
-                            channelName: channel?.name,
-                            inCandidates: watchCandidatesForSection
-                        )
-                    }
-                    return store.videoCountForChannel(channelId, inTopic: section.topicId)
-                },
-                hasRecentContent: { [weak store] channelId in
-                    guard let store else { return false }
-                    if section.displayMode == .watchCandidates {
-                        let channel = channels.first(where: { $0.channelId == channelId })
-                        return store.latestWatchCandidateDateForChannel(
-                            channel?.channelId ?? channelId,
-                            channelName: channel?.name,
-                            inCandidates: watchCandidatesForSection
-                        ) != nil
-                    }
-                    return store.channelHasRecentContent(channelId, inTopic: section.topicId)
-                },
-                latestPublishedAtForChannel: { [weak store] channelId in
-                    guard let store else { return nil }
-                    if section.displayMode == .watchCandidates {
-                        let channel = channels.first(where: { $0.channelId == channelId })
-                        return store.latestWatchCandidateDateForChannel(
-                            channel?.channelId ?? channelId,
-                            channelName: channel?.name,
-                            inCandidates: watchCandidatesForSection
-                        )
-                    }
-                    return self.latestSavedPublishedDateForChannel(channelId, topicId: section.topicId)
-                },
-                onSelectChannel: { [weak store] channelId in
-                    guard let store else { return }
-                    let channel = channels.first(where: { $0.channelId == channelId })
-                    if section.displayMode == .watchCandidates {
-                        _ = store.navigateToCreatorInWatch(channelId: channel?.channelId ?? channelId, channelName: channel?.name, preferredTopicId: section.topicId)
-                    } else {
-                        _ = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: section.topicId)
-                    }
-                }
+                videoCountForChannel: videoCount,
+                hasRecentContent: hasRecent,
+                latestPublishedAtForChannel: latestPublishedAt,
+                themeLabelsForChannel: themeLabels,
+                subscriberCountForChannel: subscriberCount,
+                onSelectChannel: onSelect,
+                onOpenCreatorDetail: onOpenDetail
             )
         }
 

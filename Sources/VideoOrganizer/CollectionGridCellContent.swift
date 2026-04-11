@@ -144,7 +144,7 @@ struct SectionHeaderContent: View {
 
     var body: some View {
         switch model {
-        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, latestPublishedAtForChannel, onSelectChannel):
+        case let .topic(name, count, totalCount, topicId, scrollProgress, highlightTerms, displayMode, channels, selectedChannelId, videoCountForChannel, hasRecentContent, latestPublishedAtForChannel, themeLabelsForChannel, subscriberCountForChannel, onSelectChannel, onOpenCreatorDetail):
             VStack(spacing: 0) {
                 SectionHeaderView(
                     name: name,
@@ -167,14 +167,18 @@ struct SectionHeaderContent: View {
                         videoCountForChannel: videoCountForChannel,
                         hasRecentContent: hasRecentContent,
                         latestPublishedAtForChannel: latestPublishedAtForChannel,
-                        onSelect: onSelectChannel
+                        onSelect: onSelectChannel,
+                        onOpenDetail: onOpenCreatorDetail,
+                        themeLabelsForChannel: themeLabelsForChannel,
+                        subscriberCountForChannel: subscriberCountForChannel
                     )
                 }
             }
-        case let .creator(channelName, channelIconUrl, channelUrl, count, totalCount, topicNames, sectionId, scrollProgress, highlightTerms, onInspect):
+        case let .creator(channelName, channelIconUrl, channelIconData, channelUrl, count, totalCount, topicNames, sectionId, scrollProgress, highlightTerms, onInspect):
             CreatorSectionHeaderView(
                 channelName: channelName,
                 channelIconUrl: channelIconUrl,
+                channelIconData: channelIconData,
                 channelUrl: channelUrl,
                 count: count,
                 totalCount: totalCount,

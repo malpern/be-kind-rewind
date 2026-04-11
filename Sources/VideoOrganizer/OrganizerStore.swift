@@ -196,6 +196,16 @@ final class OrganizerStore {
     /// error is set). Surfaced inline in the empty-archive banner.
     var lastFullHistoryLoadError: [String: String] = [:]
 
+    /// Phase 3: channels currently mid channel-link scrape (the small extra
+    /// scrape that pulls external URLs from the channel's home page). Used by
+    /// the view to suppress duplicate concurrent invocations and gate UI.
+    var loadingChannelLinks: Set<String> = []
+
+    /// Bumped after a channel-link scrape completes successfully so any open
+    /// creator page can observe the change via .onChange and rebuild its
+    /// page model from the freshly-cached links.
+    var channelLinksVersion: Int = 0
+
     init(dbPath: String, claudeClient: ClaudeClient? = nil, startBackgroundTasks: Bool = true) throws {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }
@@ -217,8 +227,74 @@ final class OrganizerStore {
             processPendingSync(reason: "startup")
             processPendingBrowserSync(reason: "startup")
             startSyncLoop()
+            // Offline-first channel avatars: download iconData blobs for any
+            // known channel that doesn't have one yet. The blob is the
+            // source of truth for ChannelIconView; without this, channels
+            // discovered via topic/playlist sync (which populates iconUrl
+            // but not iconData) would still hit the network on every
+            // render and go blank when offline. Fire-and-forget — capped
+            // per pass to avoid burst download on launch.
+            backfillMissingChannelIcons()
         } else {
             browserExecutorStatusMessage = "Background sync disabled"
+        }
+    }
+
+    /// Walk every channel in the SQLite channels table and download icon
+    /// bytes for any channel that has an `iconUrl` but no cached `iconData`
+    /// blob. Writes results back to SQLite via `updateChannelIcon` and
+    /// refreshes the in-memory `knownChannelsById` cache for any channel
+    /// already tracked there so subsequent renders pick up the new bytes
+    /// without a roundtrip.
+    ///
+    /// This is the structural fix for offline channel avatars: every channel
+    /// the user has *ever* touched (including pure-archive creators they've
+    /// never saved into a topic) ends up with its icon stored locally, and
+    /// `ChannelIconView` reads from that store first. Walking the full
+    /// channels table — not just topic-referenced channels — closes the
+    /// leaderboard / archive-discovery gap. Capped at 100 per pass so launch
+    /// doesn't kick off a 500-icon download burst.
+    func backfillMissingChannelIcons() {
+        let allRecords: [ChannelRecord]
+        do {
+            allRecords = try store.allChannels()
+        } catch {
+            AppLogger.app.error("Channel icon backfill: failed to enumerate channels: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let candidates = allRecords.filter { record in
+            record.iconData == nil && record.iconUrl != nil
+        }
+        guard !candidates.isEmpty else { return }
+        let capped = Array(candidates.prefix(100))
+        AppLogger.app.info("Backfilling \(capped.count, privacy: .public) missing channel icons (of \(candidates.count, privacy: .public) needing icons across \(allRecords.count, privacy: .public) total channels)")
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.runChannelIconBackfill(records: capped)
+        }
+    }
+
+    private func runChannelIconBackfill(records: [ChannelRecord]) async {
+        var fetched = 0
+        for record in records {
+            guard let urlString = record.iconUrl, let url = URL(string: urlString) else { continue }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard let http = response as? HTTPURLResponse,
+                      http.statusCode == 200,
+                      !data.isEmpty else { continue }
+                try store.updateChannelIcon(channelId: record.channelId, iconData: data)
+                if let refreshed = (try? store.channelById(record.channelId)) ?? nil {
+                    knownChannelsById[record.channelId] = refreshed
+                }
+                fetched += 1
+            } catch {
+                // Silently skip — we'll retry on next launch.
+            }
+        }
+        if fetched > 0 {
+            AppLogger.app.info("Channel icon backfill cached \(fetched, privacy: .public) icons")
         }
     }
 
