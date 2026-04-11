@@ -243,6 +243,20 @@ struct InspectedVideoViewModel {
     let seenSummary: SeenVideoSummary?
 }
 
+/// What the right-hand inspector pane is showing right now. Three discrete
+/// states the inspector body switches on. Replaces a pile of optional
+/// flags ("is hovered? is selected? how many selected?") with a single
+/// source of truth.
+///
+/// `single` covers both the hover-preview case and the explicit
+/// 1-video-selected case. `multiple` only fires when the user has
+/// explicitly selected 2+ videos and isn't currently hovering anything.
+enum InspectedSelection {
+    case empty
+    case single(InspectedVideoViewModel)
+    case multiple([VideoViewModel])
+}
+
 struct ChannelPresentation {
     let name: String?
     let channelUrl: String?

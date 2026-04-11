@@ -31,17 +31,18 @@ struct VideoInspector: View {
 
     var body: some View {
         Group {
-            // Removed the auto-forward to the creator detail page that used
-            // to fire when `inspectedCreatorName` was set. That was invisible
-            // magic — opening the inspector with a filter active would silently
-            // navigate, which conflated two unrelated concepts. Navigation
-            // now happens via the explicit "Open Creator Page" button on the
-            // creator filter chip in the grid header (CollectionGridView) and
-            // via double-click on a creator circle.
-            if let inspectedItem {
-                inspectorContent(inspectedItem)
-            } else {
+            // Single source of truth: the store decides whether the inspector
+            // is empty, showing one video (hover preview or single selection),
+            // or showing the multi-select bulk-action surface. Hover always
+            // wins over multi — so the user can hover-preview a single card
+            // even when they have an explicit multi-selection underneath.
+            switch store.inspectedSelection {
+            case .empty:
                 emptyState
+            case .single(let item):
+                inspectorContent(item)
+            case .multiple(let videos):
+                multiSelectInspectorContent(videos)
             }
         }
         .frame(
@@ -175,6 +176,170 @@ struct VideoInspector: View {
                 .padding(.vertical, 18)
             }
         }
+    }
+
+    // MARK: - Multi-Select Inspector
+
+    /// Bulk-action surface for 2+ selected videos. Deliberately minimal
+    /// per the design plan: count + one-line description + 2-4 bulk action
+    /// buttons. No mosaic, no stat tiles, no tag intersection, no
+    /// "Open All on YouTube." Multi-select is for organizing, not playing.
+    ///
+    /// Hover preview overrides this view — hovering a single card always
+    /// shows the single-video inspector even when multi is selected.
+    private func multiSelectInspectorContent(_ videos: [VideoViewModel]) -> some View {
+        let count = videos.count
+        let summary = multiSelectSummary(videos)
+
+        return VStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            VStack(spacing: 14) {
+                Text("\(count) videos selected")
+                    .appPageTitle()
+                    .fontWeight(.semibold)
+                    .multilineTextAlignment(.center)
+
+                summaryLine(summary)
+            }
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 24)
+
+            VStack(spacing: 10) {
+                Button {
+                    store.saveVideosToWatchLater(videoIds: videos.map(\.videoId))
+                } label: {
+                    Label("Save All to Watch Later", systemImage: "clock")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                .help("Add all \(count) selected videos to your Watch Later playlist")
+                .accessibilityIdentifier("multiSaveAllToWatchLater")
+
+                bulkSaveToPlaylistMenu(videoIds: videos.map(\.videoId))
+
+                if store.pageDisplayMode == .watchCandidates,
+                   let topicId = store.selectedTopicId {
+                    sectionDivider()
+
+                    Button(role: .destructive) {
+                        store.dismissCandidates(topicId: topicId, videoIds: videos.map(\.videoId))
+                    } label: {
+                        Label("Dismiss All", systemImage: "xmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered)
+                    .help("Hide all \(count) selected candidates from this topic")
+                    .accessibilityIdentifier("multiDismissAll")
+
+                    Button(role: .destructive) {
+                        store.markCandidatesNotInterested(topicId: topicId, videoIds: videos.map(\.videoId))
+                    } label: {
+                        Label("Mark All Not Interested", systemImage: "hand.thumbsdown")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered)
+                    .help("Hide locally and queue YouTube Not Interested actions for all \(count) videos")
+                    .accessibilityIdentifier("multiNotInterestedAll")
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 24)
+        }
+    }
+
+    /// One-line description of the selection. Three shapes:
+    ///   - "5 videos from Joe Scotto" (homogeneous, name is a clickable
+    ///     accent-color link to the creator detail page)
+    ///   - "5 videos across 3 creators" (mixed)
+    ///   - just the creator name (when there's no need for a count prefix)
+    ///
+    /// The link-as-description pattern (instead of a separate button) is
+    /// the Apple Mail "From: 3 senders" treatment — actionable affordances
+    /// live inside the descriptive text, not in a parallel button stack.
+    @ViewBuilder
+    private func summaryLine(_ summary: MultiSelectSummary) -> some View {
+        switch summary {
+        case .singleCreator(let channelId, let displayName):
+            HStack(spacing: 0) {
+                Text("From ")
+                    .foregroundStyle(.secondary)
+                Button {
+                    store.openCreatorDetail(channelId: channelId)
+                } label: {
+                    Text(displayName)
+                        .foregroundStyle(Color.accentColor)
+                        .fontWeight(.semibold)
+                }
+                .buttonStyle(.plain)
+                .help("Open the creator detail page for \(displayName)")
+                .accessibilityIdentifier("multiOpenCreatorPage")
+            }
+            .font(.body)
+
+        case .multipleCreators(let count):
+            Text("Across \(count) creators")
+                .font(.body)
+                .foregroundStyle(.secondary)
+
+        case .unknown:
+            EmptyView()
+        }
+    }
+
+    /// Reduces the selection's channelIds to one of three shapes for the
+    /// summary line. Resolves the display name from the store's known
+    /// channels cache (offline-friendly) with a fallback to whatever
+    /// channelName the video carries.
+    private func multiSelectSummary(_ videos: [VideoViewModel]) -> MultiSelectSummary {
+        let channelIds = Set(videos.compactMap { $0.channelId.flatMap { $0.isEmpty ? nil : $0 } })
+        if channelIds.count == 1, let channelId = channelIds.first {
+            let name = store.knownChannelsById[channelId]?.name
+                ?? videos.first?.channelName
+                ?? "Unknown Creator"
+            return .singleCreator(channelId: channelId, displayName: name)
+        }
+        if channelIds.count >= 2 {
+            return .multipleCreators(channelIds.count)
+        }
+        return .unknown
+    }
+
+    private enum MultiSelectSummary {
+        case singleCreator(channelId: String, displayName: String)
+        case multipleCreators(Int)
+        case unknown
+    }
+
+    /// Bulk "Save All to Playlist…" Menu. Mirrors the per-video Menu in
+    /// `actionButtons` but routes through `saveVideosToPlaylist` so all
+    /// selected videos get added in one shot.
+    @ViewBuilder
+    private func bulkSaveToPlaylistMenu(videoIds: [String]) -> some View {
+        let savablePlaylists = store.knownPlaylists().filter { $0.playlistId != "WL" }
+        Menu {
+            if savablePlaylists.isEmpty {
+                Text("No playlists available")
+            } else {
+                ForEach(savablePlaylists) { playlist in
+                    Button(playlist.title) {
+                        store.saveVideosToPlaylist(videoIds: videoIds, playlist: playlist)
+                    }
+                }
+            }
+        } label: {
+            Label("Save All to Playlist…", systemImage: "music.note.list")
+                .frame(maxWidth: .infinity)
+        }
+        .controlSize(.large)
+        .buttonStyle(.bordered)
+        .disabled(savablePlaylists.isEmpty)
+        .help(savablePlaylists.isEmpty ? "No playlists available" : "Save all \(videoIds.count) videos to a playlist")
+        .accessibilityIdentifier("multiSaveAllToPlaylist")
     }
 
     @ViewBuilder
@@ -312,7 +477,7 @@ struct VideoInspector: View {
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .help("Open this video on YouTube")
             // Copy Link button removed — low-value duplication of the
             // system Share sheet, and the row was crowding the inspector.

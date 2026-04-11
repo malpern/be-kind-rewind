@@ -596,6 +596,37 @@ final class OrganizerStore {
         return nil
     }
 
+    /// What the inspector should render for the current selection state.
+    /// Three discrete cases — empty, single video, multi-selection — so the
+    /// inspector can dispatch on a single source of truth instead of
+    /// guessing from a pile of optional flags.
+    ///
+    /// **Hover always wins.** When the user is hovering a card, the inspector
+    /// shows that single video as a preview, even if there's an explicit
+    /// multi-selection underneath. This matches the existing single-video
+    /// behavior — hover is "show me what's under my cursor", multi is "act
+    /// on the explicit set." They don't fight; hover takes priority.
+    var inspectedSelection: InspectedSelection {
+        // Hover takes priority — single preview wins over multi.
+        if hoveredVideoId != nil, let item = inspectedItem {
+            return .single(item)
+        }
+
+        // No hover: route based on the explicit selection set.
+        if selectedVideoIds.count >= 2 {
+            let videos = selectedVideoIds.compactMap { videoMap[$0] }
+            if videos.count >= 2 {
+                return .multiple(videos)
+            }
+        }
+
+        if let item = inspectedItem {
+            return .single(item)
+        }
+
+        return .empty
+    }
+
     func videoById(_ videoId: String) -> VideoViewModel? {
         videoMap[videoId]
     }
