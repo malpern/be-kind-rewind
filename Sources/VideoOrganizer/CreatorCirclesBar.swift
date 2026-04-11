@@ -41,11 +41,11 @@ struct CreatorCirclesBar: View {
 
     var body: some View {
         if channels.isEmpty { EmptyView() } else {
-            VStack(spacing: 4) {
+            VStack(spacing: 6) {
                 scrollableCircles
                 filterChip
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
             .padding(.horizontal, GridConstants.horizontalPadding)
             .background(.bar)
         }
@@ -299,27 +299,67 @@ struct CreatorCirclesBar: View {
 
     // MARK: - Filter Chip
 
+    /// Active-filter banner shown below the face-pile circles whenever a
+    /// creator filter is active. Reads as a contextual extension of the
+    /// circles row (same `.bar` background, same horizontal padding) rather
+    /// than a separate page-level chrome strip — that placement is the
+    /// macOS-native version of "filter is active here, here are the relevant
+    /// actions" (Mail's message list does the same with its own filter row).
+    ///
+    /// Three controls:
+    /// - "Showing N video(s)" caption (no longer duplicates the channel name
+    ///   since the highlighted circle above already identifies the creator)
+    /// - "Open Creator Page" bordered button → discoverable CTA to navigate
+    ///   to the dedicated detail view
+    /// - "Clear filter" × button → mirrors the click-again-to-deselect
+    ///   behavior on the circles, for users who prefer an explicit affordance
     @ViewBuilder
     private var filterChip: some View {
         if let selectedId = selectedChannelId,
            let channel = channels.first(where: { $0.channelId == selectedId }) {
             let count = videoCountForChannel(selectedId)
-            HStack(spacing: 4) {
-                Text("Showing: \(channel.name) (\(count) video\(count == 1 ? "" : "s"))")
-                    .font(.caption)
+            HStack(spacing: 12) {
+                Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(.tint)
+                (Text("Showing \(count) video\(count == 1 ? "" : "s") from ")
+                    .font(.body)
                     .foregroundStyle(.secondary)
+                + Text(channel.name)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 12)
+
+                if onOpenDetail != nil {
+                    Button {
+                        onOpenDetail?(channel.channelId)
+                    } label: {
+                        Label("Open Creator Page", systemImage: "arrow.up.right.square")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .help("Open the dedicated detail page for \(channel.name)")
+                    .accessibilityIdentifier("creatorFilterOpenDetail")
+                }
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         onSelect(selectedId)
                     }
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    Label("Clear", systemImage: "xmark")
+                        .labelStyle(.iconOnly)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .help("Clear the creator filter")
+                .accessibilityIdentifier("creatorFilterClear")
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
