@@ -389,7 +389,7 @@ struct CreatorDetailView: View {
                         Text(about)
                             .font(.body)
                             .foregroundStyle(.secondary)
-                            .lineSpacing(7)
+                            .lineSpacing(4)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .padding(.top, 8)
@@ -416,10 +416,11 @@ struct CreatorDetailView: View {
                 // Right column: themes capsules. Moved up here from a separate
                 // mid-page section so the description column is naturally
                 // narrower (better legibility) and tags are visible at a glance
-                // alongside the channel description. Capped at 280pt wide so
-                // the description gets the lion's share of available space.
+                // alongside the channel description. Width tuned to fit ~2
+                // capsules per row in the FlowLayout for typical labels (1-3
+                // words, max 24 chars per the prompt rules).
                 themesIdentityColumn
-                    .frame(width: 280, alignment: .topLeading)
+                    .frame(width: 320, alignment: .topLeading)
             }
             .contentShape(Rectangle())
             .contextMenu {
@@ -479,14 +480,14 @@ struct CreatorDetailView: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                // One theme per row — gives each capsule a clean horizontal
-                // hit area and lets long labels truncate predictably without
-                // disrupting neighbor layout. Click jumps to All Videos and
-                // applies the theme as a filter (see themeCapsule action).
-                VStack(alignment: .leading, spacing: 6) {
+                // Mason-style FlowLayout: capsules pack 2+ per row when space
+                // permits, wrapping naturally when a long label would overflow.
+                // Replaces the one-per-row VStack — that was too verbose for
+                // creators with 8+ themes. Click jumps to All Videos with the
+                // theme filter applied (see themeCapsule action).
+                FlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(page.themes, id: \.label) { theme in
                         themeCapsule(theme)
-                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             } else if page.isClassifyingThemes || isLoadingArchive {
@@ -501,18 +502,17 @@ struct CreatorDetailView: View {
         }
     }
 
-    /// Skeleton placeholder for the themes column. Six stub capsule rows with
-    /// `.redacted(reason: .placeholder)` so each one occupies the same vertical
-    /// space a real capsule would. Reserves ~180pt of height which approximates
-    /// the average loaded state.
+    /// Skeleton placeholder for the themes column. Eight stub capsules in the
+    /// same FlowLayout the loaded state uses, so the placeholder approximates
+    /// the real mason layout's wrapping behavior.
     @ViewBuilder
     private var themesSkeletonRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(0..<6, id: \.self) { _ in
+        FlowLayout(spacing: 6, lineSpacing: 6) {
+            ForEach(0..<8, id: \.self) { i in
+                let stub = i.isMultiple(of: 2) ? "Tag label" : "Loading"
                 HStack(spacing: 6) {
-                    Text("Loading theme")
+                    Text(stub)
                         .font(.callout.weight(.medium))
-                    Spacer(minLength: 0)
                     Text("00")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -527,7 +527,6 @@ struct CreatorDetailView: View {
                     Capsule()
                         .strokeBorder(Color.gray.opacity(0.25), lineWidth: 0.5)
                 )
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .redacted(reason: .placeholder)

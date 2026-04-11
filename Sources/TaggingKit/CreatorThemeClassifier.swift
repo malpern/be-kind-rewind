@@ -164,7 +164,8 @@ public actor CreatorThemeClassifier {
 
     // MARK: - About paragraph
 
-    /// Generate a 3-5 sentence "About" paragraph for the creator from their title sample.
+    /// Generate a short, scannable "About" sentence for the creator from their
+    /// title sample. Targets 1-2 sentences, max ~200 chars, no filler openers.
     public func generateAbout(
         creatorName: String,
         videos: [CreatorVideoInput],
@@ -178,24 +179,110 @@ public actor CreatorThemeClassifier {
         let titleList = capped.map(\.title).joined(separator: "\n")
 
         let prompt = """
-        Write a 3-5 sentence summary describing what kind of content the YouTube creator \
-        "\(creatorName)" makes. Base it on their video titles below. Be specific about \
-        their topics, format, and tone. Do NOT include marketing language or speculation.
+        Summarize what the YouTube creator "\(creatorName)" makes, in 1-2 sentences \
+        totaling at most 200 characters. Base it ONLY on the video titles below.
+
+        STRICT RULES:
+        - Maximum 200 characters total. Aim for ~150.
+        - 1-2 sentences. No paragraphs.
+        - The first word must be a CONTENT NOUN or descriptive phrase, not a filler \
+          opener. Forbidden first phrases include:
+          • "This is the YouTube channel for/of/by..."
+          • "This is a channel about..."
+          • "Welcome to..."
+          • "[Name] is a YouTuber/creator who/that..."
+          • "[Name] makes/creates videos about..."
+          • "The official channel of..."
+          • "This channel features/showcases/covers..."
+        - Do NOT mention "YouTube" or the word "channel" — the user already knows.
+        - Do NOT use marketing language ("amazing", "in-depth", "must-watch", etc.).
+        - Lead with the most distinctive specific topic, not a generic category.
+        - Be dense and scannable: every word should add information.
+
+        GOOD EXAMPLES:
+        - "Mechanical keyboard reviews and split-ergo build vlogs, with deep dives into switch lubing and keymapping."
+        - "Front-end web development tutorials covering CSS, design systems, and book promotion."
+        - "Office chair, audio gear, and dev hardware reviews — adjacent to mechanical keyboards."
+
+        BAD EXAMPLES (do not write like this):
+        - "This is the YouTube channel for Ben Frain, a developer who covers mechanical keyboards and dev hardware."
+        - "Ben Frain is a YouTuber who makes videos about mechanical keyboards and ergonomic devices."
+        - "Welcome to a channel that features keyboard reviews and tutorials."
 
         Video titles:
         \(titleList)
 
-        Return ONLY the summary paragraph, no preamble, no quotes, no JSON.
+        Return ONLY the summary text. No preamble, no quotes, no markdown.
         """
 
         let response = try await client.complete(
             prompt: prompt,
-            system: "You are writing a factual one-paragraph description of a YouTube creator based on their video titles. Be concise and concrete.",
+            system: "You write 1-2 sentence factual summaries of a YouTube creator's content based on their video titles. You never use filler openers. You never mention 'YouTube' or 'channel'. Maximum 200 characters.",
             model: .haiku,
-            maxTokens: 512
+            maxTokens: 256
         )
 
-        return response.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleanupAboutParagraph(response.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Defense-in-depth filler stripper. Even with strong prompt instructions,
+    /// LLMs occasionally fall back to "This is the YouTube channel for..." or
+    /// similar boilerplate. This regex-based pass catches the most common
+    /// patterns and trims them. If the resulting first character is lowercase,
+    /// it's capitalized so the new opener still reads cleanly.
+    nonisolated private func cleanupAboutParagraph(_ raw: String) -> String {
+        var text = raw
+
+        // Strip leading/trailing surrounding quotes (LLM sometimes wraps).
+        if text.hasPrefix("\"") && text.hasSuffix("\"") && text.count > 2 {
+            text = String(text.dropFirst().dropLast())
+        }
+        if text.hasPrefix("'") && text.hasSuffix("'") && text.count > 2 {
+            text = String(text.dropFirst().dropLast())
+        }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Patterns are anchored at the start of the text and lazy-match through
+        // the first sentence terminator so we strip ONLY the filler opener,
+        // not the entire description.
+        let fillerPatterns: [String] = [
+            // "This is the/a (YouTube) channel for/of/by/about/that ... ."
+            #"^This is (the|a)?\s*(YouTube\s+)?channel\s+(for|of|by|about|that|featuring|where|run by|dedicated to)[^.]*?\.\s*"#,
+            // "This is the/a YouTube creator who/that ... ."
+            #"^This is (the|a)?\s*(YouTube\s+)?creator\s+(who|that)[^.]*?\.\s*"#,
+            // "Welcome to (the) (YouTube) channel..."
+            #"^Welcome to (the\s+)?(official\s+)?(YouTube\s+)?channel[^.]*?\.\s*"#,
+            // "The (official) (YouTube) channel of/for/by/featuring..."
+            #"^The (official\s+)?(YouTube\s+)?channel\s+(of|for|by|featuring|hosted by|run by)[^.]*?\.\s*"#,
+            // "[Name] is a/the YouTuber/creator who/that ... ."
+            #"^[A-Z][\w''.-]* (is\s+(a|the)\s+(YouTuber|YouTube\s+(creator|channel))(\s+(who|that))?)[^.]*?\.\s*"#,
+            // "[Name]'s (YouTube) channel ..."
+            #"^[A-Z][\w''.-]*'s\s+(YouTube\s+)?channel[^.]*?\.\s*"#,
+            // "[Name] makes/creates (videos|content) about/on ..."
+            #"^[A-Z][\w''.-]* (makes|creates|produces|publishes)\s+(videos|content)\s+(about|on|focused on|covering)[^.]*?\.\s*"#,
+            // Generic "This (collection|series) of videos..."
+            #"^This (collection|series|set)\s+of\s+videos[^.]*?\.\s*"#,
+        ]
+
+        for pattern in fillerPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            let range = NSRange(text.startIndex..., in: text)
+            if let match = regex.firstMatch(in: text, options: [], range: range),
+               let matchRange = Range(match.range, in: text) {
+                let trimmed = String(text[matchRange.upperBound...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    text = trimmed
+                    // Re-capitalize the new opening character if it slipped to lowercase.
+                    if let firstChar = text.first, firstChar.isLowercase {
+                        text = firstChar.uppercased() + text.dropFirst()
+                    }
+                    break
+                }
+            }
+        }
+
+        return text
     }
 
     // MARK: - Parsing
