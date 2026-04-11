@@ -763,13 +763,38 @@ struct CreatorDetailView: View {
     @ViewBuilder
     private func channelLinkButton(_ link: ChannelLink) -> some View {
         Link(destination: URL(string: link.url) ?? URL(string: "https://www.youtube.com")!) {
-            Label(link.title, systemImage: link.symbolName)
+            Label(compactURLDisplay(link.url), systemImage: link.symbolName)
                 .font(.subheadline.weight(.medium))
                 .lineLimit(1)
         }
         .buttonStyle(.bordered)
-        .controlSize(.small)
+        .controlSize(.regular)
         .help(link.url)
+    }
+
+    /// Display-cleaned URL for the link button. Strips the scheme and `www.`
+    /// prefix, drops a trailing slash, and truncates with a middle ellipsis
+    /// when the result is wider than 32 chars so creators with long URLs
+    /// don't blow out the row layout.
+    ///
+    /// Examples:
+    ///   "https://github.com/benfrain" → "github.com/benfrain"
+    ///   "https://www.benfrain.com/blog/2024/some-post-title" → "benfrain.com/blog/…/some-post-title"
+    private func compactURLDisplay(_ raw: String) -> String {
+        var url = raw
+        if url.hasPrefix("https://") { url = String(url.dropFirst(8)) }
+        else if url.hasPrefix("http://") { url = String(url.dropFirst(7)) }
+        if url.hasPrefix("www.") { url = String(url.dropFirst(4)) }
+        if url.hasSuffix("/") { url = String(url.dropLast()) }
+
+        let maxLength = 32
+        if url.count <= maxLength {
+            return url
+        }
+        // Middle truncation: keep the host + first path segment + the tail.
+        let head = url.prefix(maxLength / 2 - 1)
+        let tail = url.suffix(maxLength / 2 - 2)
+        return "\(head)…\(tail)"
     }
 
     /// Inline action buttons that live in the header next to the avatar/title.

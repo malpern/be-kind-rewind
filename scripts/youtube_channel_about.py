@@ -183,6 +183,65 @@ URL_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+# Known link-shortener domains. URLs at these hosts get expanded via a HEAD
+# request so callers see the canonical destination instead of the cryptic
+# shortener. Adding a domain here is the only thing required to enable
+# expansion for it.
+SHORTENER_DOMAINS = {
+    "bit.ly",
+    "amzn.to",
+    "amzn.com",
+    "ow.ly",
+    "tinyurl.com",
+    "goo.gl",
+    "t.ly",
+    "lnkd.in",
+    "buff.ly",
+    "rebrand.ly",
+    "tiny.cc",
+    "shorturl.at",
+    "is.gd",
+    "soo.gd",
+}
+
+
+def expand_shortener(url: str, max_hops: int = 3) -> str:
+    """If `url` points at a known shortener domain, follow the redirect chain
+    via HEAD requests until we hit a non-shortener or run out of hops.
+    Returns the original URL on any failure (network error, non-redirect,
+    etc.) so callers always get *something* back.
+
+    Capped at 3 hops to avoid runaway redirect loops. Some shorteners
+    chain through 2-3 intermediates before reaching the canonical URL."""
+    current = url
+    for _ in range(max_hops):
+        parsed = urllib.parse.urlparse(current)
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host not in SHORTENER_DOMAINS:
+            return current
+        try:
+            request = urllib.request.Request(
+                current,
+                headers={"User-Agent": USER_AGENT},
+                method="HEAD",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                # urllib auto-follows redirects unless we override; the final
+                # URL is in response.url. If the server doesn't redirect at
+                # all (returns 200 directly), we still get back the same URL
+                # and the loop terminates on the next pass.
+                final_url = response.url
+                if final_url and final_url != current:
+                    current = final_url
+                    continue
+                return current
+        except Exception:
+            # Network error, blocked, etc. — fall back to whatever we have.
+            return current
+    return current
+
 # Domain → friendly title for the most common social/professional platforms.
 # Order matters: substring match against the URL host. First match wins.
 DOMAIN_TITLE_RULES = [
@@ -249,17 +308,23 @@ def extract_links_from_description(text: str) -> list:
     """Pull URLs out of free text and return them as link entries with
     derived titles. Used as the primary extraction path because YouTube's
     /about tab is now lazy-loaded via continuation calls but the channel
-    home page's og:description still embeds the channel description inline."""
+    home page's og:description still embeds the channel description inline.
+
+    URLs at known shortener domains (bit.ly, amzn.to, etc.) are expanded
+    via a HEAD request so the caller sees the canonical destination."""
     if not text:
         return []
     found = []
     for match in URL_REGEX.finditer(text):
         url = match.group(0).rstrip(".,);:!?")
-        parsed = urllib.parse.urlparse(url)
+        # Resolve shortener redirects BEFORE filtering, since the shortener
+        # itself usually points at a real destination outside the blacklist.
+        resolved = expand_shortener(url)
+        parsed = urllib.parse.urlparse(resolved)
         host_root = ".".join(parsed.netloc.lower().split(".")[-2:])
         if host_root in URL_BLACKLIST_DOMAINS:
             continue
-        found.append({"title": title_for_url(url), "url": url})
+        found.append({"title": title_for_url(resolved), "url": resolved})
     return found
 
 
