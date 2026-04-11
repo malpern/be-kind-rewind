@@ -196,6 +196,16 @@ final class OrganizerStore {
     /// error is set). Surfaced inline in the empty-archive banner.
     var lastFullHistoryLoadError: [String: String] = [:]
 
+    /// Phase 3: channels currently mid channel-link scrape (the small extra
+    /// scrape that pulls external URLs from the channel's home page). Used by
+    /// the view to suppress duplicate concurrent invocations and gate UI.
+    var loadingChannelLinks: Set<String> = []
+
+    /// Bumped after a channel-link scrape completes successfully so any open
+    /// creator page can observe the change via .onChange and rebuild its
+    /// page model from the freshly-cached links.
+    var channelLinksVersion: Int = 0
+
     init(dbPath: String, claudeClient: ClaudeClient? = nil, startBackgroundTasks: Bool = true) throws {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }

@@ -189,6 +189,69 @@ public struct DiscoveryFallbackService: Sendable {
         }
     }
 
+    /// Phase 3: scrape a creator's external links from their YouTube channel
+    /// page. Wraps `youtube_channel_about.py` which extracts URLs from the
+    /// channel home page's `og:description` meta tag and maps them to friendly
+    /// titles via a curated platform-rules list.
+    ///
+    /// Returns an empty array on a successful fetch where the creator just
+    /// hasn't published any URLs in their description. Throws on process
+    /// failure or non-zero exit. Honors the same `ScrapeRateLimiter` gates as
+    /// the other channel scrapes — every call counts toward the global
+    /// minimum interval and the per-channel cooldown.
+    public func fetchChannelLinks(channelId: String) async throws -> [ChannelLink] {
+        await ScrapeRateLimiter.shared.waitForSlot(channelId: channelId)
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .channelArchive,
+            backend: .scrape,
+            outcome: .started,
+            detail: "channel_links channel_id=\(channelId)"
+        )
+        let scriptURL = environment.scriptURL(named: "youtube_channel_about.py")
+        let arguments = [
+            pythonExecutable.path,
+            scriptURL.path,
+            "--channel-id", channelId,
+        ]
+        let execution: ProcessExecutionResult
+        do {
+            execution = try await runProcess(arguments: arguments)
+        } catch {
+            await ScrapeRateLimiter.shared.recordFailure(channelId: channelId, reason: error.localizedDescription)
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelArchive,
+                backend: .scrape,
+                outcome: .failed,
+                detail: "channel_links process=\(error.localizedDescription)"
+            )
+            throw error
+        }
+
+        guard execution.terminationStatus == 0 else {
+            let stderrText = String(data: execution.stderr, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let reason = stderrText.isEmpty ? "channel_links \(channelId)" : stderrText
+            await ScrapeRateLimiter.shared.recordFailure(channelId: channelId, reason: reason)
+            await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+                kind: .channelArchive,
+                backend: .scrape,
+                outcome: .failed,
+                detail: reason
+            )
+            throw DiscoveryFallbackError.executionFailed(stderrText.isEmpty ? "Channel link scrape failed." : stderrText)
+        }
+
+        let response = try JSONDecoder().decode(ChannelLinksResponse.self, from: execution.stdout)
+        await ScrapeRateLimiter.shared.recordSuccess(channelId: channelId)
+        await YouTubeQuotaLedger.shared.recordDiscoveryEvent(
+            kind: .channelArchive,
+            backend: .scrape,
+            outcome: .succeeded,
+            detail: "channel_links channel_id=\(channelId) count=\(response.links.count)"
+        )
+        return response.links
+    }
+
     private func runProcess(arguments: [String], timeout: Duration = .seconds(60)) async throws -> ProcessExecutionResult {
         let process = Process()
         process.currentDirectoryURL = environment.repoRoot()
@@ -250,6 +313,11 @@ private struct DiscoveryFallbackResponse: Decodable {
         let duration: String?
         let viewCount: String?
     }
+}
+
+private struct ChannelLinksResponse: Decodable {
+    let channelId: String
+    let links: [ChannelLink]
 }
 
 private struct SearchFallbackResponse: Decodable {
