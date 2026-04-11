@@ -196,6 +196,8 @@ enum CollectionSectionHeaderModel {
         videoCountForChannel: (String) -> Int,
         hasRecentContent: (String) -> Bool,
         latestPublishedAtForChannel: (String) -> Date?,
+        themeLabelsForChannel: (String) -> [String],
+        subscriberCountForChannel: (String) -> String?,
         onSelectChannel: (String) -> Void,
         onOpenCreatorDetail: (String) -> Void
     )
@@ -214,7 +216,7 @@ enum CollectionSectionHeaderModel {
 
     var height: CGFloat {
         switch self {
-        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, latestPublishedAtForChannel: _, onSelectChannel: _, onOpenCreatorDetail: _):
+        case let .topic(name: _, count: _, totalCount: _, topicId: _, scrollProgress: _, highlightTerms: _, displayMode: _, channels: channels, selectedChannelId: _, videoCountForChannel: _, hasRecentContent: _, latestPublishedAtForChannel: _, themeLabelsForChannel: _, subscriberCountForChannel: _, onSelectChannel: _, onOpenCreatorDetail: _):
             return channels.isEmpty ? 48 : 112
         case .creator:
             return 56

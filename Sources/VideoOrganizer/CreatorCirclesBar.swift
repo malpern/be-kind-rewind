@@ -18,6 +18,17 @@ struct CreatorCirclesBar: View {
     /// callers that don't need detail-page navigation can pass nil.
     var onOpenDetail: ((String) -> Void)? = nil
 
+    /// Phase 3: top theme labels for a creator, used by the active-filter
+    /// preview chip to show "what they make". Reads from the LLM-cached
+    /// `creator_themes` SQLite table at the call site. Empty when the
+    /// creator hasn't been classified yet.
+    var themeLabelsForChannel: ((String) -> [String])? = nil
+
+    /// Phase 3: subscriber count for a creator (already formatted as a
+    /// display string like "150K subscribers"), used by the active-filter
+    /// preview chip. Optional so existing callers can pass nil.
+    var subscriberCountForChannel: ((String) -> String?)? = nil
+
     @State private var isExpanded = false
 
     private let circleSize: CGFloat = 44
@@ -313,37 +324,42 @@ struct CreatorCirclesBar: View {
     ///   to the dedicated detail view
     /// - "Clear filter" × button → mirrors the click-again-to-deselect
     ///   behavior on the circles, for users who prefer an explicit affordance
+    /// Active-filter preview shown below the face-pile circles when a creator
+    /// filter is active. Designed as a *value preview* rather than a generic
+    /// "Open Creator Page" CTA: the avatar + name + stats + theme list
+    /// already communicate what the creator is about and what richer info
+    /// lives behind the click. Clicking the preview itself opens the detail
+    /// page. The right edge has a separate × clear button.
+    ///
+    /// Two lines (or one if no themes available):
+    ///   [avatar] Name · 12 saved · 2mo ago
+    ///            Switch Reviews · Web Dev · Office Chairs
     @ViewBuilder
     private var filterChip: some View {
         if let selectedId = selectedChannelId,
            let channel = channels.first(where: { $0.channelId == selectedId }) {
-            let count = videoCountForChannel(selectedId)
             HStack(spacing: 12) {
-                Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                    .font(.body)
-                    .foregroundStyle(.tint)
-                (Text("Showing \(count) video\(count == 1 ? "" : "s") from ")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                + Text(channel.name)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Spacer(minLength: 12)
-
-                if onOpenDetail != nil {
-                    Button {
-                        onOpenDetail?(channel.channelId)
-                    } label: {
-                        Label("Open Creator Page", systemImage: "arrow.up.right.square")
+                Button {
+                    onOpenDetail?(channel.channelId)
+                } label: {
+                    HStack(alignment: .center, spacing: 12) {
+                        channelIcon(channel, size: 36)
+                            .frame(width: 36, height: 36)
+                            .clipShape(Circle())
+                        VStack(alignment: .leading, spacing: 2) {
+                            chipPrimaryLine(channel)
+                            chipSecondaryLine(channel)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                    .help("Open the dedicated detail page for \(channel.name)")
-                    .accessibilityIdentifier("creatorFilterOpenDetail")
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .disabled(onOpenDetail == nil)
+                .help("Open the creator page for \(channel.name)")
+                .accessibilityIdentifier("creatorFilterPreview")
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -357,10 +373,93 @@ struct CreatorCirclesBar: View {
                 .controlSize(.regular)
                 .help("Clear the creator filter")
                 .accessibilityIdentifier("creatorFilterClear")
+                .padding(.trailing, 4)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(.quaternary, lineWidth: 0.5)
+            )
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
+    }
+
+    /// Top line: channel name in primary text, then dot-separated stats
+    /// (topic-scoped video count, formatted subscriber count, last-upload
+    /// age). Each stat is omitted gracefully when its data isn't available.
+    @ViewBuilder
+    private func chipPrimaryLine(_ channel: ChannelRecord) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(channel.name)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text("·")
+                .font(.body)
+                .foregroundStyle(.tertiary)
+            Text(chipStatsString(for: channel))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
+    /// Build the dot-separated stats string for the filter chip's primary
+    /// line. Lives outside the @ViewBuilder so we can use ordinary control
+    /// flow (var + append) to assemble the parts conditionally.
+    private func chipStatsString(for channel: ChannelRecord) -> String {
+        let count = videoCountForChannel(channel.channelId)
+        var parts: [String] = ["\(count) saved"]
+        if let subs = subscriberCountForChannel?(channel.channelId)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !subs.isEmpty {
+            parts.append(subs)
+        }
+        if let publishedAt = latestPublishedAtForChannel(channel.channelId) {
+            parts.append(relativeAge(from: publishedAt))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Second line: top theme labels separated by middle dots. Reads from
+    /// the LLM-cached `creator_themes` table via the closure passed in by
+    /// the call site. When no themes are cached, falls back to the channel
+    /// description's first sentence so there's still some preview value.
+    @ViewBuilder
+    private func chipSecondaryLine(_ channel: ChannelRecord) -> some View {
+        let themes = themeLabelsForChannel?(channel.channelId) ?? []
+        if !themes.isEmpty {
+            Text(themes.prefix(4).joined(separator: " · "))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        } else if let description = channel.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !description.isEmpty {
+            Text(description)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
+    /// Format an absolute publish date as a short relative age, matching the
+    /// "2mo ago" / "5d ago" style used elsewhere on the creator page.
+    private func relativeAge(from date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        let days = Int(interval / 86_400)
+        if days <= 0 { return "today" }
+        if days == 1 { return "1d ago" }
+        if days < 30 { return "\(days)d ago" }
+        let months = days / 30
+        if months == 1 { return "1mo ago" }
+        if months < 12 { return "\(months)mo ago" }
+        let years = days / 365
+        return years == 1 ? "1y ago" : "\(years)y ago"
     }
 }
