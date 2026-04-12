@@ -1011,7 +1011,7 @@ struct OrganizerStoreTests {
             store.setPageDisplayMode(.watchCandidates)
 
             let countBefore = store.watchImpressionCounts["imp-1"] ?? 0
-            store.rebuildWatchPools()
+            store.rebuildWatchPools(trackImpressions: true)
             let countAfter = store.watchImpressionCounts["imp-1"] ?? 0
 
             #expect(countAfter > countBefore)

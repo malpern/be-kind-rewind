@@ -63,7 +63,7 @@ extension OrganizerStore {
         guard mode == .watchCandidates else {
             return
         }
-        rebuildWatchPools()
+        rebuildWatchPools(trackImpressions: true)
         ensureCandidatesForWatchPage()
     }
 

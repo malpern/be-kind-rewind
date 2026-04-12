@@ -549,7 +549,7 @@ final class OrganizerStore {
             rebuildVideoMaps()
             rebuildPlaylistMaps()
             reloadStoredCandidateCaches()
-            rebuildWatchPools()
+            rebuildWatchPools(trackImpressions: true)
             refreshSyncQueueSummary()
             refreshSeenHistoryCount()
             errorMessage = nil
@@ -888,12 +888,13 @@ final class OrganizerStore {
 
     func watchPublishedDate(from publishedAt: String?) -> Date? {
         guard let publishedAt, !publishedAt.isEmpty else { return nil }
-        if let iso = CreatorAnalytics.parseISO8601Date(publishedAt) {
-            return iso
-        }
-        let ageDays = CreatorAnalytics.parseAge(publishedAt)
-        guard ageDays != .max else { return nil }
-        return Calendar.current.date(byAdding: .day, value: -ageDays, to: Date())
+        // Only trust ISO 8601 dates — relative strings like "today" or
+        // "5 days ago" are frozen at scrape time and become stale across
+        // sessions. A video stored as "today" days ago would permanently
+        // pass the 30-day eligibility window. For relative dates, return
+        // nil (treated as "unknown age" by the caller) rather than
+        // computing a wrong date from `now - parseAge("today")`.
+        return CreatorAnalytics.parseISO8601Date(publishedAt)
     }
 
     func recentCandidateVideosForTopic(_ topicId: Int64) -> [CandidateVideoViewModel] {
@@ -1111,7 +1112,13 @@ final class OrganizerStore {
     /// Rebuilds the materialized watch pool from stored candidates.
     /// Filters by recency and excluded creators, deduplicates across topics,
     /// and reranks the combined pool. Increments `watchPoolVersion` to signal views.
-    func rebuildWatchPools() {
+    ///
+    /// `trackImpressions`: only true when the rebuild is user-facing (mode
+    /// switch, explicit refresh, app launch). Internal rebuilds triggered by
+    /// dismiss/save/exclude/per-topic-refresh pass false so the impression
+    /// counter doesn't inflate (Bug: 14+ call sites were each incrementing
+    /// the top-12, causing 20+ impressions per refresh cycle).
+    func rebuildWatchPools(trackImpressions: Bool = false) {
         let startedAt = ContinuousClock.now
         let perTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
             (
@@ -1157,18 +1164,20 @@ final class OrganizerStore {
             watchPoolByTopic.removeValue(forKey: topicId)
         }
 
-        // Track impressions for the top 12 "above the fold" candidates.
-        // Each appearance increments the counter, which feeds back into
-        // the reranking penalty on the next rebuild. Prune entries for
-        // videos no longer in the pool to prevent unbounded growth.
-        let aboveTheFold = rankedWatchPool.prefix(12)
-        for video in aboveTheFold {
-            watchImpressionCounts[video.videoId, default: 0] += 1
-        }
-        let activeIds = Set(rankedWatchPool.map(\.videoId))
-        watchImpressionCounts = watchImpressionCounts.filter { activeIds.contains($0.key) }
-        if let data = try? JSONEncoder().encode(watchImpressionCounts) {
-            UserDefaults.standard.set(data, forKey: "watchImpressionCounts")
+        // Track impressions only for user-visible rebuilds (mode switch,
+        // explicit refresh, app launch). Internal rebuilds from dismiss/
+        // save/exclude/per-topic-refresh skip this to prevent the counter
+        // from inflating 14+ times per refresh cycle.
+        if trackImpressions {
+            let aboveTheFold = rankedWatchPool.prefix(12)
+            for video in aboveTheFold {
+                watchImpressionCounts[video.videoId, default: 0] += 1
+            }
+            let activeIds = Set(rankedWatchPool.map(\.videoId))
+            watchImpressionCounts = watchImpressionCounts.filter { activeIds.contains($0.key) }
+            if let data = try? JSONEncoder().encode(watchImpressionCounts) {
+                UserDefaults.standard.set(data, forKey: "watchImpressionCounts")
+            }
         }
 
         watchPoolVersion &+= 1

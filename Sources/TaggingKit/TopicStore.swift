@@ -1248,6 +1248,15 @@ public final class TopicStore: Sendable {
               ON s.topic_id = c.topic_id AND s.video_id = c.video_id
             WHERE c.topic_id = ?
               AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched')
+              -- Also exclude videos dismissed in ANY topic, not just this one.
+              -- Without this, dismissing a video in topic A still shows it in
+              -- topic B because candidate_state is keyed on (topic_id, video_id).
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM candidate_state cs2
+                  WHERE cs2.video_id = c.video_id
+                    AND cs2.state IN ('dismissed', 'watched')
+              )
               AND NOT EXISTS (
                   SELECT 1
                   FROM seen_videos sv

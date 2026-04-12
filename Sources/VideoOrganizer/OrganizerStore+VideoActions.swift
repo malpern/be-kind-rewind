@@ -11,9 +11,20 @@ extension OrganizerStore {
     }
 
     func dismissCandidates(topicId: Int64, videoIds: [String]) {
+        // Batch: write all state rows first, then rebuild once.
+        // The previous version called dismissCandidate per-video,
+        // triggering N full SQL reloads + N pool rebuilds + N
+        // impression counter increments.
         for videoId in videoIds {
-            dismissCandidate(topicId: topicId, videoId: videoId)
+            do {
+                try store.setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
+            } catch {
+                AppLogger.discovery.error("Failed to dismiss candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
         }
+        reloadStoredCandidateCache(for: topicId)
+        rebuildWatchPools()
+        candidateRefreshToken += 1
     }
 
     func excludeCreatorFromWatch(channelId: String?, channelName: String?, channelIconUrl: String? = nil) {
@@ -111,8 +122,21 @@ extension OrganizerStore {
     }
 
     func markCandidatesNotInterested(topicId: Int64, videoIds: [String]) {
+        // Batch: write all state rows + queue commits first, then rebuild
+        // once. Same fix as dismissCandidates — avoids N full rebuilds.
         for videoId in videoIds {
-            markCandidateNotInterested(topicId: topicId, videoId: videoId)
+            do {
+                try store.queueCommit(action: "not_interested", videoId: videoId, playlist: "__youtube__")
+                try store.setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
+            } catch {
+                AppLogger.discovery.error("Failed to queue not_interested for \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        reloadStoredCandidateCache(for: topicId)
+        rebuildWatchPools()
+        candidateRefreshToken += 1
+        if browserExecutorReady {
+            processPendingBrowserSync(reason: "not-interested-batch")
         }
     }
 
