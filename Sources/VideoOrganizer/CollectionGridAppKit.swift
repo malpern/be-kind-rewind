@@ -410,6 +410,7 @@ final class ClickableCollectionView: NSCollectionView {
     var onMoveToPlaylistShortcut: (() -> Void)?
     var onDismissShortcut: (() -> Void)?
     var onNotInterestedShortcut: (() -> Void)?
+    var onNotForMeShortcut: (() -> Void)?
     var onOpenSelectedShortcut: (() -> Void)?
     var onClearSelectionShortcut: (() -> Void)?
 
@@ -495,6 +496,10 @@ final class ClickableCollectionView: NSCollectionView {
         }
         if modifiers == [.shift], key == "p" {
             onMoveToPlaylistShortcut?()
+            return
+        }
+        if modifiers.isEmpty, key == "x" {
+            onNotForMeShortcut?()
             return
         }
         if modifiers.isEmpty, key == "d" {

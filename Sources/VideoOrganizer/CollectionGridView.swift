@@ -266,6 +266,9 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             container.collectionView.onNotInterestedShortcut = { [weak self] in
                 self?.handleNotInterestedShortcut()
             }
+            container.collectionView.onNotForMeShortcut = { [weak self] in
+                self?.handleNotForMeShortcut()
+            }
             container.collectionView.onOpenSelectedShortcut = { [weak self] in
                 self?.handleOpenSelectedShortcut()
             }
@@ -838,6 +841,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
         private func openOnYouTube(_ video: VideoGridItemModel) {
             store?.recordOpenedVideo(video)
+            // Implicit like: opening a video = positive signal for ranking
+            store?.recordLike(
+                videoId: video.id,
+                channelId: video.channelId,
+                duration: video.duration,
+                topicId: video.topicId
+            )
             guard let url = URL(string: "https://www.youtube.com/watch?v=\(video.id)") else { return }
             NSWorkspace.shared.open(url)
         }
@@ -997,6 +1007,21 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 allCandidatesEligible: renderedSelectedVideoIds.allSatisfy(isCandidateVideo)
             ) {
                 contextNotInterested(nil)
+            }
+        }
+
+        private func handleNotForMeShortcut() {
+            guard let store, let topicId = store.selectedTopicId else { return }
+            let videoIds = Array(renderedSelectedVideoIds)
+            guard !videoIds.isEmpty else { return }
+            for videoId in videoIds {
+                let video = videoById(videoId)
+                store.notForMe(
+                    topicId: topicId,
+                    videoId: videoId,
+                    channelId: video?.channelId,
+                    duration: video?.duration
+                )
             }
         }
 

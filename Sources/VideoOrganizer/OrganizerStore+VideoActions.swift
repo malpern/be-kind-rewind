@@ -4,6 +4,42 @@ import TaggingKit
 /// Candidate dismiss/save/exclude operations and playlist management.
 extension OrganizerStore {
 
+    // MARK: - Watch Feedback
+
+    /// "Not for me" — dismiss the video AND record a dislike signal.
+    /// The video disappears immediately; the dislike feeds back into
+    /// per-creator ranking penalties over time.
+    func notForMe(topicId: Int64, videoId: String, channelId: String?, duration: String?) {
+        recordFeedback(videoId: videoId, signal: "dislike", channelId: channelId, duration: duration, topicId: topicId)
+        setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
+    }
+
+    /// Record implicit like when user opens a video on YouTube.
+    func recordLike(videoId: String, channelId: String?, duration: String?, topicId: Int64?) {
+        recordFeedback(videoId: videoId, signal: "like", channelId: channelId, duration: duration, topicId: topicId)
+    }
+
+    private func recordFeedback(videoId: String, signal: String, channelId: String?, duration: String?, topicId: Int64?) {
+        do {
+            try store.recordWatchFeedback(
+                videoId: videoId, signal: signal, channelId: channelId,
+                duration: duration, topicId: topicId
+            )
+            refreshCreatorFeedbackCache()
+        } catch {
+            AppLogger.discovery.error("Failed to record watch feedback for \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Reload the in-memory per-creator feedback cache from SQLite.
+    func refreshCreatorFeedbackCache() {
+        do {
+            creatorFeedbackCache = try store.allCreatorFeedbackCounts()
+        } catch {
+            AppLogger.discovery.error("Failed to load creator feedback cache: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     // MARK: - Candidate Mutations
 
     func dismissCandidate(topicId: Int64, videoId: String) {

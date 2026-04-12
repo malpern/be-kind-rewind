@@ -158,6 +158,11 @@ final class OrganizerStore {
     private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]
     private(set) var candidateSourcesByTopic: [Int64: [String: [CandidateSourceRecord]]] = [:]
 
+    /// Per-creator like/dislike counts from watch_feedback table.
+    /// Loaded once on init, refreshed after each feedback action.
+    /// Used by the reranker to penalize creators the user dislikes.
+    var creatorFeedbackCache: [String: (likes: Int, dislikes: Int)] = [:]
+
     /// How many times each video has been shown "above the fold" in Watch.
     /// Incremented after each `rebuildWatchPools` for the top 12 ranked
     /// candidates. Used as a negative ranking signal at rerank time so
@@ -231,6 +236,7 @@ final class OrganizerStore {
         refreshSeenHistoryCount()
         refreshExcludedCreators()
         refreshFavoriteCreators()
+        refreshCreatorFeedbackCache()
         // Phase 3 one-shot migration: rewrite historical archive rows where
         // published_at is a relative-date string ("5 years ago") into ISO 8601.
         // Gated by a UserDefaults flag so it only runs once per install.

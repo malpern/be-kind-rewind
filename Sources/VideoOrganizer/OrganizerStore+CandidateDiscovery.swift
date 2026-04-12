@@ -867,7 +867,8 @@ enum CandidateDiscoveryCoordinator {
             let recencyBoost = recencyBoostForReranking(publishedAt: video.publishedAt)
             let impressionPenalty = impressionPenaltyForReranking(videoId: video.videoId, store: store)
             let durationPenalty = shortVideoPenalty(duration: video.duration)
-            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost + recencyBoost - impressionPenalty - durationPenalty
+            let feedbackPenalty = creatorFeedbackPenalty(channelId: video.channelId, store: store)
+            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost + recencyBoost - impressionPenalty - durationPenalty - feedbackPenalty
             scored.append((video, adjusted))
             creatorCounts[creatorKey, default: 0] += 1
         }
@@ -1043,6 +1044,19 @@ enum CandidateDiscoveryCoordinator {
         let count = store.watchImpressionCounts[videoId] ?? 0
         guard count > 0 else { return 0 }
         return min(Double(count) * 150, 1200)
+    }
+
+    /// Penalty based on accumulated dislike signals for a creator.
+    /// Each dislike subtracts 50 points; each like adds back 20.
+    /// A creator with 3 dislikes and 1 like gets: 3×50 - 1×20 = 130
+    /// penalty. Capped at 500 so a disliked creator's videos still
+    /// appear (just lower) — the user can always exclude entirely
+    /// if they never want to see the creator again.
+    private static func creatorFeedbackPenalty(channelId: String?, store: OrganizerStore) -> Double {
+        guard let channelId, !channelId.isEmpty else { return 0 }
+        guard let feedback = store.creatorFeedbackCache[channelId] else { return 0 }
+        let raw = Double(feedback.dislikes) * 50 - Double(feedback.likes) * 20
+        return min(max(raw, 0), 500)
     }
 
     /// Penalty for short videos (< 90 seconds). YouTube Shorts and

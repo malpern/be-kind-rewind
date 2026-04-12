@@ -40,6 +40,7 @@ struct KeyboardShortcutSheet: View {
                         shortcutRow("w", "Save to Watch Later")
                         shortcutRow("p", "Save to Playlist…")
                         shortcutRow("⇧P", "Move to Playlist…")
+                        shortcutRow("x", "Not for me (dismiss + learn)")
                         shortcutRow("d", "Dismiss (Watch mode)")
                         shortcutRow("n", "Not Interested (Watch mode)")
                     }

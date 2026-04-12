@@ -430,6 +430,68 @@ public final class TopicStore: Sendable {
         try db.run("CREATE INDEX IF NOT EXISTS idx_excluded_channels_excluded_at ON excluded_channels(excluded_at DESC)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_favorite_channels_favorited_at ON favorite_channels(favorited_at DESC)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_creator_themes_channel_order ON creator_themes(channel_id, theme_order)")
+
+        // Watch feedback: records like/dislike signals from user actions.
+        // Used by the reranker to learn per-creator preferences.
+        try db.run("""
+            CREATE TABLE IF NOT EXISTS watch_feedback (
+                video_id TEXT NOT NULL PRIMARY KEY,
+                signal TEXT NOT NULL,
+                channel_id TEXT,
+                duration TEXT,
+                topic_id INTEGER,
+                created_at TEXT NOT NULL
+            )
+        """)
+        try db.run("CREATE INDEX IF NOT EXISTS idx_watch_feedback_channel ON watch_feedback(channel_id)")
+    }
+
+    // MARK: - Watch Feedback
+
+    /// Record a like or dislike signal for a video. Upserts — latest signal wins.
+    public func recordWatchFeedback(
+        videoId: String, signal: String, channelId: String?,
+        duration: String?, topicId: Int64?
+    ) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try db.run("""
+            INSERT INTO watch_feedback (video_id, signal, channel_id, duration, topic_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(video_id) DO UPDATE SET signal = excluded.signal, created_at = excluded.created_at
+        """, videoId, signal, channelId, duration, topicId, now)
+    }
+
+    /// Count likes and dislikes for a specific creator across all feedback.
+    public func watchFeedbackForCreator(_ channelId: String) throws -> (likes: Int, dislikes: Int) {
+        let likes = try db.scalar(
+            "SELECT COUNT(*) FROM watch_feedback WHERE channel_id = ? AND signal = 'like'",
+            channelId
+        ) as! Int64
+        let dislikes = try db.scalar(
+            "SELECT COUNT(*) FROM watch_feedback WHERE channel_id = ? AND signal = 'dislike'",
+            channelId
+        ) as! Int64
+        return (Int(likes), Int(dislikes))
+    }
+
+    /// All per-creator feedback counts, for batch loading into the reranker cache.
+    public func allCreatorFeedbackCounts() throws -> [String: (likes: Int, dislikes: Int)] {
+        var result: [String: (likes: Int, dislikes: Int)] = [:]
+        for row in try db.prepare("""
+            SELECT channel_id, signal, COUNT(*) as cnt
+            FROM watch_feedback
+            WHERE channel_id IS NOT NULL
+            GROUP BY channel_id, signal
+        """) {
+            guard let channelId = row[0] as? String,
+                  let signal = row[1] as? String,
+                  let count = row[2] as? Int64 else { continue }
+            var entry = result[channelId] ?? (likes: 0, dislikes: 0)
+            if signal == "like" { entry.likes = Int(count) }
+            else if signal == "dislike" { entry.dislikes = Int(count) }
+            result[channelId] = entry
+        }
+        return result
     }
 
     // MARK: - Import
