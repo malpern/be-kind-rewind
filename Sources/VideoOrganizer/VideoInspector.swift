@@ -372,7 +372,7 @@ struct VideoInspector: View {
     // MARK: - Metadata Grid
 
     private func inspectorSubtitle(for video: VideoViewModel) -> String? {
-        let parts: [String] = [video.publishedAt, video.viewCount]
+        let parts: [String] = [video.displayPublishedAt, video.viewCount]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
         guard !parts.isEmpty else { return nil }
@@ -413,7 +413,7 @@ struct VideoInspector: View {
             if let views = video.viewCount {
                 metadataRow(icon: "eye", label: "Views", value: views)
             }
-            if let date = video.publishedAt {
+            if let date = video.displayPublishedAt {
                 metadataRow(icon: "calendar", label: "Published", value: date)
             }
             if let duration = video.duration {
@@ -705,7 +705,7 @@ struct VideoInspector: View {
                                     .lineSpacing(InspectorMetrics.compactLineSpacing)
                                     .lineLimit(2)
                                     .foregroundStyle(.primary)
-                                if let meta = [v.viewCount, v.publishedAt].compactMap({ $0 }).joined(separator: " • ") as String?,
+                                if let meta = [v.viewCount, v.displayPublishedAt].compactMap({ $0 }).joined(separator: " • ") as String?,
                                    !meta.isEmpty {
                                     Text(meta)
                                         .appMetadata()

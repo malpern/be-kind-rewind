@@ -182,6 +182,28 @@ struct VideoViewModel: Identifiable, Hashable {
 
     var id: String { videoId }
 
+    /// Display-ready published-at string. Detects ISO 8601 timestamps
+    /// (e.g. "2026-04-03T21:24:54Z") and converts them to relative dates
+    /// ("9 days ago") for consistency. Already-relative strings ("5 months
+    /// ago", "today") pass through unchanged.
+    var displayPublishedAt: String? {
+        guard let raw = publishedAt else { return nil }
+        return Self.formatPublishedAtForDisplay(raw)
+    }
+
+    /// Shared formatter: ISO 8601 → relative date, else passthrough.
+    /// Used by `displayPublishedAt` on VideoViewModel and also called
+    /// from VideoGridItemModel and CandidateVideoViewModel.
+    static func formatPublishedAtForDisplay(_ raw: String) -> String {
+        // If it parses as an ISO 8601 date, format it as a relative date.
+        if let date = CreatorAnalytics.parseISO8601Date(raw) {
+            let ageDays = max(0, Int(Date().timeIntervalSince(date) / 86_400))
+            return CreatorAnalytics.formatAge(ageDays)
+        }
+        // Already a relative string ("5 months ago", "today") — pass through.
+        return raw
+    }
+
     var youtubeUrl: URL? {
         URL(string: "https://www.youtube.com/watch?v=\(videoId)")
     }

@@ -19,7 +19,8 @@ struct VideoCellContent: View {
 
     private var cornerRadius: CGFloat { GridConstants.cornerRadius(for: thumbnailSize) }
     private var metadataLine: String? {
-        let parts = [video.viewCount, video.publishedAt].compactMap { $0 }
+        let displayDate = video.publishedAt.map { VideoViewModel.formatPublishedAtForDisplay($0) }
+        let parts = [video.viewCount, displayDate].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
