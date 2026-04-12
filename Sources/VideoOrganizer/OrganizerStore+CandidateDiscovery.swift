@@ -1059,25 +1059,27 @@ enum CandidateDiscoveryCoordinator {
         return min(max(raw, 0), 500)
     }
 
-    /// Penalty for short videos (< 90 seconds). YouTube Shorts and
+    /// Penalty for short videos (< 2 minutes). YouTube Shorts and
     /// ultra-short clips are rarely what users want when curating a
     /// Watch feed of substantive content. Videos with unknown/zero
-    /// duration also get penalized (often broken metadata from
-    /// livestreams or scraper failures).
+    /// duration also get penalized heavily (often broken metadata
+    /// from livestreams or scraper failures).
     ///
-    ///   0 seconds (missing/broken): -300
-    ///   1-30 seconds:               -250
-    ///   31-60 seconds:              -150
-    ///   61-90 seconds:              -75
-    ///   90+ seconds:                0
+    ///   0 seconds (missing/broken): -500
+    ///   1-30 seconds:               -400
+    ///   31-60 seconds:              -300
+    ///   61-90 seconds:              -200
+    ///   91-120 seconds:             -100
+    ///   120+ seconds (2+ min):      0
     private static func shortVideoPenalty(duration: String?) -> Double {
         let seconds = parseDurationSeconds(duration)
         switch seconds {
-        case 0:      return 300   // missing or broken duration
-        case 1...30: return 250   // ultra-short clips
-        case 31...60: return 150  // YouTube Shorts territory
-        case 61...90: return 75   // borderline short
-        default:     return 0     // substantive content
+        case 0:       return 500   // missing or broken duration
+        case 1...30:  return 400   // ultra-short clips
+        case 31...60: return 300   // YouTube Shorts territory
+        case 61...90: return 200   // short
+        case 91...120: return 100  // borderline
+        default:      return 0    // substantive content (2+ minutes)
         }
     }
 
