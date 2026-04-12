@@ -35,6 +35,18 @@ async function loadActions(actionsPath) {
   return payload.actions;
 }
 
+async function loadRelatedRequest(requestPath) {
+  const raw = await fs.readFile(requestPath, "utf8");
+  const payload = JSON.parse(raw);
+  if (!Array.isArray(payload.seedVideoIds)) {
+    throw new Error("Invalid related request file");
+  }
+  return {
+    seedVideoIds: [...new Set(payload.seedVideoIds.filter((value) => typeof value === "string" && value.trim().length > 0))],
+    maxResultsPerSeed: Math.max(1, Math.min(Number(payload.maxResultsPerSeed) || 4, 8))
+  };
+}
+
 async function waitForText(page, text, timeout = 15000) {
   await page.getByText(text, { exact: false }).waitFor({ timeout });
 }
@@ -175,19 +187,85 @@ async function markNotInterested(page, action) {
   await page.waitForTimeout(750);
 }
 
+async function fetchRelatedVideosForSeed(page, seedVideoId, maxResults) {
+  await page.goto(`https://www.youtube.com/watch?v=${seedVideoId}`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer", { timeout: 20000 });
+  await page.waitForTimeout(1200);
+
+  return await page.evaluate(({ seedVideoId, maxResults }) => {
+    const compact = (value) => (value || "").replace(/\s+/g, " ").trim();
+    const parseVideoId = (href) => {
+      try {
+        const url = new URL(href, "https://www.youtube.com");
+        if (!url.pathname.startsWith("/watch")) return null;
+        return url.searchParams.get("v");
+      } catch {
+        return null;
+      }
+    };
+    const parseChannelId = (href) => {
+      if (!href || !href.startsWith("/channel/")) return null;
+      return href.split("/channel/")[1]?.split(/[/?#]/)[0] || null;
+    };
+
+    const nodes = Array.from(document.querySelectorAll("ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer"));
+    const seen = new Set();
+    const results = [];
+
+    for (const node of nodes) {
+      const titleAnchor = node.querySelector("a#video-title");
+      const thumbnailAnchor = node.querySelector("a#thumbnail");
+      const href = titleAnchor?.getAttribute("href") || thumbnailAnchor?.getAttribute("href") || "";
+      const videoId = parseVideoId(href);
+      if (!videoId || videoId === seedVideoId || seen.has(videoId)) continue;
+      if (href.includes("list=")) continue;
+
+      const title = compact(titleAnchor?.textContent);
+      if (!title) continue;
+
+      const channelAnchor = node.querySelector("ytd-channel-name a, #channel-name a");
+      const channelHref = channelAnchor?.getAttribute("href") || "";
+      const metadataParts = Array.from(node.querySelectorAll("#metadata-line span"))
+        .map((element) => compact(element.textContent))
+        .filter(Boolean);
+      const duration = compact(node.querySelector("ytd-thumbnail-overlay-time-status-renderer span, #overlays span")?.textContent);
+
+      results.push({
+        seedVideoId,
+        videoId,
+        title,
+        channelId: parseChannelId(channelHref),
+        channelTitle: compact(channelAnchor?.textContent) || null,
+        viewCount: metadataParts[0] || null,
+        publishedAt: metadataParts[1] || null,
+        duration: duration || null
+      });
+      seen.add(videoId);
+
+      if (results.length >= maxResults) {
+        break;
+      }
+    }
+
+    return results;
+  }, { seedVideoId, maxResults });
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const actionsPath = args["actions-json"];
+  const relatedRequestPath = args["fetch-related-json"];
   const setupLogin = args["setup-login"] === "true";
   const checkLogin = args["check-login"] === "true";
-  if (!actionsPath && !setupLogin && !checkLogin) {
+  if (!actionsPath && !setupLogin && !checkLogin && !relatedRequestPath) {
     fail("Missing --actions-json");
   }
 
   const profileDir = args["profile-dir"] || path.join(os.homedir(), ".config", "be-kind-rewind", "playwright-profile");
   const artifactDir = args["artifact-dir"] || path.join(process.cwd(), "output", "playwright", "browser-sync");
   const headed = args["headed"] !== "false";
-  const actions = (setupLogin || checkLogin) ? [] : await loadActions(actionsPath);
+  const actions = (setupLogin || checkLogin || relatedRequestPath) ? [] : await loadActions(actionsPath);
+  const relatedRequest = relatedRequestPath ? await loadRelatedRequest(relatedRequestPath) : null;
 
   const context = await chromium.launchPersistentContext(profileDir, {
     channel: "chrome",
@@ -210,6 +288,16 @@ async function main() {
 
     const page = context.pages()[0] ?? await context.newPage();
     await ensureSignedIn(page);
+
+    if (relatedRequest) {
+      const results = [];
+      for (const seedVideoId of relatedRequest.seedVideoIds) {
+        const related = await fetchRelatedVideosForSeed(page, seedVideoId, relatedRequest.maxResultsPerSeed);
+        results.push(...related);
+      }
+      process.stdout.write(JSON.stringify({ results }, null, 2));
+      return;
+    }
 
     const successes = [];
     const failures = [];

@@ -15,6 +15,37 @@ public struct BrowserExecutorStatus: Sendable {
     }
 }
 
+public struct BrowserRelatedVideo: Sendable, Equatable {
+    public let seedVideoId: String
+    public let videoId: String
+    public let title: String
+    public let channelId: String?
+    public let channelTitle: String?
+    public let publishedAt: String?
+    public let duration: String?
+    public let viewCount: String?
+
+    public init(
+        seedVideoId: String,
+        videoId: String,
+        title: String,
+        channelId: String?,
+        channelTitle: String?,
+        publishedAt: String?,
+        duration: String?,
+        viewCount: String?
+    ) {
+        self.seedVideoId = seedVideoId
+        self.videoId = videoId
+        self.title = title
+        self.channelId = channelId
+        self.channelTitle = channelTitle
+        self.publishedAt = publishedAt
+        self.duration = duration
+        self.viewCount = viewCount
+    }
+}
+
 public struct BrowserSyncService: Sendable {
     private let environment: RuntimeEnvironment
 
@@ -88,6 +119,55 @@ public struct BrowserSyncService: Sendable {
             "--setup-login", "true"
         ]
         try process.run()
+    }
+
+    public func fetchRelatedVideos(
+        seedVideoIds: [String],
+        maxResultsPerSeed: Int = 4
+    ) async throws -> [BrowserRelatedVideo] {
+        let uniqueSeedVideoIds = Array(Set(seedVideoIds.filter { !$0.isEmpty })).sorted()
+        guard !uniqueSeedVideoIds.isEmpty else { return [] }
+
+        try ensureScriptExists()
+        try ensureCommandExists("npx")
+        let scriptURL = environment.scriptURL(named: "youtube_browser_sync.mjs")
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("youtube-browser-related-\(UUID().uuidString).json")
+
+        let payload = BrowserRelatedPayload(
+            seedVideoIds: uniqueSeedVideoIds,
+            maxResultsPerSeed: max(1, min(maxResultsPerSeed, 8))
+        )
+        let data = try JSONEncoder().encode(payload)
+        try data.write(to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let arguments = [
+            "npx", "--yes", "--package", "playwright",
+            "node", scriptURL.path,
+            "--fetch-related-json", tempURL.path
+        ]
+        let execution = try await runProcess(arguments: arguments)
+
+        guard execution.terminationStatus == 0 else {
+            let stderrText = String(data: execution.stderr, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw BrowserSyncError.executionFailed(stderrText.isEmpty ? "Signed-in related discovery failed." : stderrText)
+        }
+
+        let response = try JSONDecoder().decode(BrowserRelatedResponse.self, from: execution.stdout)
+        return response.results.map {
+            BrowserRelatedVideo(
+                seedVideoId: $0.seedVideoId,
+                videoId: $0.videoId,
+                title: $0.title,
+                channelId: $0.channelId,
+                channelTitle: $0.channelTitle,
+                publishedAt: $0.publishedAt,
+                duration: $0.duration,
+                viewCount: $0.viewCount
+            )
+        }
     }
 
     public func status() async throws -> BrowserExecutorStatus {
@@ -279,6 +359,11 @@ private struct BrowserSyncPayload: Encodable {
     }
 }
 
+private struct BrowserRelatedPayload: Encodable {
+    let seedVideoIds: [String]
+    let maxResultsPerSeed: Int
+}
+
 private struct BrowserSyncResponse: Decodable {
     let successes: [Int64]
     let failures: [Failure]
@@ -286,6 +371,21 @@ private struct BrowserSyncResponse: Decodable {
     struct Failure: Decodable {
         let id: Int64
         let message: String
+    }
+}
+
+private struct BrowserRelatedResponse: Decodable {
+    let results: [Result]
+
+    struct Result: Decodable {
+        let seedVideoId: String
+        let videoId: String
+        let title: String
+        let channelId: String?
+        let channelTitle: String?
+        let publishedAt: String?
+        let duration: String?
+        let viewCount: String?
     }
 }
 

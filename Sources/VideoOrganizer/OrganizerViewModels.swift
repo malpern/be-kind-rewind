@@ -263,6 +263,8 @@ struct InspectedVideoViewModel {
     let playlists: [PlaylistRecord]
     let isWatchCandidate: Bool
     let seenSummary: SeenVideoSummary?
+    let candidateReason: String?
+    let candidateSources: [CandidateSourceRecord]
 }
 
 /// What the right-hand inspector pane is showing right now. Three discrete
@@ -312,13 +314,17 @@ struct CandidateVideoViewModel: Identifiable, Hashable {
 
     var assignmentStrength: Int {
         guard let secondaryText else { return 0 }
-        if secondaryText.contains("creator already in this topic") || secondaryText.contains("connected to this topic and your saved playlists") {
+        let normalized = secondaryText.lowercased()
+        if normalized.contains("creator already in this topic") || normalized.contains("connected to this topic and your saved playlists") {
             return 3
         }
-        if secondaryText.contains("matched a topic search") || secondaryText.contains("search match for this topic") {
+        if normalized.contains("matched a topic search")
+            || normalized.contains("search match for this topic")
+            || normalized.contains("signed-in related suggestion")
+            || normalized.contains("signed-in related suggestions") {
             return 2
         }
-        if secondaryText.contains("adjacent to this topic") || secondaryText.contains("related creator") {
+        if normalized.contains("adjacent to this topic") || normalized.contains("related creator") {
             return 1
         }
         return 0

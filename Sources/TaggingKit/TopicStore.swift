@@ -1326,6 +1326,27 @@ public final class TopicStore: Sendable {
         return nil
     }
 
+    public func candidateSourcesForTopic(id topicId: Int64) throws -> [String: [CandidateSourceRecord]] {
+        let query = """
+            SELECT topic_id, video_id, source_kind, source_ref
+            FROM candidate_sources
+            WHERE topic_id = ?
+            ORDER BY video_id ASC, source_kind ASC, source_ref ASC
+        """
+
+        var results: [String: [CandidateSourceRecord]] = [:]
+        for row in try db.prepare(query, topicId) {
+            let record = CandidateSourceRecord(
+                topicId: try requiredValue(row, at: 0, as: Int64.self, context: "candidateSourcesForTopic.topicId"),
+                videoId: try requiredValue(row, at: 1, as: String.self, context: "candidateSourcesForTopic.videoId"),
+                sourceKind: try requiredValue(row, at: 2, as: String.self, context: "candidateSourcesForTopic.sourceKind"),
+                sourceRef: try requiredValue(row, at: 3, as: String.self, context: "candidateSourcesForTopic.sourceRef")
+            )
+            results[record.videoId, default: []].append(record)
+        }
+        return results
+    }
+
     public func setCandidateState(topicId: Int64, videoId: String, state: CandidateState) throws {
         try db.run(candidateState.insert(or: .replace,
             candidateTopicId <- topicId,

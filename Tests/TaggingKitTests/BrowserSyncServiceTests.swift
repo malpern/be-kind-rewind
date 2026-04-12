@@ -35,6 +35,25 @@ struct BrowserSyncServiceTests {
         #expect(notReady.message == "Not signed in")
     }
 
+    @Test("BrowserRelatedVideo stores signed-in related recommendation fields")
+    func relatedVideoModel() {
+        let related = BrowserRelatedVideo(
+            seedVideoId: "seed-1",
+            videoId: "vid-123",
+            title: "Recommended SwiftUI Video",
+            channelId: "chan-1",
+            channelTitle: "Alpha Channel",
+            publishedAt: "2 days ago",
+            duration: "12:34",
+            viewCount: "12K views"
+        )
+
+        #expect(related.seedVideoId == "seed-1")
+        #expect(related.videoId == "vid-123")
+        #expect(related.channelId == "chan-1")
+        #expect(related.channelTitle == "Alpha Channel")
+    }
+
     @Test("BrowserSyncError provides user-facing description")
     func errorDescription() {
         let error = BrowserSyncError.executionFailed("Timeout waiting for element")
@@ -79,5 +98,12 @@ struct BrowserSyncServiceTests {
         await #expect(throws: BrowserSyncError.self) {
             try await service.openLoginSetup()
         }
+    }
+
+    @Test("fetchRelatedVideos returns empty result for empty seeds")
+    func fetchRelatedVideosEmptySeeds() async throws {
+        let service = BrowserSyncService(repoRoot: FileManager.default.temporaryDirectory)
+        let result = try await service.fetchRelatedVideos(seedVideoIds: [])
+        #expect(result.isEmpty)
     }
 }

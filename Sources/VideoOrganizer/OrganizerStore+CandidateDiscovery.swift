@@ -366,6 +366,66 @@ extension OrganizerStore {
                 }
             }
 
+            let relatedSeedPlans = CandidateDiscoveryCoordinator.relatedSeedPlans(
+                for: topicId,
+                aggregate: aggregate,
+                store: self
+            )
+            let relatedLaneThreshold = 24
+            if aggregate.count < relatedLaneThreshold,
+               browserExecutorReady,
+               !relatedSeedPlans.isEmpty {
+                do {
+                    let browserResults = try await BrowserSyncService(environment: runtimeEnvironment)
+                        .fetchRelatedVideos(
+                            seedVideoIds: relatedSeedPlans.map(\.videoId),
+                            maxResultsPerSeed: 4
+                        )
+                    let seedPlanByVideoId = Dictionary(uniqueKeysWithValues: relatedSeedPlans.map { ($0.videoId, $0) })
+
+                    for video in browserResults {
+                        guard let plan = seedPlanByVideoId[video.seedVideoId] else { continue }
+                        if let channelId = video.channelId, !channelId.isEmpty, isExcludedCreator(channelId) {
+                            continue
+                        }
+                        let admission = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                            forTopic: topicId,
+                            title: video.title,
+                            sourceKind: "browser_related_signed_in",
+                            sourceRef: plan.evidenceRef,
+                            store: self
+                        )
+                        guard admission.shouldAdmit else { continue }
+                        let creatorAffinity = (try? store.videoCountForChannel(channelId: video.channelId ?? "", inTopic: topicId)) ?? 0
+                        let resolvedIconUrl = video.channelId.flatMap { cid in
+                            resolvedChannelRecord(channelId: cid, fallbackName: nil, fallbackIconURL: nil)?.iconUrl
+                        }
+                        CandidateDiscoveryCoordinator.accumulateCandidate(
+                            videoId: video.videoId,
+                            title: video.title,
+                            channelId: video.channelId,
+                            channelName: video.channelTitle,
+                            viewCount: video.viewCount,
+                            publishedAt: OrganizerStore.normalizePublishedAt(video.publishedAt, now: Date()),
+                            duration: video.duration,
+                            channelIconUrl: resolvedIconUrl,
+                            sourceKind: "browser_related_signed_in",
+                            sourceRef: plan.sourceRef,
+                            relatedSeedSourceKind: plan.sourceKind,
+                            creatorAffinity: creatorAffinity,
+                            reasonHint: plan.reasonHint,
+                            topicalEvidenceBonus: admission.scoreBonus,
+                            existingVideoIds: existingVideoIds,
+                            aggregate: &aggregate
+                        )
+                    }
+                } catch {
+                    AppLogger.file.log("Signed-in related discovery failed for topic \(topicId): \(error.localizedDescription)", category: "discovery")
+                }
+            }
+
+            CandidateDiscoveryCoordinator.applyCreatorRelatedConsensusBonus(to: &aggregate)
+
             let ranked = aggregate.values
                 .sorted { lhs, rhs in
                     if lhs.score == rhs.score {
@@ -869,6 +929,79 @@ enum CandidateDiscoveryCoordinator {
         return generatedSearchQueries(for: topic).map(CandidateSearchPlan.init(query:))
     }
 
+    static func relatedSeedPlans(
+        for topicId: Int64,
+        aggregate: [String: AggregatedCandidate],
+        store: OrganizerStore
+    ) -> [CandidateRelatedSeedPlan] {
+        let maxSeeds = 4
+        var plans: [CandidateRelatedSeedPlan] = []
+        var seenVideoIds: Set<String> = []
+        var seenChannelIds: Set<String> = []
+        let sortedCandidates = aggregate.values.sorted(by: rankedCandidatePrecedence)
+
+        for preferredSourceKind in preferredSeedSourceKinds {
+            guard let candidate = sortedCandidates.first(where: { candidate in
+                candidate.sources.contains(where: { $0.kind == preferredSourceKind })
+                    && seedCandidateIsUsable(candidate, seenVideoIds: seenVideoIds, seenChannelIds: seenChannelIds)
+            }) else {
+                continue
+            }
+            plans.append(seedPlan(for: candidate, preferredSourceKind: preferredSourceKind))
+            seenVideoIds.insert(candidate.videoId)
+            if let channelId = candidate.channelId, !channelId.isEmpty {
+                seenChannelIds.insert(channelId)
+            }
+            if plans.count >= maxSeeds { return plans }
+        }
+
+        for candidate in sortedCandidates {
+            guard seedCandidateIsUsable(candidate, seenVideoIds: seenVideoIds, seenChannelIds: seenChannelIds) else { continue }
+            plans.append(seedPlan(for: candidate, preferredSourceKind: nil))
+            seenVideoIds.insert(candidate.videoId)
+            if let channelId = candidate.channelId, !channelId.isEmpty {
+                seenChannelIds.insert(channelId)
+            }
+            if plans.count >= maxSeeds { return plans }
+        }
+
+        for video in store.videosForTopicIncludingSubtopics(topicId).sorted(by: rankedSavedSeedPrecedence) {
+            guard !seenVideoIds.contains(video.videoId) else { continue }
+            if let channelId = video.channelId, !channelId.isEmpty {
+                guard seenChannelIds.insert(channelId).inserted else { continue }
+            }
+            seenVideoIds.insert(video.videoId)
+            plans.append(
+                CandidateRelatedSeedPlan(
+                    videoId: video.videoId,
+                    sourceRef: video.videoId,
+                    evidenceRef: video.title,
+                    reasonHint: video.title,
+                    sourceKind: "saved_topic_recent"
+                )
+            )
+            if plans.count >= maxSeeds { break }
+        }
+
+        if plans.count < maxSeeds {
+            for video in store.videosForTopicIncludingSubtopics(topicId).sorted(by: rankedSavedSeedPrecedence) {
+                guard seenVideoIds.insert(video.videoId).inserted else { continue }
+                plans.append(
+                    CandidateRelatedSeedPlan(
+                        videoId: video.videoId,
+                        sourceRef: video.videoId,
+                        evidenceRef: video.title,
+                        reasonHint: video.title,
+                        sourceKind: "saved_topic_recent"
+                    )
+                )
+                if plans.count >= maxSeeds { break }
+            }
+        }
+
+        return plans
+    }
+
     /// Large additive recency boost applied at rerank time so fresh content
     /// surfaces above older high-score videos. Creates implicit tiers:
     ///
@@ -1108,6 +1241,7 @@ enum CandidateDiscoveryCoordinator {
         channel: ChannelRecord,
         sourceKind: String,
         sourceRef: String,
+        relatedSeedSourceKind: String? = nil,
         creatorAffinity: Int,
         reasonHint: String?,
         topicalEvidenceBonus: Int,
@@ -1125,6 +1259,7 @@ enum CandidateDiscoveryCoordinator {
             channelIconUrl: video.channelIconUrl ?? channel.iconUrl,
             sourceKind: sourceKind,
             sourceRef: sourceRef,
+            relatedSeedSourceKind: relatedSeedSourceKind,
             creatorAffinity: creatorAffinity,
             reasonHint: reasonHint,
             topicalEvidenceBonus: topicalEvidenceBonus,
@@ -1137,6 +1272,7 @@ enum CandidateDiscoveryCoordinator {
         video: DiscoveredVideo,
         sourceKind: String,
         sourceRef: String,
+        relatedSeedSourceKind: String? = nil,
         creatorAffinity: Int,
         reasonHint: String?,
         topicalEvidenceBonus: Int,
@@ -1155,6 +1291,7 @@ enum CandidateDiscoveryCoordinator {
             channelIconUrl: channelIconUrl,
             sourceKind: sourceKind,
             sourceRef: sourceRef,
+            relatedSeedSourceKind: relatedSeedSourceKind,
             creatorAffinity: creatorAffinity,
             reasonHint: reasonHint,
             topicalEvidenceBonus: topicalEvidenceBonus,
@@ -1174,6 +1311,7 @@ enum CandidateDiscoveryCoordinator {
         channelIconUrl: String?,
         sourceKind: String,
         sourceRef: String,
+        relatedSeedSourceKind: String? = nil,
         creatorAffinity: Int,
         reasonHint: String?,
         topicalEvidenceBonus: Int,
@@ -1215,25 +1353,48 @@ enum CandidateDiscoveryCoordinator {
             } else {
                 reason = "Recent search match for this topic"
             }
+        case "browser_related_signed_in":
+            sourceScore = (9, 1, 10)
+            if let reasonHint, !reasonHint.isEmpty {
+                reason = "Signed-in related suggestion from topic seed \(reasonHint)"
+            } else {
+                reason = "Signed-in related suggestion from a topic seed"
+            }
         default:
             sourceScore = (4, 2, 0)
             reason = "Recent candidate from a related creator"
         }
 
         let score = Double(sourceScore.freshness + recencyBonus * 4 + creatorBonus * sourceScore.creatorWeight + qualityBonus + sourceScore.bonus + topicalEvidenceBonus)
+        let relatedSeedVideoIds: Set<String> = sourceKind == "browser_related_signed_in" ? [sourceRef] : []
+        let relatedSeedSourceKinds: Set<String> = {
+            guard sourceKind == "browser_related_signed_in", let relatedSeedSourceKind, !relatedSeedSourceKind.isEmpty else { return [] }
+            return [relatedSeedSourceKind]
+        }()
 
         if var existing = aggregate[videoId] {
             existing.score += score + 3
+            existing.relatedSeedVideoIds.formUnion(relatedSeedVideoIds)
+            existing.relatedSeedSourceKinds.formUnion(relatedSeedSourceKinds)
+            existing.score += relatedSeedConsensusBonus(
+                seedCount: existing.relatedSeedVideoIds.count,
+                seedSourceKindCount: existing.relatedSeedSourceKinds.count
+            )
             let nowHasCoreSource = existing.sources.contains(where: { $0.kind == "channel_archive_recent" }) || sourceKind == "channel_archive_recent"
             let nowHasAdjacentSource = existing.sources.contains(where: { $0.kind == "playlist_adjacent_recent" }) || sourceKind == "playlist_adjacent_recent"
             let nowHasSearchSource = existing.sources.contains(where: { $0.kind == "search_query_recent" }) || sourceKind == "search_query_recent"
+            let nowHasRelatedSource = existing.sources.contains(where: { $0.kind == "browser_related_signed_in" }) || sourceKind == "browser_related_signed_in"
             if nowHasCoreSource && nowHasAdjacentSource {
                 existing.reason = "Fresh upload connected to this topic and your saved playlists"
             } else if nowHasCoreSource && nowHasSearchSource {
                 existing.reason = "Fresh upload from a topic creator that also matched a topic search"
+            } else if nowHasCoreSource && nowHasRelatedSource {
+                existing.reason = "Fresh upload from a topic creator reinforced by signed-in related suggestions"
             } else if sourceKind == "playlist_adjacent_recent" {
                 existing.reason = reason
             } else if sourceKind == "search_query_recent" {
+                existing.reason = reason
+            } else if sourceKind == "browser_related_signed_in" {
                 existing.reason = reason
             } else if sourceKind == "channel_archive_recent" {
                 existing.reason = "Fresh upload from a creator already in this topic"
@@ -1254,8 +1415,64 @@ enum CandidateDiscoveryCoordinator {
             channelIconUrl: channelIconUrl,
             score: score,
             reason: reason,
-            sources: [CandidateSource(kind: sourceKind, ref: sourceRef)]
+            sources: [CandidateSource(kind: sourceKind, ref: sourceRef)],
+            relatedSeedVideoIds: relatedSeedVideoIds,
+            relatedSeedSourceKinds: relatedSeedSourceKinds
         )
+    }
+
+    static func relatedSeedConsensusBonus(seedCount: Int, seedSourceKindCount: Int) -> Double {
+        guard seedCount >= 2 else { return 0 }
+        let repeatedSeedBonus = Double((seedCount - 1) * 10)
+        let mixedSourceBonus = seedSourceKindCount >= 2 ? 8.0 : 0
+        return repeatedSeedBonus + mixedSourceBonus
+    }
+
+    static func creatorRelatedConsensusBonus(seedCount: Int, seedSourceKindCount: Int) -> Double {
+        guard seedCount >= 2 else { return 0 }
+        let repeatedSeedBonus = Double((seedCount - 1) * 6)
+        let mixedSourceBonus = seedSourceKindCount >= 2 ? 4.0 : 0
+        return repeatedSeedBonus + mixedSourceBonus
+    }
+
+    static func applyCreatorRelatedConsensusBonus(to aggregate: inout [String: AggregatedCandidate]) {
+        var creatorSeedVideoIds: [String: Set<String>] = [:]
+        var creatorSeedSourceKinds: [String: Set<String>] = [:]
+
+        for candidate in aggregate.values {
+            guard let creatorKey = creatorConsensusKey(channelId: candidate.channelId, channelName: candidate.channelName) else { continue }
+            guard !candidate.relatedSeedVideoIds.isEmpty else { continue }
+            creatorSeedVideoIds[creatorKey, default: []].formUnion(candidate.relatedSeedVideoIds)
+            creatorSeedSourceKinds[creatorKey, default: []].formUnion(candidate.relatedSeedSourceKinds)
+        }
+
+        for (videoId, candidate) in aggregate {
+            guard let creatorKey = creatorConsensusKey(channelId: candidate.channelId, channelName: candidate.channelName),
+                  let seedIds = creatorSeedVideoIds[creatorKey],
+                  seedIds.count >= 2 else {
+                continue
+            }
+            let seedSourceKinds = creatorSeedSourceKinds[creatorKey, default: []]
+            var updated = candidate
+            updated.score += creatorRelatedConsensusBonus(
+                seedCount: seedIds.count,
+                seedSourceKindCount: seedSourceKinds.count
+            )
+            aggregate[videoId] = updated
+        }
+    }
+
+    private static func creatorConsensusKey(channelId: String?, channelName: String?) -> String? {
+        if let channelId, !channelId.isEmpty {
+            return "id:\(channelId)"
+        }
+        if let channelName {
+            let normalized = channelName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !normalized.isEmpty {
+                return "name:\(normalized)"
+            }
+        }
+        return nil
     }
 
     static func friendlyCandidateErrorMessage(for error: Error) -> String {
@@ -1462,6 +1679,83 @@ enum CandidateDiscoveryCoordinator {
         return Date().timeIntervalSince(scannedDate) >= (12 * 60 * 60)
     }
 
+    private static func rankedCandidatePrecedence(_ lhs: AggregatedCandidate, _ rhs: AggregatedCandidate) -> Bool {
+        if lhs.score == rhs.score {
+            let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.publishedAt ?? "")
+            let rhsDate = CreatorAnalytics.parseISO8601Date(rhs.publishedAt ?? "")
+            switch (lhsDate, rhsDate) {
+            case let (l?, r?) where l != r:
+                return l > r
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        }
+        return lhs.score > rhs.score
+    }
+
+    private static func rankedSavedSeedPrecedence(_ lhs: VideoViewModel, _ rhs: VideoViewModel) -> Bool {
+        let now = Date()
+        let lhsDate = CreatorAnalytics.parseISO8601Date(OrganizerStore.normalizePublishedAt(lhs.publishedAt, now: now) ?? "")
+        let rhsDate = CreatorAnalytics.parseISO8601Date(OrganizerStore.normalizePublishedAt(rhs.publishedAt, now: now) ?? "")
+        switch (lhsDate, rhsDate) {
+        case let (l?, r?) where l != r:
+            return l > r
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            let lhsViews = CreatorAnalytics.parseViewCount(lhs.viewCount ?? "")
+            let rhsViews = CreatorAnalytics.parseViewCount(rhs.viewCount ?? "")
+            if lhsViews != rhsViews {
+                return lhsViews > rhsViews
+            }
+            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    private static let preferredSeedSourceKinds = [
+        "channel_archive_recent",
+        "search_query_recent",
+        "playlist_adjacent_recent"
+    ]
+
+    private static func seedCandidateIsUsable(
+        _ candidate: AggregatedCandidate,
+        seenVideoIds: Set<String>,
+        seenChannelIds: Set<String>
+    ) -> Bool {
+        guard !seenVideoIds.contains(candidate.videoId) else { return false }
+        if let channelId = candidate.channelId, !channelId.isEmpty, seenChannelIds.contains(channelId) {
+            return false
+        }
+        // Do not recursively reseed from related-only discoveries. Prefer candidates
+        // that were admitted through stronger archive/search/adjacent evidence.
+        return candidate.sources.contains { $0.kind != "browser_related_signed_in" }
+    }
+
+    private static func seedPlan(
+        for candidate: AggregatedCandidate,
+        preferredSourceKind: String?
+    ) -> CandidateRelatedSeedPlan {
+        let matchedSourceKind = preferredSourceKind
+            ?? preferredSeedSourceKinds.first(where: { kind in
+                candidate.sources.contains(where: { $0.kind == kind })
+            })
+            ?? "mixed_candidate_recent"
+        return CandidateRelatedSeedPlan(
+            videoId: candidate.videoId,
+            sourceRef: candidate.videoId,
+            evidenceRef: candidate.title,
+            reasonHint: candidate.title,
+            sourceKind: matchedSourceKind
+        )
+    }
+
     static func watchTopicAdmission(
         forTopic topicId: Int64,
         title: String,
@@ -1478,7 +1772,7 @@ enum CandidateDiscoveryCoordinator {
         case "channel_archive_recent":
             guard evidence.knownCreatorQualifies else { return .reject }
             return WatchTopicAdmissionDecision(shouldAdmit: true, scoreBonus: evidence.scoreBonus)
-        case "playlist_adjacent_recent", "search_query_recent":
+        case "playlist_adjacent_recent", "search_query_recent", "browser_related_signed_in":
             guard evidence.exploratoryQualifies else { return .reject }
             return WatchTopicAdmissionDecision(shouldAdmit: true, scoreBonus: evidence.scoreBonus)
         default:
@@ -1563,7 +1857,7 @@ enum CandidateDiscoveryCoordinator {
     ]
 }
 
-private struct CandidateSource: Hashable {
+struct CandidateSource: Hashable {
     let kind: String
     let ref: String
 }
@@ -1585,6 +1879,14 @@ private struct ExploratoryChannelCandidate {
 
 private struct CandidateSearchPlan {
     let query: String
+}
+
+struct CandidateRelatedSeedPlan {
+    let videoId: String
+    let sourceRef: String
+    let evidenceRef: String
+    let reasonHint: String?
+    let sourceKind: String
 }
 
 struct WatchTopicAdmissionDecision: Equatable {
@@ -1617,7 +1919,7 @@ struct WatchTopicalEvidence: Equatable {
     }
 }
 
-private struct AggregatedCandidate {
+struct AggregatedCandidate {
     let videoId: String
     let title: String
     let channelId: String?
@@ -1629,4 +1931,6 @@ private struct AggregatedCandidate {
     var score: Double
     var reason: String
     var sources: Set<CandidateSource>
+    var relatedSeedVideoIds: Set<String> = []
+    var relatedSeedSourceKinds: Set<String> = []
 }
