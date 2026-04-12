@@ -2692,6 +2692,36 @@ struct CreatorDetailView: View {
             }
         }
 
+        // Download for offline viewing via yt-dlp
+        if cards.count == 1, let card = cards.first {
+            let dm = VideoDownloadManager.shared
+            Divider()
+            if dm.isDownloaded(card.videoId) {
+                Button {
+                    dm.playOffline(videoId: card.videoId)
+                } label: {
+                    Label("Play Offline", systemImage: "play.fill")
+                }
+                Button(role: .destructive) {
+                    dm.deleteDownload(videoId: card.videoId)
+                } label: {
+                    Label("Delete Download", systemImage: "trash")
+                }
+            } else if dm.isActive(card.videoId) {
+                Button {
+                    dm.cancel(videoId: card.videoId)
+                } label: {
+                    Label("Cancel Download", systemImage: "xmark.circle")
+                }
+            } else {
+                Button {
+                    dm.download(videoId: card.videoId)
+                } label: {
+                    Label("Download for Offline", systemImage: "arrow.down.circle")
+                }
+            }
+        }
+
         // Mark Not Interested only applies to videos already saved into a topic.
         let savedCardsWithTopic = cards.filter { $0.isSaved && $0.topicId != nil }
         if !savedCardsWithTopic.isEmpty {

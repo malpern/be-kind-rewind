@@ -479,10 +479,9 @@ struct VideoInspector: View {
             .controlSize(.large)
             .buttonStyle(.bordered)
             .help("Open this video on YouTube")
-            // Copy Link button removed — low-value duplication of the
-            // system Share sheet, and the row was crowding the inspector.
-            // Use the right-click context menu on the title or thumbnail
-            // for copy operations.
+
+            // Download for offline viewing via yt-dlp
+            downloadButton(videoId: video.videoId)
 
             if inspectedItem.isWatchCandidate, let topicId = store.selectedTopicId {
                 sectionDivider()
@@ -548,6 +547,49 @@ struct VideoInspector: View {
                     .help("Hide this creator from future Watch discovery until restored in Settings")
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func downloadButton(videoId: String) -> some View {
+        let downloadManager = VideoDownloadManager.shared
+
+        if downloadManager.isDownloaded(videoId) {
+            Button {
+                downloadManager.playOffline(videoId: videoId)
+            } label: {
+                Label("Play Offline", systemImage: "play.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .buttonStyle(.bordered)
+
+            Button(role: .destructive) {
+                downloadManager.deleteDownload(videoId: videoId)
+            } label: {
+                Label("Delete Download", systemImage: "trash")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .buttonStyle(.bordered)
+        } else if downloadManager.isActive(videoId) {
+            Button {
+                downloadManager.cancel(videoId: videoId)
+            } label: {
+                Label("Cancel Download", systemImage: "xmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .buttonStyle(.bordered)
+        } else {
+            Button {
+                downloadManager.download(videoId: videoId)
+            } label: {
+                Label("Download for Offline", systemImage: "arrow.down.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .buttonStyle(.bordered)
         }
     }
 
