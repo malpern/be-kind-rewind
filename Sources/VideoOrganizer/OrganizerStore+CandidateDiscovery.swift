@@ -779,7 +779,8 @@ enum CandidateDiscoveryCoordinator {
             let seenPenalty = appSeenPenalty(for: video, store: store)
             let repeatPenalty = creatorRepeatPenalty(for: video, currentCount: creatorCounts[creatorKey] ?? 0)
             let pinnedBoost: Double = (video.channelId.map { favoriteIds.contains($0) } ?? false) ? favoriteBoost : 0
-            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost
+            let recencyBoost = recencyBoostForReranking(publishedAt: video.publishedAt)
+            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost + recencyBoost
             scored.append((video, adjusted))
             creatorCounts[creatorKey, default: 0] += 1
         }
@@ -840,6 +841,38 @@ enum CandidateDiscoveryCoordinator {
     fileprivate static func searchPlans(for topicId: Int64, store: OrganizerStore) -> [CandidateSearchPlan] {
         guard let topic = store.topics.first(where: { $0.id == topicId }) else { return [] }
         return generatedSearchQueries(for: topic).map(CandidateSearchPlan.init(query:))
+    }
+
+    /// Large additive recency boost applied at rerank time so fresh content
+    /// surfaces above older high-score videos. Creates implicit tiers:
+    ///
+    ///   Today (+1000) > This week (+500) > This month (+100) > Older (+0)
+    ///
+    /// Within each tier, the base score still determines relative ordering
+    /// so the *best* today-video ranks above a mediocre today-video. The
+    /// values are intentionally large relative to the base-score range
+    /// (30–505) so that freshness dominates the feed ordering — a fresh
+    /// upload from a small creator will rank above a month-old video from
+    /// a massive channel.
+    ///
+    /// This compensates for a historical bug where `parseAge` didn't handle
+    /// ISO 8601 dates during scoring, causing all archive-normalized dates
+    /// to get the minimum recencyBonus at discovery time. Even after the
+    /// parseAge fix, stored scores in SQLite aren't retroactively updated,
+    /// so the rerank boost is the right layer for this correction.
+    private static func recencyBoostForReranking(publishedAt: String?) -> Double {
+        guard let publishedAt else { return 0 }
+        let ageDays = CreatorAnalytics.parseAge(publishedAt)
+        guard ageDays != .max else { return 0 }
+        switch ageDays {
+        case ...1:   return 1000   // today / yesterday
+        case ...3:   return 800    // last 3 days
+        case ...7:   return 500    // this week
+        case ...14:  return 200    // last 2 weeks
+        case ...30:  return 100    // this month
+        case ...90:  return 30     // last quarter
+        default:     return 0      // older
+        }
     }
 
     private static func appSeenPenalty(for video: CandidateVideoViewModel, store: OrganizerStore) -> Double {
