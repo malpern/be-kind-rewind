@@ -1002,48 +1002,46 @@ enum CandidateDiscoveryCoordinator {
         return plans
     }
 
-    /// Large additive recency boost applied at rerank time so fresh content
-    /// surfaces above older high-score videos. Creates implicit tiers:
-    ///
-    ///   Today (+1000) > This week (+500) > This month (+100) > Older (+0)
-    ///
-    /// Within each tier, the base score still determines relative ordering
-    /// so the *best* today-video ranks above a mediocre today-video. The
-    /// values are intentionally large relative to the base-score range
-    /// (30–505) so that freshness dominates the feed ordering — a fresh
-    /// upload from a small creator will rank above a month-old video from
-    /// a massive channel.
-    ///
-    /// This compensates for a historical bug where `parseAge` didn't handle
-    /// ISO 8601 dates during scoring, causing all archive-normalized dates
-    /// to get the minimum recencyBonus at discovery time. Even after the
-    /// parseAge fix, stored scores in SQLite aren't retroactively updated,
-    /// so the rerank boost is the right layer for this correction.
+    /// Recency boost applied at rerank time. Only trusts ISO 8601 dates
+    /// for the full boost — relative strings like "today" or "5 days ago"
+    /// were correct at scrape time but become stale across sessions (a
+    /// video scraped as "today" three days ago is actually 3 days old,
+    /// not 0 days). Relative dates get a capped moderate boost at best.
     private static func recencyBoostForReranking(publishedAt: String?) -> Double {
         guard let publishedAt else { return 0 }
+
+        // ISO 8601 dates: trustworthy — we can compute exact age
+        if let date = CreatorAnalytics.parseISO8601Date(publishedAt) {
+            let ageDays = max(0, Int(Date().timeIntervalSince(date) / 86_400))
+            switch ageDays {
+            case ...1:   return 1000
+            case ...3:   return 800
+            case ...7:   return 500
+            case ...14:  return 200
+            case ...30:  return 100
+            case ...90:  return 30
+            default:     return 0
+            }
+        }
+
+        // Relative date strings ("today", "5 days ago"): frozen at scrape
+        // time. A video stored as "today" days ago keeps returning 0 from
+        // parseAge, giving it a permanent max boost. Cap these at a
+        // moderate 150 so they don't dominate the feed indefinitely.
         let ageDays = CreatorAnalytics.parseAge(publishedAt)
         guard ageDays != .max else { return 0 }
-        switch ageDays {
-        case ...1:   return 1000   // today / yesterday
-        case ...3:   return 800    // last 3 days
-        case ...7:   return 500    // this week
-        case ...14:  return 200    // last 2 weeks
-        case ...30:  return 100    // this month
-        case ...90:  return 30     // last quarter
-        default:     return 0      // older
-        }
+        return max(0, 150 - Double(ageDays) * 15)
     }
 
-    /// Penalty based on how many times this video has appeared "above the
-    /// fold" in Watch. Each impression subtracts 40 points, capped at 400.
-    /// After 10 impressions the video is strongly deprioritized but not
-    /// hidden — the user can still find it by scrolling. The impression
-    /// count persists across app restarts via UserDefaults and is pruned
-    /// to only active pool members on each rebuild.
+    /// Penalty for repeatedly-shown videos. Each impression subtracts 150
+    /// points, capped at 1200. After 8 impressions even a today-video
+    /// with +1000 recency boost drops below zero effective. This forces
+    /// the feed to rotate: videos the user has seen 5+ times across
+    /// sessions sink hard, making room for less-exposed candidates.
     private static func impressionPenaltyForReranking(videoId: String, store: OrganizerStore) -> Double {
         let count = store.watchImpressionCounts[videoId] ?? 0
         guard count > 0 else { return 0 }
-        return min(Double(count) * 40, 400)
+        return min(Double(count) * 150, 1200)
     }
 
     private static func appSeenPenalty(for video: CandidateVideoViewModel, store: OrganizerStore) -> Double {
