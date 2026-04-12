@@ -4,6 +4,16 @@ import Testing
 
 @Suite("BrowserSyncService")
 struct BrowserSyncServiceTests {
+    private let sampleAction = SyncAction(
+        id: 1,
+        videoId: "vid-123",
+        action: "not_interested",
+        playlist: "WL",
+        playlistTitle: nil,
+        executor: .browser,
+        attempts: 0,
+        lastError: nil
+    )
 
     @Test("BrowserSyncResult captures synced IDs and failures")
     func resultModel() {
@@ -31,11 +41,43 @@ struct BrowserSyncServiceTests {
         #expect(error.localizedDescription == "Timeout waiting for element")
     }
 
+    @Test("BrowserSyncError missingDependency provides user-facing description")
+    func missingDependencyErrorDescription() {
+        let error = BrowserSyncError.missingDependency("Required command 'npx' is not installed or not on PATH.")
+        #expect(error.localizedDescription == "Required command 'npx' is not installed or not on PATH.")
+    }
+
     @Test("execute returns empty result for empty actions")
     func executeEmptyActions() async throws {
         let service = BrowserSyncService(repoRoot: FileManager.default.temporaryDirectory)
         let result = try await service.execute(actions: [])
         #expect(result.syncedActionIDs.isEmpty)
         #expect(result.failures.isEmpty)
+    }
+
+    @Test("execute surfaces a missing browser sync script before launching subprocesses")
+    func executeMissingScript() async {
+        let repoRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repoRoot) }
+
+        let service = BrowserSyncService(repoRoot: repoRoot)
+
+        await #expect(throws: BrowserSyncError.self) {
+            _ = try await service.execute(actions: [sampleAction])
+        }
+    }
+
+    @Test("openLoginSetup surfaces a missing browser sync script before launching subprocesses")
+    func openLoginSetupMissingScript() async {
+        let repoRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repoRoot) }
+
+        let service = BrowserSyncService(repoRoot: repoRoot)
+
+        await #expect(throws: BrowserSyncError.self) {
+            try await service.openLoginSetup()
+        }
     }
 }

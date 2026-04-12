@@ -3,22 +3,22 @@ import Foundation
 
 /// SQLite-backed store for topics, video assignments, and the commit table.
 public final class TopicStore: Sendable {
-    private let db: Connection
+    let db: Connection
     private let isInMemory: Bool
 
     // Tables
     private let topics = Table("topics")
     private let videos = Table("videos")
-    private let commitLog = Table("commit_log")
+    let commitLog = Table("commit_log")
     private let channels = Table("channels")
-    private let playlists = Table("playlists")
-    private let playlistMemberships = Table("playlist_memberships")
+    let playlists = Table("playlists")
+    let playlistMemberships = Table("playlist_memberships")
     private let topicCandidates = Table("topic_candidates")
     private let candidateSources = Table("candidate_sources")
     private let candidateState = Table("candidate_state")
     private let channelDiscoveryArchive = Table("channel_discovery_archive")
     private let channelDiscoveryState = Table("channel_discovery_state")
-    private let seenVideos = Table("seen_videos")
+    let seenVideos = Table("seen_videos")
     private let excludedChannels = Table("excluded_channels")
     private let favoriteChannels = Table("favorite_channels")
     private let creatorThemes = Table("creator_themes")
@@ -58,16 +58,16 @@ public final class TopicStore: Sendable {
     private let channelIconFetchedAt = SQLite.Expression<String?>("icon_fetched_at")
 
     // Playlist columns
-    private let playlistId = SQLite.Expression<String>("playlist_id")
-    private let playlistTitle = SQLite.Expression<String>("title")
-    private let playlistVisibility = SQLite.Expression<String?>("visibility")
-    private let playlistVideoCount = SQLite.Expression<Int?>("video_count")
-    private let playlistSource = SQLite.Expression<String?>("source")
-    private let playlistFetchedAt = SQLite.Expression<String?>("fetched_at")
-    private let membershipPlaylistId = SQLite.Expression<String>("playlist_id")
-    private let membershipVideoId = SQLite.Expression<String>("video_id")
-    private let membershipPosition = SQLite.Expression<Int?>("position")
-    private let membershipVerifiedAt = SQLite.Expression<String?>("verified_at")
+    let playlistId = SQLite.Expression<String>("playlist_id")
+    let playlistTitle = SQLite.Expression<String>("title")
+    let playlistVisibility = SQLite.Expression<String?>("visibility")
+    let playlistVideoCount = SQLite.Expression<Int?>("video_count")
+    let playlistSource = SQLite.Expression<String?>("source")
+    let playlistFetchedAt = SQLite.Expression<String?>("fetched_at")
+    let membershipPlaylistId = SQLite.Expression<String>("playlist_id")
+    let membershipVideoId = SQLite.Expression<String>("video_id")
+    let membershipPosition = SQLite.Expression<Int?>("position")
+    let membershipVerifiedAt = SQLite.Expression<String?>("verified_at")
 
     // Candidate columns
     private let candidateTopicId = SQLite.Expression<Int64>("topic_id")
@@ -101,15 +101,15 @@ public final class TopicStore: Sendable {
     private let discoveryStateLastScannedAt = SQLite.Expression<String?>("last_scanned_at")
 
     // Seen-history columns
-    private let seenEventId = SQLite.Expression<Int64>("id")
-    private let seenVideoId = SQLite.Expression<String?>("video_id")
-    private let seenTitle = SQLite.Expression<String?>("title")
-    private let seenChannelName = SQLite.Expression<String?>("channel_name")
-    private let seenRawURL = SQLite.Expression<String?>("raw_url")
-    private let seenAt = SQLite.Expression<String?>("seen_at")
-    private let seenSource = SQLite.Expression<String>("source")
-    private let seenConfidence = SQLite.Expression<String>("confidence")
-    private let seenImportedAt = SQLite.Expression<String>("imported_at")
+    let seenEventId = SQLite.Expression<Int64>("id")
+    let seenVideoId = SQLite.Expression<String?>("video_id")
+    let seenTitle = SQLite.Expression<String?>("title")
+    let seenChannelName = SQLite.Expression<String?>("channel_name")
+    let seenRawURL = SQLite.Expression<String?>("raw_url")
+    let seenAt = SQLite.Expression<String?>("seen_at")
+    let seenSource = SQLite.Expression<String>("source")
+    let seenConfidence = SQLite.Expression<String>("confidence")
+    let seenImportedAt = SQLite.Expression<String>("imported_at")
 
     // Excluded-channel columns
     private let excludedChannelId = SQLite.Expression<String>("channel_id")
@@ -155,18 +155,18 @@ public final class TopicStore: Sendable {
     private let channelLinksFetchedAt = SQLite.Expression<String>("fetched_at")
 
     // Commit log columns
-    private let commitId = SQLite.Expression<Int64>("id")
-    private let commitAction = SQLite.Expression<String>("action")
-    private let commitVideoId = SQLite.Expression<String>("video_id")
-    private let commitPlaylist = SQLite.Expression<String>("playlist")
-    private let commitCreatedAt = SQLite.Expression<String>("created_at")
-    private let commitSynced = SQLite.Expression<Bool>("synced")
-    private let commitState = SQLite.Expression<String>("state")
-    private let commitAttempts = SQLite.Expression<Int>("attempts")
-    private let commitLastError = SQLite.Expression<String?>("last_error")
-    private let commitNextAttemptAt = SQLite.Expression<String?>("next_attempt_at")
-    private let commitExecutor = SQLite.Expression<String>("executor")
-    private let commitStateUpdatedAt = SQLite.Expression<String>("state_updated_at")
+    let commitId = SQLite.Expression<Int64>("id")
+    let commitAction = SQLite.Expression<String>("action")
+    let commitVideoId = SQLite.Expression<String>("video_id")
+    let commitPlaylist = SQLite.Expression<String>("playlist")
+    let commitCreatedAt = SQLite.Expression<String>("created_at")
+    let commitSynced = SQLite.Expression<Bool>("synced")
+    let commitState = SQLite.Expression<String>("state")
+    let commitAttempts = SQLite.Expression<Int>("attempts")
+    let commitLastError = SQLite.Expression<String?>("last_error")
+    let commitNextAttemptAt = SQLite.Expression<String?>("next_attempt_at")
+    let commitExecutor = SQLite.Expression<String>("executor")
+    let commitStateUpdatedAt = SQLite.Expression<String>("state_updated_at")
 
     public init(path: String) throws {
         db = try Connection(path)
@@ -1455,308 +1455,6 @@ public final class TopicStore: Sendable {
         return nil
     }
 
-    @discardableResult
-    public func importSeenVideoRecords(_ records: [SeenVideoRecord]) throws -> Int {
-        guard !records.isEmpty else { return 0 }
-
-        var imported = 0
-        try db.transaction {
-            for record in records {
-                if try seenRecordExists(record) {
-                    continue
-                }
-
-                try db.run(seenVideos.insert(
-                    seenVideoId <- record.videoId,
-                    seenTitle <- record.title,
-                    seenChannelName <- record.channelName,
-                    seenRawURL <- record.rawURL,
-                    seenAt <- record.seenAt,
-                    seenSource <- record.source.rawValue,
-                    seenConfidence <- record.confidence.rawValue,
-                    seenImportedAt <- (record.importedAt ?? ISO8601DateFormatter().string(from: Date()))
-                ))
-                imported += 1
-            }
-        }
-
-        return imported
-    }
-
-    public func hasSeenVideo(videoId: String) throws -> Bool {
-        try db.pluck(seenVideos.filter(seenVideoId == videoId).limit(1)) != nil
-    }
-
-    public func seenSummary(videoId: String) throws -> SeenVideoSummary? {
-        let query = seenVideos
-            .filter(seenVideoId == videoId)
-            .order(seenAt.desc)
-
-        var count = 0
-        var latestSeenAt: String?
-        var latestSource: SeenVideoSource?
-        for row in try db.prepare(query) {
-            count += 1
-            if latestSeenAt == nil {
-                latestSeenAt = row[seenAt]
-                latestSource = SeenVideoSource(rawValue: row[seenSource])
-            }
-        }
-
-        guard count > 0 else { return nil }
-        return SeenVideoSummary(videoId: videoId, eventCount: count, latestSeenAt: latestSeenAt, latestSource: latestSource)
-    }
-
-    public func seenVideoCount() throws -> Int {
-        try db.scalar(seenVideos.count)
-    }
-
-    @discardableResult
-    public func recordSeenVideo(
-        videoId: String,
-        title: String? = nil,
-        channelName: String? = nil,
-        rawURL: String? = nil,
-        source: SeenVideoSource,
-        confidence: SeenVideoConfidence = .probable
-    ) throws -> Int {
-        try importSeenVideoRecords([
-            SeenVideoRecord(
-                videoId: videoId,
-                title: title,
-                channelName: channelName,
-                rawURL: rawURL,
-                seenAt: ISO8601DateFormatter().string(from: Date()),
-                source: source,
-                confidence: confidence,
-                importedAt: ISO8601DateFormatter().string(from: Date())
-            )
-        ])
-    }
-
-    public func addPlaylistMembership(_ membership: PlaylistMembershipRecord) throws {
-        try db.run(playlistMemberships.insert(or: .replace,
-            membershipPlaylistId <- membership.playlistId,
-            membershipVideoId <- membership.videoId,
-            membershipPosition <- membership.position,
-            membershipVerifiedAt <- membership.verifiedAt
-        ))
-    }
-
-    public func removePlaylistMembership(playlistId pid: String, videoId vid: String) throws {
-        try db.run(playlistMemberships.filter(membershipPlaylistId == pid && membershipVideoId == vid).delete())
-    }
-
-    // MARK: - Commit Table
-
-    public func queueCommit(action: String, videoId vid: String, playlist: String) throws {
-        let executor: SyncExecutorKind
-        if action == "not_interested" || (action == "add_to_playlist" && playlist == "WL") {
-            executor = .browser
-        } else {
-            executor = .api
-        }
-        let now = ISO8601DateFormatter().string(from: Date())
-        try db.run(commitLog.insert(
-            commitAction <- action,
-            commitVideoId <- vid,
-            commitPlaylist <- playlist,
-            commitCreatedAt <- now,
-            commitSynced <- false,
-            commitState <- SyncQueueState.queued.rawValue,
-            commitAttempts <- 0,
-            commitLastError <- nil,
-            commitNextAttemptAt <- nil,
-            commitExecutor <- executor.rawValue,
-            commitStateUpdatedAt <- now
-        ))
-    }
-
-    /// Returns the net-effect sync plan: collapsed, deduplicated, no-ops removed.
-    public func pendingSyncPlan(
-        executor: SyncExecutorKind? = nil,
-        now: Date = Date()
-    ) throws -> [SyncAction] {
-        let nowString = ISO8601DateFormatter().string(from: now)
-        var pending = commitLog
-            .filter(commitSynced == false)
-            .filter(commitState == SyncQueueState.queued.rawValue
-                || commitState == SyncQueueState.retrying.rawValue
-                || commitState == SyncQueueState.deferred.rawValue)
-            .filter(commitNextAttemptAt == nil || commitNextAttemptAt <= nowString)
-            .order(commitCreatedAt)
-        if let executor {
-            pending = pending.filter(commitExecutor == executor.rawValue)
-        }
-        var latestAction: [String: SyncAction] = [:]
-
-        for row in try db.prepare(pending) {
-            let action = row[commitAction]
-            let videoId = row[commitVideoId]
-            let playlist = row[commitPlaylist]
-            let playlistTitle = try? playlistTitle(for: playlist)
-            let key: String
-            switch action {
-            case "add_to_playlist", "remove_from_playlist":
-                key = "\(action):\(playlist):\(videoId)"
-            case "not_interested":
-                key = "\(action):\(videoId)"
-            default:
-                key = "\(action):\(playlist):\(videoId)"
-            }
-
-            latestAction[key] = SyncAction(
-                id: row[commitId],
-                videoId: videoId,
-                action: action,
-                playlist: playlist,
-                playlistTitle: playlistTitle,
-                executor: SyncExecutorKind(rawValue: row[commitExecutor]) ?? .api,
-                attempts: row[commitAttempts],
-                lastError: row[commitLastError]
-            )
-        }
-
-        return latestAction.values.sorted { lhs, rhs in
-            if lhs.videoId == rhs.videoId {
-                return lhs.id < rhs.id
-            }
-            return lhs.videoId < rhs.videoId
-        }
-    }
-
-    public func markSynced(ids: [Int64]) throws {
-        guard !ids.isEmpty else { return }
-        let now = ISO8601DateFormatter().string(from: Date())
-        try db.run(commitLog.filter(ids.contains(commitId)).update(
-            commitSynced <- true,
-            commitState <- SyncQueueState.synced.rawValue,
-            commitLastError <- nil,
-            commitNextAttemptAt <- nil,
-            commitStateUpdatedAt <- now
-        ))
-    }
-
-    public func markSynced() throws {
-        let ids = try db.prepare(commitLog.filter(commitSynced == false).select(commitId)).map { $0[commitId] }
-        try markSynced(ids: ids)
-    }
-
-    public func markInProgress(ids: [Int64]) throws {
-        guard !ids.isEmpty else { return }
-        let now = ISO8601DateFormatter().string(from: Date())
-        try db.run(commitLog.filter(ids.contains(commitId)).update(
-            commitState <- SyncQueueState.inProgress.rawValue,
-            commitAttempts <- commitAttempts + 1,
-            commitLastError <- nil,
-            commitStateUpdatedAt <- now
-        ))
-    }
-
-    public func markDeferred(ids: [Int64], error: String? = nil) throws {
-        guard !ids.isEmpty else { return }
-        let now = ISO8601DateFormatter().string(from: Date())
-        try db.run(commitLog.filter(ids.contains(commitId)).update(
-            commitState <- SyncQueueState.deferred.rawValue,
-            commitLastError <- error,
-            commitStateUpdatedAt <- now
-        ))
-    }
-
-    public func moveToExecutor(ids: [Int64], executor: SyncExecutorKind, state: SyncQueueState, error: String? = nil) throws {
-        guard !ids.isEmpty else { return }
-        let now = ISO8601DateFormatter().string(from: Date())
-        try db.run(commitLog.filter(ids.contains(commitId)).update(
-            commitExecutor <- executor.rawValue,
-            commitState <- state.rawValue,
-            commitLastError <- error,
-            commitNextAttemptAt <- nil,
-            commitStateUpdatedAt <- now
-        ))
-    }
-
-    public func markFailed(_ failures: [SyncFailureRecord], retryAfter: TimeInterval?) throws {
-        guard !failures.isEmpty else { return }
-        try db.transaction {
-            let retryDate = retryAfter.map { ISO8601DateFormatter().string(from: Date().addingTimeInterval($0)) }
-            let now = ISO8601DateFormatter().string(from: Date())
-            for failure in failures {
-                try db.run(commitLog.filter(commitId == failure.id).update(
-                    commitState <- SyncQueueState.retrying.rawValue,
-                    commitLastError <- failure.message,
-                    commitNextAttemptAt <- retryDate,
-                    commitStateUpdatedAt <- now
-                ))
-            }
-        }
-    }
-
-    public func recoverStaleInProgressCommits(olderThan age: TimeInterval = 5 * 60, now: Date = Date()) throws -> Int {
-        let formatter = ISO8601DateFormatter()
-        let cutoff = formatter.string(from: now.addingTimeInterval(-age))
-        let query = commitLog
-            .filter(commitSynced == false)
-            .filter(commitState == SyncQueueState.inProgress.rawValue)
-            .filter(commitStateUpdatedAt <= cutoff)
-
-        let staleIds = try db.prepare(query.select(commitId)).map { $0[commitId] }
-        guard !staleIds.isEmpty else { return 0 }
-
-        let nowString = formatter.string(from: now)
-        try db.run(commitLog.filter(staleIds.contains(commitId)).update(
-            commitState <- SyncQueueState.retrying.rawValue,
-            commitLastError <- "Recovered after interrupted sync.",
-            commitNextAttemptAt <- nil,
-            commitStateUpdatedAt <- nowString
-        ))
-
-        return staleIds.count
-    }
-
-    public func syncQueueSummary() throws -> SyncQueueSummary {
-        func count(_ state: SyncQueueState? = nil, executor: SyncExecutorKind? = nil) throws -> Int {
-            var query = commitLog.filter(commitSynced == false)
-            if let state {
-                query = query.filter(commitState == state.rawValue)
-            }
-            if let executor {
-                query = query.filter(commitExecutor == executor.rawValue)
-            }
-            return try db.scalar(query.count)
-        }
-
-        return SyncQueueSummary(
-            queued: try count(.queued),
-            retrying: try count(.retrying),
-            deferred: try count(.deferred),
-            inProgress: try count(.inProgress),
-            browserDeferred: try count(.deferred, executor: .browser)
-        )
-    }
-
-    public func playlistTitle(for playlistId: String) throws -> String? {
-        try db.pluck(playlists.filter(self.playlistId == playlistId).select(playlistTitle))?[playlistTitle]
-    }
-
-    private func seenRecordExists(_ record: SeenVideoRecord) throws -> Bool {
-        var query = seenVideos.filter(seenSource == record.source.rawValue)
-
-        if let videoId = record.videoId {
-            query = query.filter(seenVideoId == videoId)
-        } else if let rawURL = record.rawURL {
-            query = query.filter(seenRawURL == rawURL)
-        } else if let title = record.title {
-            query = query.filter(seenTitle == title)
-        } else {
-            return false
-        }
-
-        if let seenAt = record.seenAt {
-            query = query.filter(self.seenAt == seenAt)
-        }
-
-        return try db.pluck(query.limit(1)) != nil
-    }
 }
 
 // MARK: - Models

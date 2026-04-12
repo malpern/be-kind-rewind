@@ -17,8 +17,13 @@ extension OrganizerStore {
 
         // If we already have a cached row (even an empty one), skip the scrape.
         // The user can force a refresh later if needed.
-        if let cached = try? store.channelLinksForChannel(channelId), cached != nil {
-            return
+        do {
+            if let cached = try store.channelLinksForChannel(channelId) {
+                _ = cached
+                return
+            }
+        } catch {
+            AppLogger.file.log("loadChannelLinksIfNeeded(\(channelId)) cache read failed: \(error.localizedDescription)", category: "discovery")
         }
 
         loadingChannelLinks.insert(channelId)

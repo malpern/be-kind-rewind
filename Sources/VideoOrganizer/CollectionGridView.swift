@@ -1140,194 +1140,138 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         @objc private func contextExcludeCreatorFromWatch(_ sender: Any?) {
-            guard let store,
-                  let payload = (sender as? NSMenuItem)?.representedObject as? [String: String],
-                  let channelId = payload["channelId"], !channelId.isEmpty else {
-                return
-            }
-
-            let channelName = payload["channelName"]
-            let channelIconUrl = payload["channelIconUrl"]
-            store.excludeCreatorFromWatch(
-                channelId: channelId,
-                channelName: channelName,
-                channelIconUrl: channelIconUrl?.isEmpty == false ? channelIconUrl : nil
-            )
+            CollectionGridActionSupport.excludeCreatorFromWatch(store: store, sender: sender)
         }
 
         private func handleSaveToWatchLaterShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else {
-                AppLogger.commands.debug("Ignored saveToWatchLater command: no selected videos")
-                return
+            CollectionGridActionSupport.handleSaveToWatchLaterShortcut(selectedVideoIds: renderedSelectedVideoIds) {
+                contextSaveToWatchLater(nil)
             }
-            AppLogger.commands.info("Handling saveToWatchLater for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
-            contextSaveToWatchLater(nil)
         }
 
         private func handleSaveToPlaylistShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else {
-                AppLogger.commands.debug("Ignored saveToPlaylist command: no selected videos")
-                return
+            CollectionGridActionSupport.handleSaveToPlaylistShortcut(selectedVideoIds: renderedSelectedVideoIds) {
+                showPlaylistPopup(mode: .save)
             }
-            AppLogger.commands.info("Handling saveToPlaylist for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
-            showPlaylistPopup(mode: .save)
         }
 
         private func handleMoveToPlaylistShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else {
-                AppLogger.commands.debug("Ignored moveToPlaylist command: no selected videos")
-                return
+            CollectionGridActionSupport.handleMoveToPlaylistShortcut(selectedVideoIds: renderedSelectedVideoIds) {
+                showPlaylistPopup(mode: .move)
             }
-            AppLogger.commands.info("Handling moveToPlaylist for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
-            showPlaylistPopup(mode: .move)
         }
 
         private func handleDismissShortcut() {
-            guard let store, store.selectedTopicId != nil,
-                  !renderedSelectedVideoIds.isEmpty,
-                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else {
-                AppLogger.commands.debug("Ignored dismissCandidates command: selection not eligible")
-                return
+            CollectionGridActionSupport.handleCandidateShortcut(
+                commandName: "dismissCandidates",
+                selectedVideoIds: renderedSelectedVideoIds,
+                selectedTopicId: store?.selectedTopicId,
+                allCandidatesEligible: renderedSelectedVideoIds.allSatisfy(isCandidateVideo)
+            ) {
+                contextDismissCandidates(nil)
             }
-            AppLogger.commands.info("Handling dismissCandidates for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
-            contextDismissCandidates(nil)
         }
 
         private func handleNotInterestedShortcut() {
-            guard let store, store.selectedTopicId != nil,
-                  !renderedSelectedVideoIds.isEmpty,
-                  renderedSelectedVideoIds.allSatisfy(isCandidateVideo) else {
-                AppLogger.commands.debug("Ignored notInterested command: selection not eligible")
-                return
+            CollectionGridActionSupport.handleCandidateShortcut(
+                commandName: "notInterested",
+                selectedVideoIds: renderedSelectedVideoIds,
+                selectedTopicId: store?.selectedTopicId,
+                allCandidatesEligible: renderedSelectedVideoIds.allSatisfy(isCandidateVideo)
+            ) {
+                contextNotInterested(nil)
             }
-            AppLogger.commands.info("Handling notInterested for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
-            contextNotInterested(nil)
         }
 
         private func handleOpenSelectedShortcut() {
-            guard !renderedSelectedVideoIds.isEmpty else {
-                AppLogger.commands.debug("Ignored openOnYouTube command: no selected videos")
-                return
+            CollectionGridActionSupport.handleOpenSelectedShortcut(selectedVideoIds: renderedSelectedVideoIds) {
+                contextOpenOnYouTube(nil)
             }
-            AppLogger.commands.info("Handling openOnYouTube for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
-            contextOpenOnYouTube(nil)
         }
 
         private func handleClearSelectionShortcut() {
-            guard let collectionView else {
-                AppLogger.commands.debug("Ignored clearSelection command: collection view unavailable")
-                return
-            }
-            AppLogger.commands.info("Handling clearSelection for \(self.renderedSelectedVideoIds.count, privacy: .public) videos")
-            pendingSelectedVideoId = nil
-            pendingSelectedVideoIds = []
-            renderedSelectedVideoId = nil
-            renderedSelectedVideoIds = []
-            isApplyingSelectionToCollectionView = true
-            collectionView.deselectAll(nil)
-            isApplyingSelectionToCollectionView = false
-            onSelectionChange(nil, [])
-            refreshVisibleItems()
+            CollectionGridActionSupport.clearSelection(
+                collectionView: collectionView,
+                selectedVideoIds: &pendingSelectedVideoIds,
+                selectedVideoId: &pendingSelectedVideoId,
+                renderedSelectedVideoIds: &renderedSelectedVideoIds,
+                renderedSelectedVideoId: &renderedSelectedVideoId,
+                isApplyingSelectionToCollectionView: &isApplyingSelectionToCollectionView,
+                onSelectionChange: onSelectionChange,
+                refreshVisibleItems: refreshVisibleItems
+            )
         }
 
         @objc private func contextSaveToPlaylist(_ sender: NSMenuItem) {
-            guard let store,
-                  let playlist = sender.representedObject as? PlaylistRecord else { return }
-            if let topicId = store.selectedTopicId,
-               renderedSelectedVideoIds.allSatisfy(isCandidateVideo) {
-                store.saveCandidatesToPlaylist(topicId: topicId, videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
-            } else {
-                store.saveVideosToPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
-            }
+            CollectionGridActionSupport.saveToPlaylist(
+                store: store,
+                sender: sender,
+                selectedVideoIds: renderedSelectedVideoIds,
+                allCandidatesEligible: renderedSelectedVideoIds.allSatisfy(isCandidateVideo)
+            )
         }
 
         @objc private func contextMoveToPlaylist(_ sender: NSMenuItem) {
-            guard let store,
-                  let destination = sender.representedObject as? PlaylistRecord,
-                  let sourcePlaylistId = store.selectedPlaylistId,
-                  sourcePlaylistId != destination.playlistId,
-                  let sourcePlaylist = store.knownPlaylists().first(where: { $0.playlistId == sourcePlaylistId }) else { return }
-
-            store.saveVideosToPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: destination)
-            store.removeVideosFromPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: sourcePlaylist)
+            CollectionGridActionSupport.moveToPlaylist(
+                store: store,
+                sender: sender,
+                selectedVideoIds: renderedSelectedVideoIds
+            )
         }
 
         @objc private func contextRemoveFromPlaylist(_ sender: NSMenuItem) {
-            guard let store,
-                  let playlist = sender.representedObject as? PlaylistRecord else { return }
-            store.removeVideosFromPlaylist(videoIds: Array(renderedSelectedVideoIds), playlist: playlist)
+            CollectionGridActionSupport.removeFromPlaylist(
+                store: store,
+                sender: sender,
+                selectedVideoIds: renderedSelectedVideoIds
+            )
         }
 
         @objc private func contextNotInterested(_ sender: Any?) {
-            guard let store, let topicId = store.selectedTopicId else { return }
-            store.markCandidatesNotInterested(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
+            CollectionGridActionSupport.markNotInterested(
+                store: store,
+                selectedVideoIds: renderedSelectedVideoIds
+            )
         }
 
         @objc private func contextDownloadVideo(_ sender: Any?) {
-            guard let videoId = renderedSelectedVideoIds.first else { return }
-            VideoDownloadManager.shared.download(videoId: videoId)
+            CollectionGridActionSupport.withFirstSelectedVideo(selectedVideoIds: renderedSelectedVideoIds) {
+                VideoDownloadManager.shared.download(videoId: $0)
+            }
         }
 
         @objc private func contextPlayOffline(_ sender: Any?) {
-            guard let videoId = renderedSelectedVideoIds.first else { return }
-            VideoDownloadManager.shared.playOffline(videoId: videoId)
+            CollectionGridActionSupport.withFirstSelectedVideo(selectedVideoIds: renderedSelectedVideoIds) {
+                VideoDownloadManager.shared.playOffline(videoId: $0)
+            }
         }
 
         @objc private func contextCancelDownload(_ sender: Any?) {
-            guard let videoId = renderedSelectedVideoIds.first else { return }
-            VideoDownloadManager.shared.cancel(videoId: videoId)
+            CollectionGridActionSupport.withFirstSelectedVideo(selectedVideoIds: renderedSelectedVideoIds) {
+                VideoDownloadManager.shared.cancel(videoId: $0)
+            }
         }
 
         @objc private func contextDeleteDownload(_ sender: Any?) {
-            guard let videoId = renderedSelectedVideoIds.first else { return }
-            VideoDownloadManager.shared.deleteDownload(videoId: videoId)
+            CollectionGridActionSupport.withFirstSelectedVideo(selectedVideoIds: renderedSelectedVideoIds) {
+                VideoDownloadManager.shared.deleteDownload(videoId: $0)
+            }
         }
 
         private func showPlaylistPopup(mode: CollectionGridPlaylistShortcutMode) {
-            guard let collectionView else { return }
-            let selectedVideoIds = renderedSelectedVideoIds.map { $0 }
-            let selectionCount = selectedVideoIds.count
-            let menu: NSMenu?
-            switch mode {
-            case .save:
-                if let store {
-                    menu = CollectionGridPlaylistMenus.buildSaveMenu(
-                        store: store,
-                        selectedVideoIds: selectedVideoIds,
-                        selectionCount: selectionCount,
-                        target: self,
-                        action: #selector(contextSaveToPlaylist(_:))
-                    )
-                } else {
-                    menu = nil
-                }
-            case .move:
-                if let store {
-                    menu = CollectionGridPlaylistMenus.buildMoveMenu(
-                        store: store,
-                        selectedVideoIds: selectedVideoIds,
-                        target: self,
-                        action: #selector(contextMoveToPlaylist(_:))
-                    )
-                } else {
-                    menu = nil
-                }
-            }
-
-            guard let menu, !menu.items.isEmpty else {
-                NSSound.beep()
-                return
-            }
-
-            let popupPoint: NSPoint
-            if let indexPath = indexPaths(for: renderedSelectedVideoIds).sorted().first,
-               let attributes = collectionView.layoutAttributesForItem(at: indexPath) {
-                popupPoint = NSPoint(x: attributes.frame.midX, y: attributes.frame.midY)
-            } else {
-                popupPoint = NSPoint(x: collectionView.visibleRect.midX, y: collectionView.visibleRect.midY)
-            }
-
-            menu.popUp(positioning: nil, at: popupPoint, in: collectionView)
+            CollectionGridActionSupport.showPlaylistPopup(
+                mode: mode,
+                store: store,
+                collectionView: collectionView,
+                selectedVideoIds: renderedSelectedVideoIds,
+                orderedIndexPaths: indexPaths(for: renderedSelectedVideoIds).sorted(),
+                frameForIndexPath: { [weak collectionView] indexPath in
+                    collectionView?.layoutAttributesForItem(at: indexPath)?.frame
+                },
+                target: self,
+                saveSelector: #selector(contextSaveToPlaylist(_:)),
+                moveSelector: #selector(contextMoveToPlaylist(_:))
+            )
         }
 
         private func installActionObserversIfNeeded() {

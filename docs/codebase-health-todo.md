@@ -1,11 +1,19 @@
 # Codebase Health TODO
 
-Audit refreshed 2026-04-09 after the Watch/categorization/responsiveness work.
+Audit refreshed 2026-04-12 after a repo health review.
 This list only keeps issues that are still open.
 
 ---
 
 ## P0 — Responsiveness / Runtime
+
+- [x] **Keep the package build green while offline-download work lands**
+  The current `VideoDownloadManager.swift` integration is not compile-safe yet:
+  `swift test` currently fails on a main-actor isolation violation while parsing
+  yt-dlp progress updates from a detached task.
+  - Fix actor isolation around progress parsing / state updates
+  - Add at least one focused test or smoke-check path for the download manager
+  - Do not leave partially integrated feature work in the default build path
 
 - [x] **Move startup thumbnail prefetch off the launch path**
   `Sources/VideoOrganizer/VideoOrganizerApp.swift` still gathers every saved video ID
@@ -57,7 +65,7 @@ This list only keeps issues that are still open.
   - container view / scroll observer code
   - header model + header view content
 
-- [ ] **Split `TopicStore.swift` by domain**
+- [x] **Split `TopicStore.swift` by domain**
   Still ~1,500 lines covering:
   - topics and assignments
   - playlist state
@@ -70,7 +78,7 @@ This list only keeps issues that are still open.
   - `TopicStore+Sync.swift`
   - `TopicStore+SeenHistory.swift`
 
-- [ ] **Split `YouTubeClient.swift` into read/search/write areas**
+- [x] **Split `YouTubeClient.swift` into read/search/write areas**
   Still ~1,000 lines and mixes:
   - metadata fetch
   - playlist fetch
@@ -81,17 +89,6 @@ This list only keeps issues that are still open.
 ---
 
 ## P1 — Product / macOS Fit
-
-- [ ] **Replace the custom floating splash window with inline app loading**
-  `Sources/VideoOrganizer/VideoOrganizerApp.swift` still creates a borderless floating
-  splash window and keeps it up for 2.5 seconds. That is not a strong macOS fit and
-  can create focus/launch weirdness.
-  - Launch the main window immediately
-  - Show loading/skeleton state in the main window instead
-
-- [ ] **Remove or implement dead context-menu actions**
-  `Sources/VideoOrganizer/TopicSidebar.swift` still exposes `Rename…` as a no-op.
-  No menu item should ship without behavior.
 
 - [ ] **Stabilize Watch topic headers while background refresh continues**
   The visible topic’s face pile/order should not churn just because unrelated topics
@@ -111,15 +108,27 @@ This list only keeps issues that are still open.
   - preflight and validate runtime dependencies at app startup/settings
   - at minimum, document and surface dependency failures more clearly
 
-- [ ] **Replace silent `try?` sites that still hide real failures**
+- [x] **Replace silent `try?` sites that still hide real failures**
   Several remain in production code where failure matters for diagnosability:
   - client/config initialization in `OrganizerStore`
   - file/JSON loads in `YouTubeClient` / `ClaudeClient`
   - process/session probing in `BrowserSyncService`
+  - file/process persistence in `VideoDownloadManager`
 
   Prefer:
   - explicit logging
   - or fallback with an audit trail
+
+- [ ] **Reduce ad-hoc concurrency escape hatches in UI/integration code**
+  There are still a few risky patterns around actor boundaries and lifecycle:
+  - detached/background tasks that reach back into main-actor-owned state
+  - `nonisolated(unsafe)` observer state in `CollectionGridAppKit`
+  - process callbacks that rely on manual `MainActor.run` hops
+
+  Prefer:
+  - actor-safe helper types or dedicated workers
+  - fewer detached tasks in UI-adjacent code
+  - compile-time isolation guarantees over comments/convention
 
 - [ ] **Fix `nonisolated(unsafe)` static cache in `ClaudeClient`**
   The current shared mutable cache is still a concurrency risk and should be replaced
@@ -135,7 +144,7 @@ This list only keeps issues that are still open.
   - refresh/error transitions
   - onboarding/settings integration behavior
 
-- [ ] **Add stronger behavior tests for `BrowserSyncService`**
+- [x] **Add stronger behavior tests for `BrowserSyncService`**
   Basic type/result coverage exists now, but not enough around:
   - command construction
   - process failure handling
@@ -157,15 +166,6 @@ This list only keeps issues that are still open.
 ---
 
 ## P3 — Documentation
-
-- [ ] **Document the current Watch architecture**
-  We now have several planning docs, but we still need one concise “how it works now”
-  doc covering:
-  - recent watch pools
-  - topic admission
-  - strongest-topic assignment
-  - Show All vs By Topic
-  - background refresh expectations
 
 - [ ] **Add file-level overview comments where the complexity is now highest**
   Highest-value targets:

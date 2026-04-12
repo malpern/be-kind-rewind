@@ -31,6 +31,8 @@ public struct BrowserSyncService: Sendable {
             return BrowserSyncResult(syncedActionIDs: [], failures: [])
         }
 
+        try ensureScriptExists()
+        try ensureCommandExists("npx")
         let scriptURL = environment.scriptURL(named: "youtube_browser_sync.mjs")
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("youtube-browser-sync-\(UUID().uuidString).json")
@@ -51,6 +53,7 @@ public struct BrowserSyncService: Sendable {
         let artifactDir = environment
             .browserSyncArtifactsDirectory()
             .appendingPathComponent(Self.timestampedRunDirectory())
+        try FileManager.default.createDirectory(at: artifactDir, withIntermediateDirectories: true)
         let arguments = [
             "npx", "--yes", "--package", "playwright",
             "node", scriptURL.path,
@@ -73,6 +76,8 @@ public struct BrowserSyncService: Sendable {
     }
 
     public func openLoginSetup() async throws {
+        try ensureScriptExists()
+        try ensureCommandExists("npx")
         let scriptURL = environment.scriptURL(named: "youtube_browser_sync.mjs")
         let process = Process()
         process.currentDirectoryURL = environment.repoRoot()
@@ -86,8 +91,25 @@ public struct BrowserSyncService: Sendable {
     }
 
     public func status() async throws -> BrowserExecutorStatus {
-        let profileRunning = (try? isBrowserProfileProcessRunning()) ?? false
-        let hasSession = (try? profileHasSignedInYouTubeSession()) ?? false
+        let profileRunning: Bool
+        do {
+            profileRunning = try isBrowserProfileProcessRunning()
+        } catch {
+            return BrowserExecutorStatus(
+                ready: false,
+                message: "Unable to inspect the browser-sync profile process: \(error.localizedDescription)"
+            )
+        }
+
+        let hasSession: Bool
+        do {
+            hasSession = try profileHasSignedInYouTubeSession()
+        } catch {
+            return BrowserExecutorStatus(
+                ready: false,
+                message: "Unable to inspect the browser-sync profile cookies: \(error.localizedDescription)"
+            )
+        }
 
         if hasSession && profileRunning {
             return BrowserExecutorStatus(
@@ -154,6 +176,23 @@ public struct BrowserSyncService: Sendable {
         }
     }
 
+    private func ensureScriptExists() throws {
+        let scriptURL = environment.scriptURL(named: "youtube_browser_sync.mjs")
+        guard FileManager.default.fileExists(atPath: scriptURL.path) else {
+            throw BrowserSyncError.missingDependency("Browser sync script not found at \(scriptURL.path)")
+        }
+    }
+
+    private func ensureCommandExists(_ command: String) throws {
+        let execution = try runProcessSync(arguments: ["which", command])
+        guard execution.terminationStatus == 0,
+              let output = String(data: execution.stdout, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !output.isEmpty else {
+            throw BrowserSyncError.missingDependency("Required command '\(command)' is not installed or not on PATH.")
+        }
+    }
+
     private func isBrowserProfileProcessRunning() throws -> Bool {
         let profileDir = environment.playwrightProfileDirectory()
         let execution = try runProcessSync(arguments: ["pgrep", "-fal", profileDir.path])
@@ -216,10 +255,13 @@ public struct BrowserSyncService: Sendable {
 
 public enum BrowserSyncError: Error, LocalizedError {
     case executionFailed(String)
+    case missingDependency(String)
 
     public var errorDescription: String? {
         switch self {
         case .executionFailed(let message):
+            return message
+        case .missingDependency(let message):
             return message
         }
     }

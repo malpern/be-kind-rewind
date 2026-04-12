@@ -10,6 +10,7 @@ import TaggingKit
 
 // MARK: - Container View
 
+@MainActor
 final class CollectionGridContainerView: NSView {
     let scrollView = NSScrollView()
     let collectionView = ClickableCollectionView()
@@ -21,9 +22,9 @@ final class CollectionGridContainerView: NSView {
     private var flushScheduled = false
     private var lastContentWidth: CGFloat = 0
     /// Registered `NSView.boundsDidChangeNotification` observer token.
-    /// Marked `nonisolated(unsafe)` because it is only set/read on the main thread
-    /// (in `viewDidMoveToWindow` → `installBoundsObserverIfNeeded` / `removeBoundsObserver`
-    /// and cleaned up in `deinit`), but the compiler cannot verify that statically.
+    /// Stored as `nonisolated(unsafe)` so deinit can tear it down cleanly
+    /// across the Objective-C/AppKit boundary, while the rest of the view
+    /// remains main-actor isolated.
     nonisolated(unsafe) private var boundsObserver: NSObjectProtocol?
     private var initialLayoutTask: Task<Void, Never>?
 
@@ -125,7 +126,7 @@ final class CollectionGridContainerView: NSView {
             object: scrollView.contentView,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.handleWidthChangeIfNeeded()
                 self?.onBoundsChanged?()
             }

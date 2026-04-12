@@ -222,7 +222,7 @@ final class OrganizerStore {
         self.store = try TopicStore(path: dbPath)
         self.suggester = claudeClient.map { TopicSuggester(client: $0) }
         self.creatorThemeClassifier = claudeClient.map { CreatorThemeClassifier(client: $0) }
-        self.youtubeClient = try? YouTubeClient()
+        self.youtubeClient = Self.makeYouTubeClient(context: "startup")
         self.runtimeEnvironment = RuntimeEnvironment()
         loadTopics()
         recoverInterruptedSyncActions(context: "startup")
@@ -328,11 +328,29 @@ final class OrganizerStore {
     }
 
     func refreshCredentialBackedClients() {
-        let client = try? ClaudeClient()
+        let client = Self.makeClaudeClient(context: "credentials refresh")
         suggester = client.map { TopicSuggester(client: $0) }
         creatorThemeClassifier = client.map { CreatorThemeClassifier(client: $0) }
-        youtubeClient = try? YouTubeClient()
+        youtubeClient = Self.makeYouTubeClient(context: "credentials refresh")
         AppLogger.auth.info("Refreshed credential-backed service clients")
+    }
+
+    private static func makeClaudeClient(context: String) -> ClaudeClient? {
+        do {
+            return try ClaudeClient()
+        } catch {
+            AppLogger.auth.info("Claude client unavailable during \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private static func makeYouTubeClient(context: String) -> YouTubeClient? {
+        do {
+            return try YouTubeClient()
+        } catch {
+            AppLogger.auth.info("YouTube client unavailable during \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     func refreshExcludedCreators() {
