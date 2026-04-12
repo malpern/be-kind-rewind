@@ -694,7 +694,10 @@ enum CreatorPageBuilder {
     }
 
     private static func card(from archived: ArchivedChannelVideo) -> CreatorVideoCard {
-        let parsedViews = archived.viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
+        // Treat empty strings as nil so "—" fallback renders correctly
+        // and empty view counts don't produce blank metadata lines.
+        let viewCount = archived.viewCount?.isEmpty == true ? nil : archived.viewCount
+        let parsedViews = viewCount.map { CreatorAnalytics.parseViewCount($0) } ?? 0
         let ageDays = archived.publishedAt.map { CreatorAnalytics.parseAge($0) }
         let normalizedAge = (ageDays == .max) ? nil : ageDays
         let thumb = URL(string: "https://i.ytimg.com/vi/\(archived.videoId)/mqdefault.jpg")
@@ -704,7 +707,7 @@ enum CreatorPageBuilder {
             thumbnailUrl: thumb,
             topicName: nil,
             topicId: nil,
-            viewCountFormatted: archived.viewCount ?? "—",
+            viewCountFormatted: viewCount ?? "—",
             viewCountParsed: parsedViews,
             runtimeFormatted: archived.duration,
             publishedAt: archived.publishedAt,

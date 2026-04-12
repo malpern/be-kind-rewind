@@ -141,6 +141,14 @@ enum CreatorAnalytics {
     }
 
     static func parseAge(_ string: String) -> Int {
+        // Try ISO 8601 first — archive videos normalized by the Phase 3
+        // migration store timestamps like "2026-04-10T22:10:51+00:00"
+        // instead of relative strings. Without this path, those videos
+        // would always return .max (no date shown).
+        if let date = parseISO8601Date(string) {
+            return max(0, Int(Date().timeIntervalSince(date) / 86_400))
+        }
+
         if string == "today" {
             return 0
         }
