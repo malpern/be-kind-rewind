@@ -157,6 +157,18 @@ final class OrganizerStore {
     private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
     private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]
 
+    /// How many times each video has been shown "above the fold" in Watch.
+    /// Incremented after each `rebuildWatchPools` for the top 12 ranked
+    /// candidates. Used as a negative ranking signal at rerank time so
+    /// repeatedly-surfaced videos gradually sink and new content rises.
+    /// Persisted to UserDefaults so the signal survives app restarts.
+    private(set) var watchImpressionCounts: [String: Int] = {
+        guard let data = UserDefaults.standard.data(forKey: "watchImpressionCounts"),
+              let decoded = try? JSONDecoder().decode([String: Int].self, from: data)
+        else { return [:] }
+        return decoded
+    }()
+
     // Cached flat video map — rebuilt on loadTopics()
     var videoMap: [String: VideoViewModel] = [:]
     var videoTopicMap: [String: Int64] = [:]
@@ -1082,6 +1094,21 @@ final class OrganizerStore {
             topics.flatMap { assigned[$0.id] ?? [] },
             store: self
         )
+
+        // Track impressions for the top 12 "above the fold" candidates.
+        // Each appearance increments the counter, which feeds back into
+        // the reranking penalty on the next rebuild. Prune entries for
+        // videos no longer in the pool to prevent unbounded growth.
+        let aboveTheFold = rankedWatchPool.prefix(12)
+        for video in aboveTheFold {
+            watchImpressionCounts[video.videoId, default: 0] += 1
+        }
+        let activeIds = Set(rankedWatchPool.map(\.videoId))
+        watchImpressionCounts = watchImpressionCounts.filter { activeIds.contains($0.key) }
+        if let data = try? JSONEncoder().encode(watchImpressionCounts) {
+            UserDefaults.standard.set(data, forKey: "watchImpressionCounts")
+        }
+
         watchPoolVersion &+= 1
         let duration = startedAt.duration(to: .now)
         AppLogger.discovery.info(

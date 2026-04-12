@@ -780,7 +780,8 @@ enum CandidateDiscoveryCoordinator {
             let repeatPenalty = creatorRepeatPenalty(for: video, currentCount: creatorCounts[creatorKey] ?? 0)
             let pinnedBoost: Double = (video.channelId.map { favoriteIds.contains($0) } ?? false) ? favoriteBoost : 0
             let recencyBoost = recencyBoostForReranking(publishedAt: video.publishedAt)
-            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost + recencyBoost
+            let impressionPenalty = impressionPenaltyForReranking(videoId: video.videoId, store: store)
+            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost + recencyBoost - impressionPenalty
             scored.append((video, adjusted))
             creatorCounts[creatorKey, default: 0] += 1
         }
@@ -873,6 +874,18 @@ enum CandidateDiscoveryCoordinator {
         case ...90:  return 30     // last quarter
         default:     return 0      // older
         }
+    }
+
+    /// Penalty based on how many times this video has appeared "above the
+    /// fold" in Watch. Each impression subtracts 40 points, capped at 400.
+    /// After 10 impressions the video is strongly deprioritized but not
+    /// hidden — the user can still find it by scrolling. The impression
+    /// count persists across app restarts via UserDefaults and is pruned
+    /// to only active pool members on each rebuild.
+    private static func impressionPenaltyForReranking(videoId: String, store: OrganizerStore) -> Double {
+        let count = store.watchImpressionCounts[videoId] ?? 0
+        guard count > 0 else { return 0 }
+        return min(Double(count) * 40, 400)
     }
 
     private static func appSeenPenalty(for video: CandidateVideoViewModel, store: OrganizerStore) -> Double {
