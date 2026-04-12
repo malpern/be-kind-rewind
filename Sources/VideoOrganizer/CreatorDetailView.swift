@@ -2176,17 +2176,12 @@ struct CreatorDetailView: View {
         if !entries.isEmpty, let scope = currentLeaderboardScope {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("Top creators in this niche")
+                    Text("\(scope.creatorCount) Creators in \(scope.topicName)")
                         .font(.title3.weight(.semibold))
                     Spacer()
                     leaderboardScopePicker
                     leaderboardMetricPicker
                 }
-
-                Text("\(scope.creatorCount) creators publish \(scope.topicName) videos in your library — ranked by \(metricDescription)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 2)
 
                 VStack(spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
