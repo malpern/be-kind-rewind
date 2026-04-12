@@ -128,6 +128,70 @@ final class YouTubeAuthController {
     }()
 }
 
+/// Extracted OAuth callback URL parser. Separated from the loopback
+/// receiver so the parsing logic can be tested without spinning up a
+/// real HTTP server.
+enum OAuthCallbackParser {
+    static func parse(
+        _ request: String,
+        expectedPath: String,
+        expectedState: String?,
+        port: UInt16 = 8765
+    ) -> Result<String, Error> {
+        guard let requestLine = request.split(separator: "\r\n", maxSplits: 1).first else {
+            return .failure(NSError(domain: "YouTubeOAuthController", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Received an invalid OAuth callback request."
+            ]))
+        }
+
+        let components = requestLine.split(separator: " ")
+        guard components.count >= 2 else {
+            return .failure(NSError(domain: "YouTubeOAuthController", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Received a malformed OAuth callback request."
+            ]))
+        }
+
+        let target = String(components[1])
+        guard let url = URL(string: "http://127.0.0.1:\(port)\(target)"),
+              url.path == expectedPath,
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
+            return .failure(NSError(domain: "YouTubeOAuthController", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "Received an unexpected OAuth callback path."
+            ]))
+        }
+
+        let code = items.first(where: { $0.name == "code" })?.value
+        let returnedState = items.first(where: { $0.name == "state" })?.value
+        let error = items.first(where: { $0.name == "error" })?.value
+
+        if let error {
+            return .failure(NSError(domain: "YouTubeOAuthController", code: 6, userInfo: [
+                NSLocalizedDescriptionKey: "OAuth authorization failed: \(error)"
+            ]))
+        }
+
+        guard let code, !code.isEmpty else {
+            return .failure(NSError(domain: "YouTubeOAuthController", code: 7, userInfo: [
+                NSLocalizedDescriptionKey: "OAuth callback did not include an authorization code."
+            ]))
+        }
+
+        guard let returnedState, !returnedState.isEmpty else {
+            return .failure(NSError(domain: "YouTubeOAuthController", code: 8, userInfo: [
+                NSLocalizedDescriptionKey: "OAuth callback did not include a state parameter."
+            ]))
+        }
+
+        if let expectedState, returnedState != expectedState {
+            return .failure(NSError(domain: "YouTubeOAuthController", code: 9, userInfo: [
+                NSLocalizedDescriptionKey: "OAuth callback state did not match the original request."
+            ]))
+        }
+
+        return .success(code)
+    }
+}
+
 private actor OAuthLoopbackReceiverState {
     private var result: Result<String, Error>?
 
@@ -232,57 +296,7 @@ private final class OAuthLoopbackReceiver: @unchecked Sendable {
     }
 
     private func parseRequest(_ request: String) -> Result<String, Error> {
-        guard let requestLine = request.split(separator: "\r\n", maxSplits: 1).first else {
-            return .failure(NSError(domain: "YouTubeOAuthController", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "Received an invalid OAuth callback request."
-            ]))
-        }
-
-        let components = requestLine.split(separator: " ")
-        guard components.count >= 2 else {
-            return .failure(NSError(domain: "YouTubeOAuthController", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: "Received a malformed OAuth callback request."
-            ]))
-        }
-
-        let target = String(components[1])
-        guard let url = URL(string: "http://127.0.0.1:\(port)\(target)"),
-              url.path == path,
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else {
-            return .failure(NSError(domain: "YouTubeOAuthController", code: 5, userInfo: [
-                NSLocalizedDescriptionKey: "Received an unexpected OAuth callback path."
-            ]))
-        }
-
-        let code = items.first(where: { $0.name == "code" })?.value
-        let returnedState = items.first(where: { $0.name == "state" })?.value
-        let error = items.first(where: { $0.name == "error" })?.value
-
-        if let error {
-            return .failure(NSError(domain: "YouTubeOAuthController", code: 6, userInfo: [
-                NSLocalizedDescriptionKey: "OAuth authorization failed: \(error)"
-            ]))
-        }
-
-        guard let code, !code.isEmpty else {
-            return .failure(NSError(domain: "YouTubeOAuthController", code: 7, userInfo: [
-                NSLocalizedDescriptionKey: "OAuth callback did not include an authorization code."
-            ]))
-        }
-
-        guard let returnedState, !returnedState.isEmpty else {
-            return .failure(NSError(domain: "YouTubeOAuthController", code: 8, userInfo: [
-                NSLocalizedDescriptionKey: "OAuth callback did not include a state parameter."
-            ]))
-        }
-
-        if let expectedState, returnedState != expectedState {
-            return .failure(NSError(domain: "YouTubeOAuthController", code: 9, userInfo: [
-                NSLocalizedDescriptionKey: "OAuth callback state did not match the original request."
-            ]))
-        }
-
-        return .success(code)
+        OAuthCallbackParser.parse(request, expectedPath: path, expectedState: expectedState, port: port)
     }
 
     private func makeHTTPResponse(for result: Result<String, Error>) -> String {
