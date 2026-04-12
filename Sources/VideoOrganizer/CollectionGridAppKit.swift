@@ -460,38 +460,58 @@ final class ClickableCollectionView: NSCollectionView {
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
-        if modifiers.isEmpty,
-           key == "l" {
+
+        // Vim navigation: hjkl → move selection left/down/up/right.
+        // Uses NSResponder's move* methods which NSCollectionView
+        // implements — they handle the grid layout correctly (j/k
+        // move vertically across rows, h/l move within a row).
+        if modifiers.isEmpty {
+            switch key {
+            case "h": moveLeft(nil);  return
+            case "j": moveDown(nil);  return
+            case "k": moveUp(nil);    return
+            case "l": moveRight(nil); return
+            default: break
+            }
+        }
+
+        // Space → open selected video on YouTube (same as Enter).
+        // The most natural "do the thing" key for keyboard-driven
+        // browsing. Quick Look on macOS also uses space for preview.
+        if modifiers.isEmpty, event.keyCode == 49 {
+            onOpenSelectedShortcut?()
+            return
+        }
+
+        // w → save to Watch Later (was "l" before vim keys took it)
+        if modifiers.isEmpty, key == "w" {
             onSaveToWatchLaterShortcut?()
             return
         }
-        if modifiers.isEmpty,
-           key == "p" {
+        if modifiers.isEmpty, key == "p" {
             onSaveToPlaylistShortcut?()
             return
         }
-        if modifiers == [.shift],
-           key == "p" {
+        if modifiers == [.shift], key == "p" {
             onMoveToPlaylistShortcut?()
             return
         }
-        if modifiers.isEmpty,
-           key == "d" {
+        if modifiers.isEmpty, key == "d" {
             onDismissShortcut?()
             return
         }
-        if modifiers.isEmpty,
-           key == "n" {
+        if modifiers.isEmpty, key == "n" {
             onNotInterestedShortcut?()
             return
         }
+        // Enter / Return → open on YouTube
         if modifiers.isEmpty,
            event.keyCode == 36 || event.keyCode == 76 {
             onOpenSelectedShortcut?()
             return
         }
-        if modifiers.isEmpty,
-           event.keyCode == 53 {
+        // Escape → clear selection
+        if modifiers.isEmpty, event.keyCode == 53 {
             onClearSelectionShortcut?()
             return
         }
