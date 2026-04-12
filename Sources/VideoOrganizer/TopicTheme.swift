@@ -7,19 +7,146 @@ enum TopicTheme {
         let color: Color
     }
 
+    /// Short display names for sidebar topic labels. Targets ≤22 characters
+    /// so labels render single-line in the 280pt sidebar. Keys are the exact
+    /// topic names stored in the SQLite topics table.
     private static let displayNameOverrides: [String: String] = [
+        // Mechanical Keyboards
         "Keyboard Reviews & Comparisons": "Keyboard Reviews",
         "DIY Builds & Custom Projects": "DIY Keyboard Builds",
         "Keyboard History & Culture": "Keyboard Culture",
-        "Ergonomic & Split Keyboards": "Ergo & Split Keyboards",
+        "Ergonomic & Split Keyboards": "Ergo + Split Kbds",
         "Switches & Keycaps": "Switches + Keycaps",
         "Firmware & Software Setup": "Firmware + Setup",
         "Keyboard Layouts & Techniques": "Layouts + Techniques",
-        "Tech, Gadgets & Digital Tools": "Tech + Digital Tools",
-        "Programming Languages, CS Fundamentals & Algorithms": "Programming + CS",
+        "Soldering & Assembly Techniques": "Soldering + Assembly",
+
+        // AI + ML
+        "AI Agents, MCP & Automation Frameworks": "AI Agents + MCP",
+        "AI Coding Tools: Cursor, Vibe Coding & IDEs": "AI Coding Tools",
+        "AI Coding Tool Comparisons": "AI Tool Comparisons",
+        "AI, ML & On-Device Intelligence": "AI + On-Device ML",
         "AI Models, Research & Industry Trends": "AI Models + Research",
+        "AI Career & Future of Work": "AI + Future of Work",
+        "Software Engineering with AI": "Software + AI",
+
+        // Claude + Anthropic
+        "Claude Code & Anthropic Tools": "Claude Code",
+        "Claude Models & Anthropic News": "Claude Models",
+        "OpenClaw & Clawdbot Deep Dives": "OpenClaw Deep Dives",
+
+        // MCP + Agents
+        "Plugins, MCPs & Integrations": "Plugins + MCPs",
+        "Agent Design & Architecture": "Agent Architecture",
+        "Protocols & Emerging Standards": "Protocols + Standards",
+        "MCP Explained & Tutorials": "MCP Explained",
+
+        // Programming + CS
+        "Programming Languages, CS Fundamentals & Software Engineering": "CS + Software Eng",
+        "Programming Languages, CS Fundamentals & Algorithms": "Programming + CS",
+        "Programming Languages & Paradigms": "Languages + Paradigms",
+        "Algorithms & Data Structures": "Algorithms + DS",
+        "Software Engineering Practices": "Software Engineering",
+        "Fullstack Projects & Tutorials": "Fullstack Projects",
+        "Frontend Frameworks & Libraries": "Frontend Frameworks",
+
+        // Apple + Swift
+        "macOS & Apple Development": "macOS + Apple Dev",
+        "macOS Tips & Productivity": "macOS Tips",
+        "iOS App Architecture & Patterns": "iOS Architecture",
+        "Swift Language & Algorithms": "Swift + Algorithms",
+        "SwiftUI Fundamentals & Tutorials": "SwiftUI Fundamentals",
+        "Xcode & Developer Tools": "Xcode + Dev Tools",
+
+        // Terminal + Dev Tools
+        "Neovim Configuration & Plugins": "Neovim Config",
+        "Tmux & Terminal Multiplexers": "Tmux + Multiplexers",
+        "Window Management & Customization": "Window Management",
+        "Terminal Emulators & Tools": "Terminal Emulators",
+        "Developer & Power User Tools": "Dev Tools",
+        "Coding & Developer Productivity": "Coding Productivity",
+
+        // Electronics + Embedded
+        "Raspberry Pi & Single Board Computers": "Raspberry Pi + SBCs",
+        "Microcontrollers & Development Boards": "Microcontrollers",
+        "Embedded Programming Languages & RTOS": "Embedded + RTOS",
+        "Communication Protocols & Interfaces": "Comm Protocols",
+        "Electronics Fundamentals & Theory": "Electronics Theory",
+        "Prototyping & Breadboarding": "Prototyping",
+        "Components & Test Equipment": "Components + Test",
+
+        // Smart Home
+        "Smart Home Hardware Reviews": "Smart Home Hardware",
+        "Home Assistant & Platforms": "Home Assistant",
+        "Control Systems & Integrations": "Control Systems",
+        "Network & Dashboard Setup": "Network + Dashboards",
+
+        // 3D Printing
+        "Printer Reviews & Comparisons": "Printer Reviews",
+        "Print Finishing & Techniques": "Print Finishing",
+        "Design & Modeling Software": "Design Software",
+
+        // Web
+        "Web Industry News & Opinions": "Web Industry News",
+        "Web Scraping & Automation": "Web Scraping",
+
+        // Retro + History
+        "Operating Systems & Software History": "OS History",
+        "Reverse Engineering & Advanced Topics": "Reverse Engineering",
+        "Vintage Computer Events & Culture": "Vintage Computing",
+        "6502 & Retro Programming": "6502 Programming",
+        "Retro Hardware & Platforms": "Retro Hardware",
+        "Retro Tech & Tech History": "Retro Tech History",
+        "Ancient History & Archaeology": "Ancient History",
+
+        // Career + Productivity
+        "Career, Indie Dev & Community": "Career + Indie Dev",
+        "Career & Professional Growth": "Career Growth",
+        "Career, Culture & Industry": "Career + Culture",
+        "Productivity, Creativity & Learning": "Productivity",
+        "Automation Tools & Workflows": "Automation Tools",
+        "Workflows & Productivity Setups": "Workflow Setups",
+        "Learning Resources & Books": "Learning + Books",
+        "Learning & Skill Development": "Skill Development",
+        "Getting Started & Tutorials": "Getting Started",
+
+        // Tech + Gadgets
+        "Tech, Gadgets & Digital Tools": "Tech + Digital Tools",
+        "Hardware Reviews & Gadgets": "Hardware Reviews",
+        "Software, Apps & Browsers": "Software + Browsers",
+        "Networking, Data & Storage": "Networking + Storage",
+        "Home Office & Desk Setups": "Home Office Setup",
+        "Hackintosh & DIY Builds": "Hackintosh + DIY",
+
+        // Content + Media
+        "Cameras & Content Creation": "Cameras + Content",
+        "Content Creation & Storytelling": "Content Creation",
+        "Entertainment, Pop Culture & Media": "Pop Culture + Media",
+        "Pop Culture & Media Criticism": "Pop Culture Criticism",
+
+        // Geopolitics
         "Geopolitics, Current Events & Intelligence": "Geopolitics + Intel",
-        "macOS & Apple Development": "macOS + Apple Dev"
+        "Geopolitics & Current Events": "Geopolitics",
+        "Global Powers & Geopolitics": "Global Powers",
+        "US Politics & Domestic Policy": "US Politics",
+        "Intelligence & Covert Operations": "Intel + Covert Ops",
+
+        // Finance
+        "Retirement Planning & Lifestyle": "Retirement Planning",
+        "Investing & Wealth Building": "Investing",
+        "Healthcare & Tax Strategies": "Healthcare + Taxes",
+        "Entrepreneurship & Wealth": "Entrepreneurship",
+
+        // Personal
+        "Personal Growth & Life Philosophy": "Personal Growth",
+        "Health, Lifestyle & Human Interest": "Health + Lifestyle",
+        "Simplicity & Lifestyle Design": "Lifestyle Design",
+        "Mental Health & Psychology": "Mental Health",
+        "Relationships & Social Life": "Relationships",
+
+        // Maker
+        "Workshop Organization & Setup": "Workshop Setup",
+        "Specialty Projects & Builds": "Specialty Builds",
     ]
 
     private static let themes: [(keywords: [String], theme: Theme)] = [

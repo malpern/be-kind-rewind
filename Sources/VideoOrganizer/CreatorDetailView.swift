@@ -342,6 +342,15 @@ struct CreatorDetailView: View {
             // newly-cached themes and about paragraph appear.
             if wasClassifying && !isClassifying {
                 page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
+                // Auto-switch to theme grouping now that themes are available.
+                // Before classification, All Videos was showing a flat
+                // chronological grid (byTheme falls through to allVideosGrid
+                // when themes are empty). Now that themes exist, switch the
+                // sort to .byTheme so the grouped view appears without
+                // requiring the user to manually flip the sort menu.
+                if !page.themes.isEmpty {
+                    allVideosGridSort = .byTheme
+                }
             } else if !wasClassifying && isClassifying {
                 // Rebuild once at the start so the loading indicator appears.
                 page = CreatorPageBuilder.makePage(forChannelId: channelId, in: store)
@@ -463,9 +472,6 @@ struct CreatorDetailView: View {
     private var themesIdentityColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("Themes")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 if selectedThemeLabel != nil {
                     Button {
