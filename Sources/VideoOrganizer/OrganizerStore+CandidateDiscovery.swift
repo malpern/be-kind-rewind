@@ -866,7 +866,8 @@ enum CandidateDiscoveryCoordinator {
             let pinnedBoost: Double = (video.channelId.map { favoriteIds.contains($0) } ?? false) ? favoriteBoost : 0
             let recencyBoost = recencyBoostForReranking(publishedAt: video.publishedAt)
             let impressionPenalty = impressionPenaltyForReranking(videoId: video.videoId, store: store)
-            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost + recencyBoost - impressionPenalty
+            let durationPenalty = shortVideoPenalty(duration: video.duration)
+            let adjusted = video.score - seenPenalty - repeatPenalty + pinnedBoost + recencyBoost - impressionPenalty - durationPenalty
             scored.append((video, adjusted))
             creatorCounts[creatorKey, default: 0] += 1
         }
@@ -1042,6 +1043,40 @@ enum CandidateDiscoveryCoordinator {
         let count = store.watchImpressionCounts[videoId] ?? 0
         guard count > 0 else { return 0 }
         return min(Double(count) * 150, 1200)
+    }
+
+    /// Penalty for short videos (< 90 seconds). YouTube Shorts and
+    /// ultra-short clips are rarely what users want when curating a
+    /// Watch feed of substantive content. Videos with unknown/zero
+    /// duration also get penalized (often broken metadata from
+    /// livestreams or scraper failures).
+    ///
+    ///   0 seconds (missing/broken): -300
+    ///   1-30 seconds:               -250
+    ///   31-60 seconds:              -150
+    ///   61-90 seconds:              -75
+    ///   90+ seconds:                0
+    private static func shortVideoPenalty(duration: String?) -> Double {
+        let seconds = parseDurationSeconds(duration)
+        switch seconds {
+        case 0:      return 300   // missing or broken duration
+        case 1...30: return 250   // ultra-short clips
+        case 31...60: return 150  // YouTube Shorts territory
+        case 61...90: return 75   // borderline short
+        default:     return 0     // substantive content
+        }
+    }
+
+    /// Parse "HH:MM:SS", "MM:SS", or "SS" duration strings to total seconds.
+    private static func parseDurationSeconds(_ duration: String?) -> Int {
+        guard let duration, !duration.isEmpty else { return 0 }
+        let parts = duration.split(separator: ":").compactMap { Int($0) }
+        switch parts.count {
+        case 1: return parts[0]
+        case 2: return parts[0] * 60 + parts[1]
+        case 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        default: return 0
+        }
     }
 
     private static func appSeenPenalty(for video: CandidateVideoViewModel, store: OrganizerStore) -> Double {
