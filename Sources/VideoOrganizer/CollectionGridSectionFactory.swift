@@ -46,7 +46,8 @@ enum CollectionGridSectionFactory {
                                 candidate.videoId,
                                 candidateState: candidate.state,
                                 topicId: candidate.topicId,
-                                channelId: candidate.channelId
+                                channelId: candidate.channelId,
+                                candidateReason: candidate.secondaryText
                             ),
                             isPlaceholder: false,
                             placeholderMessage: candidate.secondaryText,

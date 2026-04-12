@@ -177,6 +177,8 @@ struct VideoInspector: View {
 
                     tagsSection(inspectedItem)
 
+                    provenanceSection(inspectedItem)
+
                     if !inspectedItem.playlists.isEmpty || inspectedItem.isWatchCandidate || inspectedItem.seenSummary != nil {
                         sectionDivider()
                     }
@@ -429,6 +431,39 @@ struct VideoInspector: View {
         }
     }
 
+    @ViewBuilder
+    private func provenanceSection(_ inspectedItem: InspectedVideoViewModel) -> some View {
+        let rows = candidateProvenanceRows(for: inspectedItem)
+        if inspectedItem.isWatchCandidate, inspectedItem.candidateReason != nil || !rows.isEmpty {
+            sectionDivider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Why This Appeared")
+                    .appSectionHeader()
+                    .foregroundStyle(.secondary)
+
+                if let reason = inspectedItem.candidateReason, !reason.isEmpty {
+                    Text(reason)
+                        .appSecondary()
+                        .lineSpacing(InspectorMetrics.paragraphLineSpacing)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                ForEach(rows, id: \.self) { row in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 2)
+                        Text(row)
+                            .appMetadata()
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
     private func metadataGrid(_ video: VideoViewModel) -> some View {
         let playlists = store.playlistsForVideo(video.videoId)
         return Grid(alignment: .leading, verticalSpacing: 8) {
@@ -469,6 +504,57 @@ struct VideoInspector: View {
             return "Imported history (\(latestSeenAt))"
         }
         return "Imported history"
+    }
+
+    private func candidateProvenanceRows(for inspectedItem: InspectedVideoViewModel) -> [String] {
+        var rows: [String] = []
+        var seen: Set<String> = []
+
+        for source in inspectedItem.candidateSources {
+            let label = candidateSourceLabel(for: source)
+            if seen.insert(label).inserted {
+                rows.append(label)
+            }
+        }
+
+        return rows
+    }
+
+    /// Human-readable label for a candidate source. Avoids raw IDs and
+    /// technical jargon — the user should understand WHY a video appeared
+    /// without needing to know the discovery pipeline internals.
+    private func candidateSourceLabel(for source: CandidateSourceRecord) -> String {
+        let ref = friendlySourceRef(source.sourceRef)
+        switch source.sourceKind {
+        case "channel_archive_recent":
+            return "From a creator you follow"
+        case "playlist_adjacent_recent":
+            return "Related creator via \(ref)"
+        case "search_query_recent":
+            return "Matched search: \"\(ref)\""
+        case "browser_related_signed_in":
+            return "YouTube recommended from \(ref)"
+        default:
+            return ref
+        }
+    }
+
+    /// Cleans up raw source references for display. Strips channel IDs
+    /// (UC...), truncates long titles, and falls back to a sensible
+    /// default for empty/unknown values.
+    private func friendlySourceRef(_ ref: String) -> String {
+        let trimmed = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "your library" }
+        // Strip raw YouTube channel IDs (UC + 22 chars) — not useful to show
+        if trimmed.hasPrefix("UC") && trimmed.count >= 24 && !trimmed.contains(" ") {
+            // Try to resolve from the store's channel cache
+            if let channel = store.knownChannelsById[trimmed] {
+                return channel.name
+            }
+            return "a related creator"
+        }
+        if trimmed.count <= 36 { return trimmed }
+        return String(trimmed.prefix(33)) + "…"
     }
 
     @ViewBuilder

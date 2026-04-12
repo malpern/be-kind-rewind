@@ -156,6 +156,7 @@ final class OrganizerStore {
     private(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
     private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
     private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]
+    private(set) var candidateSourcesByTopic: [Int64: [String: [CandidateSourceRecord]]] = [:]
 
     /// How many times each video has been shown "above the fold" in Watch.
     /// Incremented after each `rebuildWatchPools` for the top 12 ranked
@@ -610,7 +611,9 @@ final class OrganizerStore {
                 video: video,
                 playlists: playlistsForVideo(video.videoId),
                 isWatchCandidate: false,
-                seenSummary: seenSummary(for: video.videoId)
+                seenSummary: seenSummary(for: video.videoId),
+                candidateReason: nil,
+                candidateSources: []
             )
         }
 
@@ -619,7 +622,9 @@ final class OrganizerStore {
                 video: VideoViewModel(from: candidate),
                 playlists: playlistsForVideo(candidate.videoId),
                 isWatchCandidate: true,
-                seenSummary: seenSummary(for: candidate.videoId)
+                seenSummary: seenSummary(for: candidate.videoId),
+                candidateReason: candidate.secondaryText,
+                candidateSources: candidateSources(topicId: candidate.topicId, videoId: candidate.videoId)
             )
         }
 
@@ -685,7 +690,7 @@ final class OrganizerStore {
         playlistsByVideoId[videoId] ?? []
     }
 
-    func badgeTagForVideo(_ videoId: String, candidateState: String? = nil, topicId: Int64? = nil, channelId: String? = nil) -> String? {
+    func badgeTagForVideo(_ videoId: String, candidateState: String? = nil, topicId: Int64? = nil, channelId: String? = nil, candidateReason: String? = nil) -> String? {
         let playlists = playlistsByVideoId[videoId] ?? []
         if playlists.contains(where: { $0.playlistId == "WL" }) {
             return "Watch Later"
@@ -695,6 +700,20 @@ final class OrganizerStore {
         }
         if let topicId, let channelId, !channelId.isEmpty, isNewCreatorInTopic(channelId, topicId: topicId) {
             return "New Creator"
+        }
+        // Provenance badge: when no higher-priority badge applies, show a
+        // subtle indicator of HOW this video was discovered. Helps the user
+        // build intuition about the Watch pipeline at a glance.
+        if let reason = candidateReason?.lowercased() {
+            if reason.contains("search match") || reason.contains("matched a topic search") {
+                return "Search"
+            }
+            if reason.contains("adjacent") || reason.contains("related creator") {
+                return "Related"
+            }
+            if reason.contains("signed-in related") {
+                return "Recommended"
+            }
         }
         return nil
     }
@@ -1163,6 +1182,16 @@ final class OrganizerStore {
             }
             return (topic.id, candidates.map(CandidateVideoViewModel.init(from:)))
         })
+        candidateSourcesByTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
+            let sources: [String: [CandidateSourceRecord]]
+            do {
+                sources = try store.candidateSourcesForTopic(id: topic.id)
+            } catch {
+                AppLogger.discovery.error("Failed to load candidate sources for topic \(topic.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                sources = [:]
+            }
+            return (topic.id, sources)
+        })
     }
 
     func reloadStoredCandidateCache(for topicId: Int64) {
@@ -1174,6 +1203,16 @@ final class OrganizerStore {
             candidates = []
         }
         storedCandidateVideosByTopic[topicId] = candidates.map(CandidateVideoViewModel.init(from:))
+        do {
+            candidateSourcesByTopic[topicId] = try store.candidateSourcesForTopic(id: topicId)
+        } catch {
+            AppLogger.discovery.error("Failed to reload candidate sources for topic \(topicId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            candidateSourcesByTopic[topicId] = [:]
+        }
+    }
+
+    func candidateSources(topicId: Int64, videoId: String) -> [CandidateSourceRecord] {
+        candidateSourcesByTopic[topicId]?[videoId] ?? []
     }
 
     func updateViewportContext(topicId: Int64?, subtopicId: Int64?, creatorSectionId: String?) {
