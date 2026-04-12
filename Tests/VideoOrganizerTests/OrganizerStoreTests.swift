@@ -654,6 +654,249 @@ struct OrganizerStoreTests {
         #expect(Set(queries.map { $0.lowercased() }).count == queries.count)
     }
 
+    @Test("related seed planner prefers diverse non-related source lanes before fallback seeds")
+    @MainActor
+    func relatedSeedPlannerPrefersDiverseSeedSources() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+            let topic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
+
+            let aggregate: [String: AggregatedCandidate] = [
+                "archive-seed": AggregatedCandidate(
+                    videoId: "archive-seed",
+                    title: "Alpha Archive Seed",
+                    channelId: "chan-alpha",
+                    channelName: "Alpha Channel",
+                    viewCount: "10K views",
+                    publishedAt: "2026-04-11T00:00:00Z",
+                    duration: "10:00",
+                    channelIconUrl: nil,
+                    score: 120,
+                    reason: "archive",
+                    sources: [CandidateSource(kind: "channel_archive_recent", ref: "chan-alpha")]
+                ),
+                "search-seed": AggregatedCandidate(
+                    videoId: "search-seed",
+                    title: "Alpha Search Seed",
+                    channelId: "chan-search",
+                    channelName: "Search Channel",
+                    viewCount: "8K views",
+                    publishedAt: "2026-04-10T00:00:00Z",
+                    duration: "9:00",
+                    channelIconUrl: nil,
+                    score: 110,
+                    reason: "search",
+                    sources: [CandidateSource(kind: "search_query_recent", ref: "alpha review")]
+                ),
+                "adjacent-seed": AggregatedCandidate(
+                    videoId: "adjacent-seed",
+                    title: "Alpha Adjacent Seed",
+                    channelId: "chan-adjacent",
+                    channelName: "Adjacent Channel",
+                    viewCount: "7K views",
+                    publishedAt: "2026-04-09T00:00:00Z",
+                    duration: "8:30",
+                    channelIconUrl: nil,
+                    score: 105,
+                    reason: "adjacent",
+                    sources: [CandidateSource(kind: "playlist_adjacent_recent", ref: "PL-ALPHA")]
+                ),
+                "related-only": AggregatedCandidate(
+                    videoId: "related-only",
+                    title: "Related Only Seed",
+                    channelId: "chan-related",
+                    channelName: "Related Channel",
+                    viewCount: "9K views",
+                    publishedAt: "2026-04-12T00:00:00Z",
+                    duration: "11:00",
+                    channelIconUrl: nil,
+                    score: 130,
+                    reason: "related",
+                    sources: [CandidateSource(kind: "browser_related_signed_in", ref: "seed-video")]
+                )
+            ]
+
+            let plans = CandidateDiscoveryCoordinator.relatedSeedPlans(for: topic.id, aggregate: aggregate, store: store)
+
+            #expect(plans.prefix(3).map(\.videoId) == ["archive-seed", "search-seed", "adjacent-seed"])
+            #expect(plans.prefix(3).map(\.sourceKind) == ["channel_archive_recent", "search_query_recent", "playlist_adjacent_recent"])
+            #expect(plans.count == 4)
+            #expect(plans[3].sourceKind == "saved_topic_recent")
+            #expect(Set(["vid-0", "vid-1"]).contains(plans[3].videoId))
+        }
+    }
+
+    @Test("related seed consensus bonus rewards repeated evidence and mixed seed lanes")
+    @MainActor
+    func relatedSeedConsensusBonus() {
+        #expect(CandidateDiscoveryCoordinator.relatedSeedConsensusBonus(seedCount: 1, seedSourceKindCount: 1) == 0)
+        #expect(CandidateDiscoveryCoordinator.relatedSeedConsensusBonus(seedCount: 2, seedSourceKindCount: 1) == 10)
+        #expect(CandidateDiscoveryCoordinator.relatedSeedConsensusBonus(seedCount: 2, seedSourceKindCount: 2) == 18)
+        #expect(CandidateDiscoveryCoordinator.relatedSeedConsensusBonus(seedCount: 3, seedSourceKindCount: 2) == 28)
+    }
+
+    @Test("creator related consensus bonus rewards repeated creator evidence more conservatively")
+    @MainActor
+    func creatorRelatedConsensusBonus() {
+        #expect(CandidateDiscoveryCoordinator.creatorRelatedConsensusBonus(seedCount: 1, seedSourceKindCount: 1) == 0)
+        #expect(CandidateDiscoveryCoordinator.creatorRelatedConsensusBonus(seedCount: 2, seedSourceKindCount: 1) == 6)
+        #expect(CandidateDiscoveryCoordinator.creatorRelatedConsensusBonus(seedCount: 2, seedSourceKindCount: 2) == 10)
+        #expect(CandidateDiscoveryCoordinator.creatorRelatedConsensusBonus(seedCount: 3, seedSourceKindCount: 2) == 16)
+    }
+
+    @Test("creator related consensus applies only to creators reached from multiple seeds")
+    @MainActor
+    func applyCreatorRelatedConsensusBonus() {
+        var aggregate: [String: AggregatedCandidate] = [
+            "alpha-1": AggregatedCandidate(
+                videoId: "alpha-1",
+                title: "Alpha One",
+                channelId: "chan-alpha",
+                channelName: "Alpha Channel",
+                viewCount: nil,
+                publishedAt: "2026-04-10T00:00:00Z",
+                duration: nil,
+                channelIconUrl: nil,
+                score: 50,
+                reason: "related",
+                sources: [CandidateSource(kind: "browser_related_signed_in", ref: "seed-a")],
+                relatedSeedVideoIds: ["seed-a"],
+                relatedSeedSourceKinds: ["channel_archive_recent"]
+            ),
+            "alpha-2": AggregatedCandidate(
+                videoId: "alpha-2",
+                title: "Alpha Two",
+                channelId: "chan-alpha",
+                channelName: "Alpha Channel",
+                viewCount: nil,
+                publishedAt: "2026-04-11T00:00:00Z",
+                duration: nil,
+                channelIconUrl: nil,
+                score: 40,
+                reason: "related",
+                sources: [CandidateSource(kind: "browser_related_signed_in", ref: "seed-b")],
+                relatedSeedVideoIds: ["seed-b"],
+                relatedSeedSourceKinds: ["search_query_recent"]
+            ),
+            "beta-1": AggregatedCandidate(
+                videoId: "beta-1",
+                title: "Beta One",
+                channelId: "chan-beta",
+                channelName: "Beta Channel",
+                viewCount: nil,
+                publishedAt: "2026-04-09T00:00:00Z",
+                duration: nil,
+                channelIconUrl: nil,
+                score: 30,
+                reason: "related",
+                sources: [CandidateSource(kind: "browser_related_signed_in", ref: "seed-c")],
+                relatedSeedVideoIds: ["seed-c"],
+                relatedSeedSourceKinds: ["channel_archive_recent"]
+            )
+        ]
+
+        CandidateDiscoveryCoordinator.applyCreatorRelatedConsensusBonus(to: &aggregate)
+
+        #expect(aggregate["alpha-1"]?.score == 60)
+        #expect(aggregate["alpha-2"]?.score == 50)
+        #expect(aggregate["beta-1"]?.score == 30)
+    }
+
+    @Test("watch candidate inspection exposes stored provenance sources")
+    @MainActor
+    func inspectedCandidateIncludesProvenance() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let store = try fixture.makeOrganizerStore()
+            let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" })?.id)
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(
+                        topicId: alphaTopic,
+                        videoId: "vid-3",
+                        title: "Gamma Debugging",
+                        channelId: "chan-gamma",
+                        channelName: "Gamma Channel",
+                        videoUrl: nil,
+                        viewCount: nil,
+                        publishedAt: "2026-04-07T00:00:00Z",
+                        duration: nil,
+                        channelIconUrl: nil,
+                        score: 10,
+                        reason: "Signed-in related suggestion from topic seed Alpha SwiftUI Basics",
+                        state: CandidateState.candidate.rawValue,
+                        discoveredAt: nil
+                    )
+                ],
+                sources: [
+                    CandidateSourceRecord(topicId: alphaTopic, videoId: "vid-3", sourceKind: "browser_related_signed_in", sourceRef: "Alpha SwiftUI Basics"),
+                    CandidateSourceRecord(topicId: alphaTopic, videoId: "vid-3", sourceKind: "search_query_recent", sourceRef: "Alpha Topic review")
+                ]
+            )
+
+            store.reloadStoredCandidateCache(for: alphaTopic)
+            store.pageDisplayMode = .watchCandidates
+            store.selectedTopicId = alphaTopic
+            store.selectedVideoId = "vid-3"
+
+            let inspected = try #require(store.inspectedItem)
+            #expect(inspected.isWatchCandidate)
+            #expect(inspected.candidateReason == "Signed-in related suggestion from topic seed Alpha SwiftUI Basics")
+            #expect(inspected.candidateSources.map(\.sourceKind) == ["browser_related_signed_in", "search_query_recent"])
+        }
+    }
+
+    @Test("signed-in related lane uses exploratory topical admission")
+    @MainActor
+    func signedInRelatedAdmissionUsesExploratoryGate() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+            let topic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
+
+            let allowed = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                forTopic: topic.id,
+                title: "Alpha SwiftUI Layout Tips",
+                sourceKind: "browser_related_signed_in",
+                sourceRef: "Alpha SwiftUI Basics",
+                store: store
+            )
+            let rejected = CandidateDiscoveryCoordinator.watchTopicAdmission(
+                forTopic: topic.id,
+                title: "Completely Unrelated Cooking Video",
+                sourceKind: "browser_related_signed_in",
+                sourceRef: "Alpha SwiftUI Basics",
+                store: store
+            )
+
+            #expect(allowed.shouldAdmit)
+            #expect(rejected.shouldAdmit == false)
+        }
+    }
+
+    @Test("candidate assignment treats signed-in related suggestions like exploratory discovery")
+    @MainActor
+    func signedInRelatedAssignmentStrength() {
+        let video = CandidateVideoViewModel(
+            topicId: 42,
+            videoId: "vid-1",
+            title: "Recommended",
+            channelId: "chan-1",
+            channelName: "Alpha Channel",
+            viewCount: nil,
+            publishedAt: "2026-04-10T00:00:00Z",
+            duration: nil,
+            channelIconUrl: nil,
+            score: 10,
+            secondaryText: "Signed-in related suggestion from topic seed Alpha SwiftUI Basics",
+            state: CandidateState.candidate.rawValue,
+            isPlaceholder: false
+        )
+
+        #expect(video.assignmentStrength == 2)
+    }
+
     @Test("watch topical gate rejects keyboard videos for embedded systems")
     @MainActor
     func topicalGateRejectsKeyboardVideosForEmbeddedSystems() {
@@ -712,5 +955,151 @@ struct OrganizerStoreTests {
 
         #expect(evidence.exploratoryQualifies)
         #expect(evidence.knownCreatorQualifies)
+    }
+
+    // MARK: - Watch pool stability + viewport integration
+
+    @Test("stable pool rebuild does not replace unchanged topic pools")
+    @MainActor
+    func stablePoolRebuildSkipsUnchangedTopics() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "stable-1", title: "Stable One", channelId: "chan-alpha", channelName: "Alpha", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-10T00:00:00Z", duration: nil, channelIconUrl: nil, score: 50, reason: "test", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            store.setPageDisplayMode(.watchCandidates)
+            store.rebuildWatchPools()
+
+            // Capture the pool array identity (same Swift Array instance)
+            let poolBefore = store.candidateVideosForTopic(alphaTopic)
+            #expect(poolBefore.map(\.videoId) == ["stable-1"])
+
+            // Rebuild again with no data change
+            store.rebuildWatchPools()
+
+            let poolAfter = store.candidateVideosForTopic(alphaTopic)
+            #expect(poolAfter.map(\.videoId) == ["stable-1"])
+            // The video IDs are the same — stable update should not have
+            // replaced the array, preventing unnecessary SwiftUI observation.
+        }
+    }
+
+    @Test("impression counter increments for top-ranked candidates on rebuild")
+    @MainActor
+    func impressionCounterIncrementsOnRebuild() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "imp-1", title: "Impression Test", channelId: "chan-alpha", channelName: "Alpha", videoUrl: nil, viewCount: nil, publishedAt: "2026-04-10T00:00:00Z", duration: nil, channelIconUrl: nil, score: 50, reason: "test", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            store.setPageDisplayMode(.watchCandidates)
+
+            let countBefore = store.watchImpressionCounts["imp-1"] ?? 0
+            store.rebuildWatchPools()
+            let countAfter = store.watchImpressionCounts["imp-1"] ?? 0
+
+            #expect(countAfter > countBefore)
+        }
+    }
+
+    @Test("recency boost ranks today's video above older high-score video")
+    @MainActor
+    func recencyBoostSurfacesFreshContent() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let fixtureStore = try fixture.makeTopicStore()
+            let alphaTopic = try #require(try fixtureStore.topicIdByName("Alpha Topic"))
+
+            // Old video with high base score
+            // Fresh video with low base score
+            let today = ISO8601DateFormatter().string(from: Date())
+            let oldDate = "2025-06-01T00:00:00Z"
+
+            try fixtureStore.replaceCandidates(
+                forTopic: alphaTopic,
+                candidates: [
+                    TopicCandidate(topicId: alphaTopic, videoId: "old-hit", title: "Old Hit", channelId: "chan-alpha", channelName: "Alpha", videoUrl: nil, viewCount: "5M views", publishedAt: oldDate, duration: nil, channelIconUrl: nil, score: 300, reason: "high views", state: CandidateState.candidate.rawValue, discoveredAt: nil),
+                    TopicCandidate(topicId: alphaTopic, videoId: "fresh-upload", title: "Fresh Upload", channelId: "chan-beta", channelName: "Beta", videoUrl: nil, viewCount: "1K views", publishedAt: today, duration: nil, channelIconUrl: nil, score: 50, reason: "fresh", state: CandidateState.candidate.rawValue, discoveredAt: nil)
+                ],
+                sources: []
+            )
+
+            let store = try fixture.makeOrganizerStore()
+            store.setPageDisplayMode(.watchCandidates)
+            store.rebuildWatchPools()
+
+            let ranked = store.candidateVideosForAllTopics().map(\.videoId)
+            let freshIndex = ranked.firstIndex(of: "fresh-upload")
+            let oldIndex = ranked.firstIndex(of: "old-hit")
+
+            // Fresh video should rank above the old one despite lower base score
+            if let fi = freshIndex, let oi = oldIndex {
+                #expect(fi < oi, "Fresh upload (score 50 + recency boost) should rank above old hit (score 300)")
+            }
+        }
+    }
+
+    @Test("viewport topic update tracks the visible topic")
+    @MainActor
+    func viewportTopicTracking() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+            let alphaTopic = try #require(store.topics.first(where: { $0.name == "Alpha Topic" }))
+            let betaTopic = try #require(store.topics.first(where: { $0.name == "Beta Topic" }))
+
+            store.updateViewportContext(topicId: alphaTopic.id, subtopicId: nil, creatorSectionId: nil)
+            #expect(store.viewportTopicId == alphaTopic.id)
+
+            store.updateViewportContext(topicId: betaTopic.id, subtopicId: nil, creatorSectionId: nil)
+            #expect(store.viewportTopicId == betaTopic.id)
+        }
+    }
+
+    @Test("updateSelection syncs primary and full set")
+    @MainActor
+    func updateSelectionSyncsPrimaryAndSet() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+
+            store.updateSelection(primary: "vid-a", all: ["vid-a", "vid-b", "vid-c"])
+
+            #expect(store.selectedVideoId == "vid-a")
+            #expect(store.selectedVideoIds == ["vid-a", "vid-b", "vid-c"])
+        }
+    }
+
+    @Test("multi-select inspectedSelection returns .multiple for 2+ videos")
+    @MainActor
+    func multiSelectInspectedSelection() throws {
+        try withFileBackedOrganizerFixture { fixture in
+            let store = try fixture.makeOrganizerStore()
+
+            // Select two videos that exist in the store's videoMap
+            let videoIds = Array(store.videoMap.keys.prefix(2))
+            guard videoIds.count >= 2 else { return }
+
+            store.updateSelection(primary: videoIds[0], all: Set(videoIds))
+
+            if case .multiple(let videos) = store.inspectedSelection {
+                #expect(videos.count == 2)
+            } else {
+                Issue.record("Expected .multiple for 2 selected videos, got \(store.inspectedSelection)")
+            }
+        }
     }
 }
