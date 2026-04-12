@@ -1060,26 +1060,27 @@ enum CandidateDiscoveryCoordinator {
     }
 
     /// Penalty for short videos (< 2 minutes). YouTube Shorts and
-    /// ultra-short clips are rarely what users want when curating a
-    /// Watch feed of substantive content. Videos with unknown/zero
-    /// duration also get penalized heavily (often broken metadata
-    /// from livestreams or scraper failures).
+    /// ultra-short clips should effectively never rank above
+    /// substantive content. The values are intentionally large
+    /// enough to overcome any recency boost (+1000 max) so that
+    /// a 30-second video published today still ranks below a
+    /// 10-minute video from last week.
     ///
-    ///   0 seconds (missing/broken): -500
-    ///   1-30 seconds:               -400
-    ///   31-60 seconds:              -300
-    ///   61-90 seconds:              -200
-    ///   91-120 seconds:             -100
+    ///   0 seconds (missing/broken): -1500
+    ///   1-30 seconds:               -1200
+    ///   31-60 seconds:              -1000
+    ///   61-90 seconds:              -800
+    ///   91-120 seconds:             -500
     ///   120+ seconds (2+ min):      0
     private static func shortVideoPenalty(duration: String?) -> Double {
         let seconds = parseDurationSeconds(duration)
         switch seconds {
-        case 0:       return 500   // missing or broken duration
-        case 1...30:  return 400   // ultra-short clips
-        case 31...60: return 300   // YouTube Shorts territory
-        case 61...90: return 200   // short
-        case 91...120: return 100  // borderline
-        default:      return 0    // substantive content (2+ minutes)
+        case 0:        return 1500  // missing or broken duration
+        case 1...30:   return 1200  // ultra-short clips
+        case 31...60:  return 1000  // YouTube Shorts territory
+        case 61...90:  return 800   // short
+        case 91...120: return 500   // borderline
+        default:       return 0     // substantive content (2+ minutes)
         }
     }
 
