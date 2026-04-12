@@ -2346,15 +2346,10 @@ struct CreatorDetailView: View {
 
                 Spacer(minLength: 0)
 
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(metricValueText(for: entry))
-                        .font(.body.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.primary)
-                        .contentTransition(.numericText())
-                    Text(metricUnitText)
-                        .font(.subheadline)
-                        .foregroundStyle(.tertiary)
-                }
+                Text(metricValueText(for: entry))
+                    .font(.body.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
 
                 if !entry.isPageCreator {
                     Image(systemName: "chevron.right")
