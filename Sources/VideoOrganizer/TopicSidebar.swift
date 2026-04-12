@@ -383,11 +383,16 @@ struct TopicSidebar: View {
     /// nothing is happening.
     @ViewBuilder
     private var statusFooter: some View {
+        let activeDownloads = VideoDownloadManager.shared.statuses.values.filter {
+            if case .downloading = $0 { return true }
+            return false
+        }.count
         let hasContent = store.selectedPlaylistTitle != nil
             || store.isLoading
             || store.youtubeQuotaExhausted
             || (store.scrapeHealth?.state == .degraded || store.scrapeHealth?.state == .blocked)
             || thumbnailCache.isDownloading
+            || activeDownloads > 0
 
         if hasContent {
             HStack(spacing: 8) {
@@ -431,6 +436,18 @@ struct TopicSidebar: View {
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityLabel("Downloading thumbnails: \(thumbnailCache.downloadedCount) of \(thumbnailCache.totalCount)")
+                }
+
+                if activeDownloads > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.tint)
+                        Text("\(activeDownloads) downloading")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .help("Video downloads in progress via yt-dlp")
                 }
             }
             .padding(.horizontal, 12)

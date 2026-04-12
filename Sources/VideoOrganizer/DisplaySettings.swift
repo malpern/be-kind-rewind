@@ -85,6 +85,7 @@ final class DisplaySettings {
     var toast = ActionToastState()
     var searchRequested = false
     var showQuickNavigator = false
+    var showKeyboardShortcuts = false
     var focusSidebarRequested = false
     var focusGridRequested = false
     var scrollToTopicRequested: Int64?

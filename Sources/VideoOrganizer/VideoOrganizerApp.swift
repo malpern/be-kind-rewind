@@ -55,6 +55,9 @@ struct VideoOrganizerApp: App {
                     showCredentialOnboarding = false
                 }
             }
+            .sheet(isPresented: $displaySettings.showKeyboardShortcuts) {
+                KeyboardShortcutSheet()
+            }
         }
         .defaultSize(width: 1200, height: 800)
         .defaultPosition(.center)
@@ -395,7 +398,7 @@ private struct AppMenuCommands: Commands {
             Button("Save to Watch Later") {
                 AppCommandBridge.post(AppCommandBridge.saveToWatchLater)
             }
-            .keyboardShortcut("l", modifiers: [])
+            .keyboardShortcut("w", modifiers: [])
 
             Button("Save to Playlist…") {
                 AppCommandBridge.post(AppCommandBridge.saveToPlaylist)
@@ -430,6 +433,13 @@ private struct AppMenuCommands: Commands {
                 AppCommandBridge.post(AppCommandBridge.clearSelection)
             }
             .keyboardShortcut(.escape, modifiers: [])
+        }
+
+        CommandGroup(replacing: .help) {
+            Button("Keyboard Shortcuts") {
+                displaySettings.showKeyboardShortcuts = true
+            }
+            .keyboardShortcut("/", modifiers: .command)
         }
     }
 

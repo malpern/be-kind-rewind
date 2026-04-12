@@ -160,7 +160,7 @@ enum TopicTheme {
         (["swift", "ios", "swiftui"], Theme(icon: "swift", color: .orange)),
         (["mac", "apple", "wwdc", "xcode"], Theme(icon: "desktopcomputer", color: .gray)),
         (["web", "frontend", "backend", "css", "figma"], Theme(icon: "globe", color: .cyan)),
-        (["embedded", "electronic", "pcb", "arduino", "raspberry", "esp32", "microcontroller", "fpga"], Theme(icon: "chip", color: .yellow)),
+        (["embedded", "electronic", "pcb", "arduino", "raspberry", "esp32", "microcontroller", "fpga"], Theme(icon: "memorychip", color: .yellow)),
         (["linux", "devops", "docker", "homelab"], Theme(icon: "server.rack", color: .teal)),
         (["retro", "vintage", "classic mac", "apple ii"], Theme(icon: "clock.arrow.trianglehead.counterclockwise.rotate.90", color: .brown)),
         (["3d print", "modeling software"], Theme(icon: "cube", color: .mint)),
