@@ -1,3 +1,29 @@
+// CreatorDetailView.swift
+//
+// Full-page creator profile pushed via NavigationStack from the grid.
+// Sections (⌘1–⌘8): Identity → What's New → Hits → All Videos →
+// Playlists → Leaderboard → Notes → Channel Info.
+//
+// The identity card hosts the avatar, name, bio (LLM-generated about
+// paragraph), stat tiles (Saved · Subscribers · Last upload), action
+// buttons ([Open on YouTube] [Share] [···]), channel links, and theme
+// capsules in a 320pt right column.
+//
+// All Videos supports three view modes (By Theme / Grid / Table) with
+// a sectioned sort menu (By theme / Date / Views / Length / A-Z /
+// Top outliers). The "By theme" sort renders theme-grouped section
+// headers from the LLM classification; saved videos get a badge.
+//
+// The page auto-loads the creator's archive on first visit, auto-
+// classifies themes when archive is populated, and auto-switches the
+// All Videos sort to "By theme" when classification completes.
+//
+// Data comes from CreatorPageBuilder.makePage(forChannelId:in:) which
+// produces a CreatorPageViewModel snapshot from the OrganizerStore.
+// The page model is rebuilt on channel switch (.task(id: channelId)),
+// on classification complete, on favorite/exclude changes, and on
+// archive load complete.
+
 import Charts
 import SwiftUI
 import TaggingKit

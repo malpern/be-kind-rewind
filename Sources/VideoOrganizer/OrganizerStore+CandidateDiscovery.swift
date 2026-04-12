@@ -1,3 +1,28 @@
+// OrganizerStore+CandidateDiscovery.swift
+//
+// Watch mode's candidate discovery, ranking, and pool management.
+//
+// Pipeline (runs on each Watch refresh cycle):
+//   1. For each topic, build channel plans (core creators + playlist-adjacent
+//      + exploratory search) via candidateChannelPlans / searchPlans
+//   2. Scrape recent uploads for each channel via DiscoveryFallbackService
+//   3. Score and accumulate candidates in accumulateCandidate (base score =
+//      freshness + recencyBonus + creatorAffinity + qualityBonus + sourceBonus)
+//   4. Persist scored candidates to topic_candidates SQLite table
+//   5. rebuildWatchPools → rerankWatchVideos applies runtime adjustments:
+//      - Recency boost (+1000 for today, decaying)
+//      - Impression penalty (-40 per above-the-fold showing)
+//      - Seen penalty (videos opened in-app)
+//      - Creator repeat penalty (prevents one creator dominating)
+//      - Favorite boost (+25 for pinned creators)
+//   6. assignWatchVideosToTopics dedupes cross-topic and builds per-topic pools
+//
+// Key types:
+//   CandidateVideoViewModel — view model for a single candidate card
+//   AggregatedCandidate — intermediate during scoring (accumulates multi-source)
+//   CandidateChannelPlan — which channels to scan for a topic
+//   CandidateSearchPlan — which search queries to run for a topic
+
 import Foundation
 import TaggingKit
 

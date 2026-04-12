@@ -1,3 +1,25 @@
+// VideoInspector.swift
+//
+// Right-hand inspector pane showing metadata, playlists, actions, and
+// creator details for the selected/hovered video. Dispatches on
+// InspectedSelection (empty / single / multiple) to render:
+//
+//   .empty     → "Select a video" placeholder
+//   .single    → full video inspector: thumbnail, title, channel row
+//               (with blue "Open Creator Page" button), metadata grid,
+//               tags, action buttons (Open on YouTube, Download for
+//               Offline), "More from channel" list, and watch-candidate
+//               actions when in Watch mode
+//   .multiple  → bulk-action surface: count, one-line summary, bulk
+//               save/dismiss buttons
+//
+// Hover always wins: when the user hovers a card, the inspector shows
+// that single video even if there's a multi-selection underneath.
+//
+// Also contains the creator inspector view (triggered by the channel-
+// filter navigation path) showing subscriber count, coverage stats,
+// and per-topic video breakdown.
+
 import SwiftUI
 import TaggingKit
 
