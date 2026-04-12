@@ -1128,15 +1128,15 @@ final class OrganizerStore {
         let assigned = CandidateDiscoveryCoordinator.assignWatchVideosToTopics(perTopic)
 
         // Stable update: only replace per-topic pools that actually changed.
-        // This prevents SwiftUI observation from firing for topics whose
-        // header/face-pile didn't change, which was causing visible churn
-        // in the topic header when unrelated topics refreshed in the
-        // background. Value comparison uses the video ID set as a cheap
-        // proxy — if the same videos are in the pool, skip the update.
+        // Compares the ORDERED video ID list (not just the set) so that
+        // reranking order changes (from impression penalty, recency decay,
+        // etc.) are correctly applied. The previous set-based comparison
+        // was too aggressive — it ignored order changes, causing stale
+        // rankings to persist across sessions.
         for (topicId, newPool) in assigned {
-            let oldIds = Set((watchPoolByTopic[topicId] ?? []).map(\.videoId))
-            let newIds = Set(newPool.map(\.videoId))
-            if oldIds != newIds {
+            let oldOrder = (watchPoolByTopic[topicId] ?? []).map(\.videoId)
+            let newOrder = newPool.map(\.videoId)
+            if oldOrder != newOrder {
                 watchPoolByTopic[topicId] = newPool
             }
         }
