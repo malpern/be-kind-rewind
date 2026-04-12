@@ -93,61 +93,9 @@ struct CollectionGridView: View {
 
     private func loadAndFilter() {
         let startedAt = ContinuousClock.now
-        let result = GridSectionBuilder.build(
-            context: GridSectionBuilder.Context(
-                topics: store.topics,
-                parsedQuery: store.parsedQuery,
-                selectedSubtopicId: store.selectedSubtopicId,
-                selectedTopicId: store.selectedTopicId,
-                selectedChannelId: store.selectedChannelId,
-                selectedPlaylistId: store.selectedPlaylistId,
-                sortOrder: displaySettings.sortOrder,
-                sortAscending: displaySettings.sortAscending,
-                channelCounts: store.channelCounts,
-                pageDisplayMode: store.pageDisplayMode,
-                watchPresentationMode: store.watchPresentationMode,
-                displayModeForTopic: { store.displayMode(for: $0) },
-                videosForTopic: { topicId, displayMode in
-                    videosForTopic(topicId, displayMode: displayMode)
-                },
-                videosForSubtopic: { subtopicId in
-                    mapVideos(store.videosForTopic(subtopicId))
-                },
-                allWatchVideos: {
-                    store.candidateVideosForAllTopics().map { candidate in
-                        VideoGridItemModel(
-                            id: candidate.videoId,
-                            topicId: candidate.topicId,
-                            title: candidate.title,
-                            channelName: candidate.channelName,
-                            topicName: store.topics.first(where: { $0.id == candidate.topicId })?.name,
-                            thumbnailUrl: candidate.thumbnailUrl,
-                            viewCount: candidate.viewCount,
-                            publishedAt: candidate.publishedAt,
-                            duration: candidate.duration,
-                            channelIconUrl: candidate.channelIconUrl.flatMap(URL.init(string:)),
-                            channelId: candidate.channelId,
-                            candidateScore: candidate.score,
-                            stateTag: store.badgeTagForVideo(
-                                candidate.videoId,
-                                candidateState: candidate.state,
-                                topicId: candidate.topicId,
-                                channelId: candidate.channelId
-                            ),
-                            isPlaceholder: false,
-                            placeholderMessage: candidate.secondaryText,
-                            channelIconData: candidate.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
-                        )
-                    }
-                },
-                videoIsInSelectedPlaylist: { store.videoIsInSelectedPlaylist($0) },
-                handleForChannelId: { channelId in
-                    store.topicChannels.values
-                        .lazy
-                        .flatMap { $0 }
-                        .first(where: { $0.channelId == channelId })?.handle
-                }
-            )
+        let result = CollectionGridSectionFactory.buildSections(
+            store: store,
+            displaySettings: displaySettings
         )
 
         let sectionsChanged = result.sections != sections
@@ -165,57 +113,6 @@ struct CollectionGridView: View {
         AppLogger.discovery.debug(
             "loadAndFilter mode=\(self.store.pageDisplayMode.rawValue, privacy: .public) watchMode=\(self.store.watchPresentationMode.rawValue, privacy: .public) sections=\(result.sections.count, privacy: .public) results=\(result.searchResultCount, privacy: .public) changed=\(sectionsChanged, privacy: .public) in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public)"
         )
-    }
-
-    private func mapVideos(_ viewModels: [VideoViewModel]) -> [VideoGridItemModel] {
-        viewModels.map { v in
-            VideoGridItemModel(
-                id: v.videoId, topicId: v.topicId, title: v.title, channelName: v.channelName,
-                topicName: store.topicNameForVideo(v.videoId),
-                thumbnailUrl: v.thumbnailUrl, viewCount: v.viewCount,
-                publishedAt: v.publishedAt, duration: v.duration,
-                channelIconUrl: v.channelIconUrl.flatMap { URL(string: $0) },
-                channelId: v.channelId,
-                candidateScore: nil,
-                stateTag: store.badgeTagForVideo(v.videoId),
-                isPlaceholder: false,
-                placeholderMessage: nil,
-                channelIconData: v.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
-            )
-        }
-    }
-
-    private func videosForTopic(_ topicId: Int64, displayMode: TopicDisplayMode) -> [VideoGridItemModel] {
-        switch displayMode {
-        case .saved:
-            return mapVideos(store.videosForTopic(topicId))
-        case .watchCandidates:
-            return store.candidateVideosForTopic(topicId).map {
-                VideoGridItemModel(
-                    id: $0.videoId,
-                    topicId: $0.topicId,
-                    title: $0.title,
-                    channelName: $0.channelName,
-                    topicName: store.topics.first(where: { $0.id == topicId })?.name,
-                    thumbnailUrl: $0.thumbnailUrl,
-                    viewCount: $0.viewCount,
-                    publishedAt: $0.publishedAt,
-                    duration: $0.duration,
-                    channelIconUrl: $0.channelIconUrl.flatMap(URL.init(string:)),
-                    channelId: $0.channelId,
-                    candidateScore: $0.score,
-                    stateTag: store.badgeTagForVideo(
-                        $0.videoId,
-                        candidateState: $0.state,
-                        topicId: $0.topicId,
-                        channelId: $0.channelId
-                    ),
-                    isPlaceholder: $0.isPlaceholder,
-                    placeholderMessage: $0.secondaryText,
-                    channelIconData: $0.channelId.flatMap { store.knownChannelsById[$0]?.iconData }
-                )
-            }
-        }
     }
 
 }
@@ -312,7 +209,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private var renderedContentWidth: CGFloat = 0
         private var isApplyingSelectionToCollectionView = false
         private var pendingFocusGridRequest = false
-        private var actionObservers: [NSObjectProtocol] = []
+        private let commandObservers = CollectionGridCommandObservers()
         private var scrollFeedbackUpdateScheduled = false
 
         var cacheDir: URL = URL(fileURLWithPath: "/tmp")
@@ -385,7 +282,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         func teardown() {
-            removeActionObservers()
+            commandObservers.removeAll()
             detachFromContainer()
         }
 
@@ -794,208 +691,24 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func headerHeight(for section: TopicSection) -> CGFloat {
-            if section.creatorName != nil {
-                return 56
-            }
-
-            let channels = headerChannels(for: section)
-            return channels.isEmpty ? 48 : 112
+            headerModelBuilder.headerHeight(for: section)
         }
 
         private func headerModel(for section: TopicSection, at sectionIndex: Int?) -> CollectionSectionHeaderModel {
-            let scrollProgress: Double
-            if section.creatorName != nil || isTopicMarkerInCreatorGrouping(section) {
-                scrollProgress = topicScrollProgress(forTopicId: section.topicId)
-            } else {
-                scrollProgress = sectionIndex.map(sectionScrollProgress(forSectionAt:)) ?? 0
-            }
+            headerModelBuilder.headerModel(for: section, at: sectionIndex)
+        }
 
-            if let creatorName = section.creatorName {
-                let iconData = section.creatorChannelId.flatMap { store?.knownChannelsById[$0]?.iconData }
-                return .creator(
-                    channelName: creatorName,
-                    channelIconUrl: section.channelIconUrl,
-                    channelIconData: iconData,
-                    channelUrl: section.creatorChannelUrl,
-                    count: section.videos.count,
-                    totalCount: section.totalCount,
-                    topicNames: section.topicNames,
-                    sectionId: section.id,
-                    scrollProgress: scrollProgress,
-                    highlightTerms: store?.parsedQuery.includeTerms ?? [],
-                    onInspect: { [weak store] in
-                        _ = store?.navigateToCreator(channelId: section.creatorChannelId, channelName: creatorName, preferredTopicId: section.topicId)
-                    }
-                )
-            }
-
-            let highlightTerms = store?.parsedQuery.includeTerms ?? []
-            let channels = headerChannels(for: section)
-            let selectedChannelId = store?.selectedChannelId
-            let watchCandidatesForSection = section.displayMode == .watchCandidates
-                ? (section.topicId == -1
-                    ? store?.recentCandidateVideosForAllTopics() ?? []
-                    : store?.recentStoredCandidateVideosForTopic(section.topicId) ?? [])
-                : []
-
-            // Each closure pulled into an explicitly-typed local binding so the
-            // compiler doesn't have to unify a 16-argument enum case in one
-            // pass — that triggers "expression too complex" errors when any
-            // single closure has implicit captures or uses [weak store].
-            let topicId = section.topicId
-            let displayMode = section.displayMode
-            let videoCount: (String) -> Int = { [weak store] channelId in
-                guard let store else { return 0 }
-                if displayMode == .watchCandidates {
-                    let channel = channels.first(where: { $0.channelId == channelId })
-                    return store.watchCandidateCountForChannel(
-                        channel?.channelId ?? channelId,
-                        channelName: channel?.name,
-                        inCandidates: watchCandidatesForSection
-                    )
+        private var headerModelBuilder: CollectionGridHeaderModelBuilder {
+            CollectionGridHeaderModelBuilder(
+                store: store,
+                renderedSections: renderedSections,
+                topicScrollProgress: { [weak self] topicId in
+                    self?.topicScrollProgress(forTopicId: topicId) ?? 0
+                },
+                sectionScrollProgress: { [weak self] sectionIndex in
+                    self?.sectionScrollProgress(forSectionAt: sectionIndex) ?? 0
                 }
-                return store.videoCountForChannel(channelId, inTopic: topicId)
-            }
-            let hasRecent: (String) -> Bool = { [weak store] channelId in
-                guard let store else { return false }
-                if displayMode == .watchCandidates {
-                    let channel = channels.first(where: { $0.channelId == channelId })
-                    return store.latestWatchCandidateDateForChannel(
-                        channel?.channelId ?? channelId,
-                        channelName: channel?.name,
-                        inCandidates: watchCandidatesForSection
-                    ) != nil
-                }
-                return store.channelHasRecentContent(channelId, inTopic: topicId)
-            }
-            let latestPublishedAt: (String) -> Date? = { [weak store] channelId in
-                guard let store else { return nil }
-                if displayMode == .watchCandidates {
-                    let channel = channels.first(where: { $0.channelId == channelId })
-                    return store.latestWatchCandidateDateForChannel(
-                        channel?.channelId ?? channelId,
-                        channelName: channel?.name,
-                        inCandidates: watchCandidatesForSection
-                    )
-                }
-                return self.latestSavedPublishedDateForChannel(channelId, topicId: topicId)
-            }
-            let themeLabels: (String) -> [String] = { [weak store] channelId in
-                guard let store else { return [] }
-                let themes = (try? store.store.creatorThemes(channelId: channelId)) ?? []
-                return themes
-                    .sorted { $0.videoIds.count > $1.videoIds.count }
-                    .map(\.label)
-            }
-            let subscriberCount: (String) -> String? = { channelId in
-                channels.first(where: { $0.channelId == channelId })?.subscriberCount
-            }
-            let onSelect: (String) -> Void = { [weak store] channelId in
-                guard let store else { return }
-                // Single-click toggles the filter. Click again clears it.
-                if store.selectedChannelId == channelId {
-                    store.selectedChannelId = nil
-                    store.inspectedCreatorName = nil
-                    store.selectedVideoId = nil
-                    return
-                }
-                let channel = channels.first(where: { $0.channelId == channelId })
-                if displayMode == .watchCandidates {
-                    _ = store.navigateToCreatorInWatch(channelId: channel?.channelId ?? channelId, channelName: channel?.name, preferredTopicId: topicId)
-                } else {
-                    _ = store.navigateToCreator(channelId: channelId, channelName: channel?.name, preferredTopicId: topicId)
-                }
-            }
-            let onOpenDetail: (String) -> Void = { [weak store] channelId in
-                store?.openCreatorDetail(channelId: channelId)
-            }
-
-            return CollectionSectionHeaderModel.topic(
-                name: section.topicName,
-                count: section.headerCountOverride ?? section.videos.count,
-                totalCount: section.totalCount,
-                topicId: section.topicId,
-                scrollProgress: scrollProgress,
-                highlightTerms: highlightTerms,
-                displayMode: section.displayMode,
-                channels: channels,
-                selectedChannelId: selectedChannelId,
-                videoCountForChannel: videoCount,
-                hasRecentContent: hasRecent,
-                latestPublishedAtForChannel: latestPublishedAt,
-                themeLabelsForChannel: themeLabels,
-                subscriberCountForChannel: subscriberCount,
-                onSelectChannel: onSelect,
-                onOpenCreatorDetail: onOpenDetail
             )
-        }
-
-        private func headerChannels(for section: TopicSection) -> [ChannelRecord] {
-            guard let store else { return [] }
-            if section.displayMode == .watchCandidates {
-                return watchChannels(for: section)
-            }
-            return store.channelsForTopic(section.topicId)
-        }
-
-        private func watchChannels(for section: TopicSection) -> [ChannelRecord] {
-            guard let store else { return [] }
-            let sourceVideos: [CandidateVideoViewModel]
-            if section.topicId == -1 {
-                sourceVideos = store.watchPoolForAllTopics(applyingChannelFilter: false)
-            } else {
-                sourceVideos = store.watchPoolForTopic(section.topicId, applyingChannelFilter: false)
-            }
-
-            var bestByChannelId: [String: ChannelRecord] = [:]
-            for video in sourceVideos where !video.isPlaceholder {
-                let channelId = if let channelId = video.channelId, !channelId.isEmpty {
-                    channelId
-                } else {
-                    "watch-\(video.channelName ?? "unknown")"
-                }
-                guard bestByChannelId[channelId] == nil else { continue }
-                if let resolved = store.resolvedChannelRecord(
-                    channelId: video.channelId,
-                    fallbackName: video.channelName ?? "Unknown Creator",
-                    fallbackIconURL: video.channelIconUrl
-                ) {
-                    bestByChannelId[channelId] = resolved
-                }
-            }
-
-            return Array(bestByChannelId.values)
-        }
-
-        private func latestSavedPublishedDateForChannel(_ channelId: String, topicId: Int64) -> Date? {
-            guard let store else { return nil }
-            return store.videosForTopicIncludingSubtopics(topicId)
-                .filter { $0.channelId == channelId }
-                .compactMap { video in
-                    guard let publishedAt = video.publishedAt else { return nil }
-                    return parsedPublishedDate(from: publishedAt)
-                }
-                .max()
-        }
-
-        private func effectiveChannelKey(for video: VideoGridItemModel) -> String {
-            if let channelId = video.channelId, !channelId.isEmpty {
-                return channelId
-            }
-            return "watch-\(video.channelName ?? "unknown")"
-        }
-
-        private func parsedPublishedDate(from publishedAt: String) -> Date? {
-            if let iso = CreatorAnalytics.parseISO8601Date(publishedAt) {
-                return iso
-            }
-            let ageDays = CreatorAnalytics.parseAge(publishedAt)
-            guard ageDays != .max else { return nil }
-            return Calendar.current.date(byAdding: .day, value: -ageDays, to: Date())
-        }
-
-        private func isTopicMarkerInCreatorGrouping(_ section: TopicSection) -> Bool {
-            section.creatorName == nil && renderedSections.contains { $0.topicId == section.topicId && $0.creatorName != nil }
         }
 
         private func topicScrollProgress(forTopicId topicId: Int64) -> Double {
@@ -1351,149 +1064,28 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
 
             let selectedItems = renderedSelectedVideoIds.compactMap(videoById)
             guard !selectedItems.isEmpty else { return nil }
-
-            let menu = NSMenu()
-            let selectionCount = selectedItems.count
             let allCandidates = selectedItems.allSatisfy { isCandidateVideo($0.id) }
             let allSaved = selectedItems.allSatisfy { !isCandidateVideo($0.id) }
-            let selectedVideoIds = selectedItems.map(\.id)
-            let selectedCreatorKeys = Set(selectedItems.compactMap { video -> String? in
-                guard let channelId = video.channelId, !channelId.isEmpty else { return nil }
-                return channelId
-            })
-            let singleSelectedCreator = selectedCreatorKeys.count == 1
-                ? selectedItems.first(where: { $0.channelId == selectedCreatorKeys.first })
-                : nil
-
-            let openTitle = selectionCount == 1 ? "Open on YouTube" : "Open \(selectionCount) on YouTube"
-            let openItem = NSMenuItem(title: openTitle, action: #selector(contextOpenOnYouTube(_:)), keyEquivalent: "\r")
-            openItem.target = self
-            menu.addItem(openItem)
-            let copyTitle = selectionCount == 1 ? "Copy Link" : "Copy \(selectionCount) Links"
-            let copyItem = NSMenuItem(title: copyTitle, action: #selector(contextCopyLinks(_:)), keyEquivalent: "c")
-            copyItem.keyEquivalentModifierMask = [.command]
-            copyItem.target = self
-            menu.addItem(copyItem)
-
-            if let store {
-                menu.addItem(.separator())
-                let saveToWatchLater = NSMenuItem(title: "Save to Watch Later", action: #selector(contextSaveToWatchLater(_:)), keyEquivalent: "")
-                saveToWatchLater.target = self
-                saveToWatchLater.keyEquivalent = "l"
-                let watchLaterMembershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
-                    if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == "WL" }) {
-                        count += 1
-                    }
-                }
-                if watchLaterMembershipCount == selectionCount {
-                    saveToWatchLater.state = .on
-                    saveToWatchLater.isEnabled = false
-                } else if watchLaterMembershipCount > 0 {
-                    saveToWatchLater.state = .mixed
-                    saveToWatchLater.isEnabled = true
-                } else {
-                    saveToWatchLater.state = .off
-                    saveToWatchLater.isEnabled = true
-                }
-                menu.addItem(saveToWatchLater)
-
-                let playlistsMenu = buildSaveToPlaylistMenu(selectedVideoIds: selectedVideoIds, selectionCount: selectionCount)
-                let saveToPlaylist = NSMenuItem(title: "Save to Playlist", action: nil, keyEquivalent: "")
-                saveToPlaylist.submenu = playlistsMenu
-                saveToPlaylist.keyEquivalent = "p"
-                menu.addItem(saveToPlaylist)
-
-                if allSaved {
-                    if let moveMenu = buildMoveToPlaylistMenu(selectedVideoIds: selectedVideoIds),
-                       !moveMenu.items.isEmpty {
-                        let moveItem = NSMenuItem(title: "Move to Playlist", action: nil, keyEquivalent: "")
-                        moveItem.submenu = moveMenu
-                        moveItem.keyEquivalent = "p"
-                        moveItem.keyEquivalentModifierMask = [.shift]
-                        menu.addItem(moveItem)
-                    }
-
-                    let removablePlaylists = removablePlaylists(for: selectedVideoIds)
-                    switch removablePlaylists.count {
-                    case 0:
-                        break
-                    case 1:
-                        let playlist = removablePlaylists[0]
-                        let removeItem = NSMenuItem(
-                            title: "Remove from \(playlist.title)",
-                            action: #selector(contextRemoveFromPlaylist(_:)),
-                            keyEquivalent: ""
-                        )
-                        removeItem.representedObject = playlist
-                        removeItem.target = self
-                        menu.addItem(removeItem)
-                    default:
-                        let removeMenu = NSMenu(title: "Remove from Playlist")
-                        for playlist in removablePlaylists {
-                            let item = NSMenuItem(title: playlist.title, action: #selector(contextRemoveFromPlaylist(_:)), keyEquivalent: "")
-                            item.representedObject = playlist
-                            item.target = self
-                            let membershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
-                                if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == playlist.playlistId }) {
-                                    count += 1
-                                }
-                            }
-                            if membershipCount == selectionCount {
-                                item.state = .on
-                            } else if membershipCount > 0 {
-                                item.state = .mixed
-                            } else {
-                                item.state = .off
-                            }
-                            removeMenu.addItem(item)
-                        }
-                        let removeItem = NSMenuItem(title: "Remove from Playlist", action: nil, keyEquivalent: "")
-                        removeItem.submenu = removeMenu
-                        removeItem.isEnabled = !removeMenu.items.isEmpty
-                        menu.addItem(removeItem)
-                    }
-
-                }
-
-                if allCandidates, store.selectedTopicId != nil {
-                    menu.addItem(.separator())
-                    let dismiss = NSMenuItem(title: "Dismiss", action: #selector(contextDismissCandidates(_:)), keyEquivalent: "")
-                    dismiss.target = self
-                    dismiss.keyEquivalent = "d"
-                    menu.addItem(dismiss)
-
-                    let notInterested = NSMenuItem(title: "Not Interested", action: #selector(contextNotInterested(_:)), keyEquivalent: "")
-                    notInterested.target = self
-                    notInterested.keyEquivalent = "n"
-                    menu.addItem(notInterested)
-
-                    if let creator = singleSelectedCreator,
-                       let channelId = creator.channelId,
-                       !channelId.isEmpty {
-                        let excludeCreator = NSMenuItem(title: "Exclude Creator from Watch", action: #selector(contextExcludeCreatorFromWatch(_:)), keyEquivalent: "")
-                        excludeCreator.representedObject = [
-                            "channelId": channelId,
-                            "channelName": creator.channelName ?? "",
-                            "channelIconUrl": creator.channelIconUrl?.absoluteString ?? ""
-                        ]
-                        excludeCreator.target = self
-                        menu.addItem(excludeCreator)
-                    }
-                }
-
-                for item in menu.items {
-                    item.target = self
-                }
-
-                menu.autoenablesItems = false
-                saveToPlaylist.isEnabled = !store.knownPlaylists().isEmpty
-            } else {
-                for item in menu.items {
-                    item.target = self
-                }
-            }
-
-            return menu
+            return CollectionGridContextMenuBuilder.build(
+                store: store,
+                selectedItems: selectedItems,
+                allCandidates: allCandidates,
+                allSaved: allSaved,
+                target: self,
+                openAction: #selector(contextOpenOnYouTube(_:)),
+                copyAction: #selector(contextCopyLinks(_:)),
+                saveToWatchLaterAction: #selector(contextSaveToWatchLater(_:)),
+                saveToPlaylistAction: #selector(contextSaveToPlaylist(_:)),
+                moveToPlaylistAction: #selector(contextMoveToPlaylist(_:)),
+                removeFromPlaylistAction: #selector(contextRemoveFromPlaylist(_:)),
+                downloadVideoAction: #selector(contextDownloadVideo(_:)),
+                cancelDownloadAction: #selector(contextCancelDownload(_:)),
+                playOfflineAction: #selector(contextPlayOffline(_:)),
+                deleteDownloadAction: #selector(contextDeleteDownload(_:)),
+                dismissCandidatesAction: #selector(contextDismissCandidates(_:)),
+                notInterestedAction: #selector(contextNotInterested(_:)),
+                excludeCreatorAction: #selector(contextExcludeCreatorFromWatch(_:))
+            )
         }
 
         private func indexPaths(for ids: Set<String>) -> [IndexPath] {
@@ -1671,21 +1263,55 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             store.markCandidatesNotInterested(topicId: topicId, videoIds: Array(renderedSelectedVideoIds))
         }
 
-        private enum PlaylistShortcutMode {
-            case save
-            case move
+        @objc private func contextDownloadVideo(_ sender: Any?) {
+            guard let videoId = renderedSelectedVideoIds.first else { return }
+            VideoDownloadManager.shared.download(videoId: videoId)
         }
 
-        private func showPlaylistPopup(mode: PlaylistShortcutMode) {
+        @objc private func contextPlayOffline(_ sender: Any?) {
+            guard let videoId = renderedSelectedVideoIds.first else { return }
+            VideoDownloadManager.shared.playOffline(videoId: videoId)
+        }
+
+        @objc private func contextCancelDownload(_ sender: Any?) {
+            guard let videoId = renderedSelectedVideoIds.first else { return }
+            VideoDownloadManager.shared.cancel(videoId: videoId)
+        }
+
+        @objc private func contextDeleteDownload(_ sender: Any?) {
+            guard let videoId = renderedSelectedVideoIds.first else { return }
+            VideoDownloadManager.shared.deleteDownload(videoId: videoId)
+        }
+
+        private func showPlaylistPopup(mode: CollectionGridPlaylistShortcutMode) {
             guard let collectionView else { return }
             let selectedVideoIds = renderedSelectedVideoIds.map { $0 }
             let selectionCount = selectedVideoIds.count
             let menu: NSMenu?
             switch mode {
             case .save:
-                menu = buildSaveToPlaylistMenu(selectedVideoIds: selectedVideoIds, selectionCount: selectionCount)
+                if let store {
+                    menu = CollectionGridPlaylistMenus.buildSaveMenu(
+                        store: store,
+                        selectedVideoIds: selectedVideoIds,
+                        selectionCount: selectionCount,
+                        target: self,
+                        action: #selector(contextSaveToPlaylist(_:))
+                    )
+                } else {
+                    menu = nil
+                }
             case .move:
-                menu = buildMoveToPlaylistMenu(selectedVideoIds: selectedVideoIds)
+                if let store {
+                    menu = CollectionGridPlaylistMenus.buildMoveMenu(
+                        store: store,
+                        selectedVideoIds: selectedVideoIds,
+                        target: self,
+                        action: #selector(contextMoveToPlaylist(_:))
+                    )
+                } else {
+                    menu = nil
+                }
             }
 
             guard let menu, !menu.items.isEmpty else {
@@ -1704,93 +1330,16 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             menu.popUp(positioning: nil, at: popupPoint, in: collectionView)
         }
 
-        private func buildSaveToPlaylistMenu(selectedVideoIds: [String], selectionCount: Int) -> NSMenu {
-            let playlistsMenu = NSMenu(title: "Save to Playlist")
-            guard let store else { return playlistsMenu }
-
-            for (index, playlist) in store.knownPlaylists().enumerated() {
-                let item = NSMenuItem(title: playlist.title, action: #selector(contextSaveToPlaylist(_:)), keyEquivalent: "")
-                if index < 9 {
-                    item.title = "\(index + 1). \(playlist.title)"
-                }
-                item.representedObject = playlist
-                item.target = self
-                let membershipCount = selectedVideoIds.reduce(into: 0) { count, videoId in
-                    if store.playlistsForVideo(videoId).contains(where: { $0.playlistId == playlist.playlistId }) {
-                        count += 1
-                    }
-                }
-                if membershipCount == selectionCount {
-                    item.state = .on
-                    item.isEnabled = false
-                } else if membershipCount > 0 {
-                    item.state = .mixed
-                    item.isEnabled = true
-                } else {
-                    item.state = .off
-                    item.isEnabled = true
-                }
-                playlistsMenu.addItem(item)
-            }
-            return playlistsMenu
-        }
-
-        private func buildMoveToPlaylistMenu(selectedVideoIds: [String]) -> NSMenu? {
-            guard let store,
-                  !selectedVideoIds.isEmpty,
-                  let sourcePlaylistId = store.selectedPlaylistId else { return nil }
-
-            let menu = NSMenu(title: "Move to Playlist")
-            for playlist in store.knownPlaylists().filter({ $0.playlistId != sourcePlaylistId }) {
-                let item = NSMenuItem(title: playlist.title, action: #selector(contextMoveToPlaylist(_:)), keyEquivalent: "")
-                item.representedObject = playlist
-                item.target = self
-                menu.addItem(item)
-            }
-            return menu
-        }
-
-        private func removablePlaylists(for selectedVideoIds: [String]) -> [PlaylistRecord] {
-            guard let store else { return [] }
-            let removablePlaylistIds = Set(
-                selectedVideoIds.flatMap { store.playlistsForVideo($0).map(\.playlistId) }
-            )
-            return store.knownPlaylists().filter { removablePlaylistIds.contains($0.playlistId) }
-        }
-
         private func installActionObserversIfNeeded() {
-            guard actionObservers.isEmpty else { return }
-            let center = NotificationCenter.default
-            actionObservers = [
-                center.addObserver(forName: AppCommandBridge.saveToWatchLater, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.handleSaveToWatchLaterShortcut() }
-                },
-                center.addObserver(forName: AppCommandBridge.saveToPlaylist, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.handleSaveToPlaylistShortcut() }
-                },
-                center.addObserver(forName: AppCommandBridge.moveToPlaylist, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.handleMoveToPlaylistShortcut() }
-                },
-                center.addObserver(forName: AppCommandBridge.dismissCandidates, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.handleDismissShortcut() }
-                },
-                center.addObserver(forName: AppCommandBridge.notInterested, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.handleNotInterestedShortcut() }
-                },
-                center.addObserver(forName: AppCommandBridge.openOnYouTube, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.handleOpenSelectedShortcut() }
-                },
-                center.addObserver(forName: AppCommandBridge.clearSelection, object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.handleClearSelectionShortcut() }
-                }
-            ]
-        }
-
-        private func removeActionObservers() {
-            guard !actionObservers.isEmpty else { return }
-            let center = NotificationCenter.default
-            actionObservers.forEach(center.removeObserver)
-            actionObservers.removeAll()
+            commandObservers.install(
+                saveToWatchLater: { [weak self] in self?.handleSaveToWatchLaterShortcut() },
+                saveToPlaylist: { [weak self] in self?.handleSaveToPlaylistShortcut() },
+                moveToPlaylist: { [weak self] in self?.handleMoveToPlaylistShortcut() },
+                dismissCandidates: { [weak self] in self?.handleDismissShortcut() },
+                notInterested: { [weak self] in self?.handleNotInterestedShortcut() },
+                openOnYouTube: { [weak self] in self?.handleOpenSelectedShortcut() },
+                clearSelection: { [weak self] in self?.handleClearSelectionShortcut() }
+            )
         }
 
         private func detachFromContainer() {
