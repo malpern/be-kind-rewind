@@ -1127,28 +1127,35 @@ final class OrganizerStore {
 
         let assigned = CandidateDiscoveryCoordinator.assignWatchVideosToTopics(perTopic)
 
-        // Stable update: only replace per-topic pools that actually changed.
-        // Compares the ORDERED video ID list (not just the set) so that
-        // reranking order changes (from impression penalty, recency decay,
-        // etc.) are correctly applied. The previous set-based comparison
-        // was too aggressive — it ignored order changes, causing stale
-        // rankings to persist across sessions.
-        for (topicId, newPool) in assigned {
+        // Rerank the global pool (Show All mode)
+        rankedWatchPool = CandidateDiscoveryCoordinator.rerankWatchVideos(
+            topics.flatMap { assigned[$0.id] ?? [] },
+            store: self
+        )
+
+        // Rerank each per-topic pool using the same impression/recency/
+        // penalty logic as the global pool. Without this, "By Topic" mode
+        // used raw SQL scores and the impression penalty never applied —
+        // stale videos stayed at the top of per-topic views indefinitely.
+        var rerankedByTopic: [Int64: [CandidateVideoViewModel]] = [:]
+        for (topicId, pool) in assigned {
+            rerankedByTopic[topicId] = CandidateDiscoveryCoordinator.rerankWatchVideos(
+                pool, store: self
+            )
+        }
+
+        // Stable update: only replace per-topic pools whose ordering
+        // actually changed, to prevent unnecessary SwiftUI observation.
+        for (topicId, newPool) in rerankedByTopic {
             let oldOrder = (watchPoolByTopic[topicId] ?? []).map(\.videoId)
             let newOrder = newPool.map(\.videoId)
             if oldOrder != newOrder {
                 watchPoolByTopic[topicId] = newPool
             }
         }
-        // Remove topics that are no longer in the assignment
-        for topicId in watchPoolByTopic.keys where assigned[topicId] == nil {
+        for topicId in watchPoolByTopic.keys where rerankedByTopic[topicId] == nil {
             watchPoolByTopic.removeValue(forKey: topicId)
         }
-
-        rankedWatchPool = CandidateDiscoveryCoordinator.rerankWatchVideos(
-            topics.flatMap { assigned[$0.id] ?? [] },
-            store: self
-        )
 
         // Track impressions for the top 12 "above the fold" candidates.
         // Each appearance increments the counter, which feeds back into
