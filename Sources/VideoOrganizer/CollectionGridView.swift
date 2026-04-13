@@ -989,25 +989,17 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func handleDismissShortcut() {
-            CollectionGridActionSupport.handleCandidateShortcut(
-                commandName: "dismissCandidates",
-                selectedVideoIds: renderedSelectedVideoIds,
-                selectedTopicId: store?.selectedTopicId,
-                allCandidatesEligible: renderedSelectedVideoIds.allSatisfy(isCandidateVideo)
-            ) {
-                contextDismissCandidates(nil)
-            }
+            guard let store, let topicId = store.selectedTopicId else { return }
+            let videoIds = Array(renderedSelectedVideoIds)
+            guard !videoIds.isEmpty else { return }
+            store.dismissCandidates(topicId: topicId, videoIds: videoIds)
         }
 
         private func handleNotInterestedShortcut() {
-            CollectionGridActionSupport.handleCandidateShortcut(
-                commandName: "notInterested",
-                selectedVideoIds: renderedSelectedVideoIds,
-                selectedTopicId: store?.selectedTopicId,
-                allCandidatesEligible: renderedSelectedVideoIds.allSatisfy(isCandidateVideo)
-            ) {
-                contextNotInterested(nil)
-            }
+            guard let store, let topicId = store.selectedTopicId else { return }
+            let videoIds = Array(renderedSelectedVideoIds)
+            guard !videoIds.isEmpty else { return }
+            store.markCandidatesNotInterested(topicId: topicId, videoIds: videoIds)
         }
 
         private func handleNotForMeShortcut() {
