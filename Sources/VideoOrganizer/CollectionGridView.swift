@@ -60,6 +60,9 @@ struct CollectionGridView: View {
             },
             onClearGridFocusRequest: {
                 displaySettings.focusGridRequested = false
+            },
+            showToast: { message, icon in
+                displaySettings.toast.show(message, icon: icon)
             }
         )
         .task {
@@ -136,6 +139,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
     let onClearTopicScrollRequest: () -> Void
     let onClearSectionScrollRequest: () -> Void
     let onClearGridFocusRequest: () -> Void
+    var showToast: (String, String) -> Void = { _, _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -143,7 +147,8 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             onSelectionChange: onSelectionChange,
             onClearTopicScrollRequest: onClearTopicScrollRequest,
             onClearSectionScrollRequest: onClearSectionScrollRequest,
-            onClearGridFocusRequest: onClearGridFocusRequest
+            onClearGridFocusRequest: onClearGridFocusRequest,
+            showToast: showToast
         )
     }
 
@@ -220,19 +225,22 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         var onClearTopicScrollRequest: () -> Void
         var onClearSectionScrollRequest: () -> Void
         var onClearGridFocusRequest: () -> Void
+        var showToast: (String, String) -> Void  // (message, sfSymbol)
 
         init(
             onSelect: @escaping (String) -> Void,
             onSelectionChange: @escaping (String?, Set<String>) -> Void,
             onClearTopicScrollRequest: @escaping () -> Void,
             onClearSectionScrollRequest: @escaping () -> Void,
-            onClearGridFocusRequest: @escaping () -> Void
+            onClearGridFocusRequest: @escaping () -> Void,
+            showToast: @escaping (String, String) -> Void = { _, _ in }
         ) {
             self.onSelect = onSelect
             self.onSelectionChange = onSelectionChange
             self.onClearTopicScrollRequest = onClearTopicScrollRequest
             self.onClearSectionScrollRequest = onClearSectionScrollRequest
             self.onClearGridFocusRequest = onClearGridFocusRequest
+            self.showToast = showToast
         }
 
         func attach(to container: CollectionGridContainerView) {
@@ -973,6 +981,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         private func handleSaveToWatchLaterShortcut() {
             CollectionGridActionSupport.handleSaveToWatchLaterShortcut(selectedVideoIds: renderedSelectedVideoIds) {
                 contextSaveToWatchLater(nil)
+                showToast("Saved to Watch Later", "clock")
             }
         }
 
@@ -1004,6 +1013,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
             AppLogger.commands.info("Dismiss: \(videoIds.count) videos in topic \(topicId)")
             store.dismissCandidates(topicId: topicId, videoIds: videoIds)
+            showToast("Dismissed", "xmark.circle")
         }
 
         private func handleNotInterestedShortcut() {
@@ -1022,6 +1032,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
             AppLogger.commands.info("NotInterested: \(videoIds.count) videos in topic \(topicId)")
             store.markCandidatesNotInterested(topicId: topicId, videoIds: videoIds)
+            showToast("Not Interested", "hand.thumbsdown")
         }
 
         private func handleNotForMeShortcut() {
@@ -1048,6 +1059,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     duration: video?.duration
                 )
             }
+            showToast("Not for me", "xmark.circle.fill")
         }
 
         private func handleOpenSelectedShortcut() {

@@ -21,10 +21,6 @@ extension OrganizerStore {
         candidateRefreshToken += 1
         selectedVideoId = nil
         hoveredVideoId = nil
-        alert = AppAlertState(
-            title: "Not for me",
-            message: "Video dismissed. Your preference has been recorded."
-        )
     }
 
     /// Record implicit like when user opens a video on YouTube.
@@ -73,14 +69,8 @@ extension OrganizerStore {
         reloadStoredCandidateCaches()
         rebuildWatchPools()
         candidateRefreshToken += 1
-        // Clear selection so the dismissed card doesn't linger visually
         selectedVideoId = nil
         hoveredVideoId = nil
-        let count = videoIds.count
-        alert = AppAlertState(
-            title: "Dismissed",
-            message: count == 1 ? "Video dismissed from Watch." : "\(count) videos dismissed from Watch."
-        )
     }
 
     func excludeCreatorFromWatch(channelId: String?, channelName: String?, channelIconUrl: String? = nil) {
