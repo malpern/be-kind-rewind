@@ -71,6 +71,11 @@ struct CollectionGridView: View {
                let first = sections.lazy.flatMap(\.videos).first(where: { !$0.isPlaceholder }) {
                 store.selectedVideoId = first.id
             }
+            // Auto-focus the grid on launch so keyboard shortcuts work
+            // immediately without requiring a click first.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                displaySettings.focusGridRequested = true
+            }
         }
         .onChange(of: store.topics) { _, _ in loadAndFilter() }
         .onChange(of: store.searchText) { _, _ in loadAndFilter() }

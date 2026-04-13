@@ -184,22 +184,23 @@ struct OrganizerView: View {
             }
 
             HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                sortMenu
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 if store.pageDisplayMode == .watchCandidates {
                     Button {
                         store.ensureCandidatesForWatchPage()
                         displaySettings.toast.show("Refreshing Watch", icon: "arrow.clockwise")
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
-                            .font(.subheadline)
                     }
+                    .menuStyle(.borderlessButton)
                     .buttonStyle(.borderless)
+                    .fixedSize()
                     .help("Refresh Watch candidates from all topics")
                     .disabled(store.candidateLoadingTopics.count > 0)
                 }
-                Spacer(minLength: 0)
-                sortMenu
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
             }
             .padding(.horizontal, GridConstants.horizontalPadding)
             .padding(.vertical, 6)
