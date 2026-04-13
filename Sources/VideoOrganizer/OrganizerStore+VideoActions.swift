@@ -285,6 +285,9 @@ extension OrganizerStore {
             }
 
             rebuildPlaylistMaps()
+            // Trigger grid refresh so the "Watch Later" badge appears
+            // immediately on the card without waiting for a full reload.
+            candidateRefreshToken += 1
             AppLogger.discovery.info("Queued add_to_playlist for \(videoIds.count, privacy: .public) saved videos -> \(playlist.playlistId, privacy: .public)")
             if playlist.playlistId == "WL" {
                 processPendingBrowserSync(reason: "save-library-videos-watch-later")
