@@ -40,24 +40,22 @@ extension OrganizerStore {
 
                 if let firstFailure = result.failures.first {
                     AppLogger.sync.error("YouTube sync failure: \(firstFailure.message, privacy: .public)")
-                    alert = AppAlertState(title: "Could Not Save to YouTube", message: firstFailure.message)
                     lastSyncErrorMessage = firstFailure.message
                     lastSyncErrorIsBrowser = false
                 }
 
+                // Fallback chain: API quota exhaustion → Playwright browser
+                // automation. Actions are moved to the browser executor and
+                // retried automatically. No modal alert — the sidebar
+                // status footer shows the retrying/deferred state.
                 if !result.browserFallbackActionIDs.isEmpty {
                     AppLogger.sync.info("Moved \(result.browserFallbackActionIDs.count, privacy: .public) actions to browser fallback after API quota exhaustion")
-                    alert = AppAlertState(
-                        title: "Using Browser Fallback",
-                        message: "YouTube API quota is exhausted, so queued save actions have been moved to the browser executor path. They will stay queued until the Playwright worker is attached."
-                    )
                     processPendingBrowserSync(reason: "quota-fallback")
                 }
 
                 refreshSyncQueueSummary()
             } catch {
                 AppLogger.sync.error("Pending sync run failed: \(error.localizedDescription, privacy: .public)")
-                alert = AppAlertState(title: "Could Not Save to YouTube", message: error.localizedDescription)
                 lastSyncErrorMessage = error.localizedDescription
                 lastSyncErrorIsBrowser = false
                 refreshSyncQueueSummary()
