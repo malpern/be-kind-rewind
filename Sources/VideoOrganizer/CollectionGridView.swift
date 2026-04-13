@@ -1013,6 +1013,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             }
             AppLogger.commands.info("Dismiss: \(videoIds.count) videos in topic \(topicId)")
             store.dismissCandidates(topicId: topicId, videoIds: videoIds)
+            autoAdvanceSelection()
             showToast("Dismissed", "xmark.circle")
         }
 
@@ -1059,7 +1060,32 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                     duration: video?.duration
                 )
             }
+            autoAdvanceSelection()
             showToast("Not for me", "xmark.circle.fill")
+        }
+
+        /// After dismissing a video, auto-select the next card so the user
+        /// can keep hammering d/x/n without having to click between each.
+        private func autoAdvanceSelection() {
+            guard let collectionView else { return }
+            // Find the first non-placeholder video after the current selection
+            let allVideos = renderedSections.flatMap(\.videos).filter { !$0.isPlaceholder }
+            let dismissedIds = renderedSelectedVideoIds
+            let remaining = allVideos.filter { !dismissedIds.contains($0.id) }
+            if let next = remaining.first {
+                let nextId = next.id
+                // Brief delay so the pool removal propagates before we select
+                DispatchQueue.main.async { [weak self] in
+                    self?.store?.selectedVideoId = nextId
+                    self?.onSelect(nextId)
+                    self?.renderedSelectedVideoIds = [nextId]
+                    self?.renderedSelectedVideoId = nextId
+                    self?.pendingSelectedVideoIds = [nextId]
+                    self?.pendingSelectedVideoId = nextId
+                    self?.onSelectionChange(nextId, [nextId])
+                    self?.applySelectionToCollectionView()
+                }
+            }
         }
 
         private func handleOpenSelectedShortcut() {

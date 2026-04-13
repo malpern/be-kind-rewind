@@ -11,16 +11,8 @@ extension OrganizerStore {
     /// per-creator ranking penalties over time.
     func notForMe(topicId: Int64, videoId: String, channelId: String?, duration: String?) {
         recordFeedback(videoId: videoId, signal: "dislike", channelId: channelId, duration: duration, topicId: topicId)
-        do {
-            try store.setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
-        } catch {
-            AppLogger.discovery.error("Failed to dismiss for notForMe \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
-        }
-        reloadStoredCandidateCaches()
-        rebuildWatchPools()
-        candidateRefreshToken += 1
-        selectedVideoId = nil
-        hoveredVideoId = nil
+        // Use the same fast-dismiss path for instant visual removal
+        dismissCandidates(topicId: topicId, videoIds: [videoId])
     }
 
     /// Record implicit like when user opens a video on YouTube.
@@ -55,7 +47,13 @@ extension OrganizerStore {
         setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
     }
 
+    /// Fast dismiss for rapid curation. Writes the dismiss to SQLite
+    /// immediately (cheap single-row insert) and optimistically removes
+    /// the videos from the in-memory pools so the UI updates instantly.
+    /// The expensive full reload + rebuild is debounced — it only runs
+    /// after 0.5s of inactivity, so hammering `d` rapidly stays smooth.
     func dismissCandidates(topicId: Int64, videoIds: [String]) {
+        // 1. Write to SQLite (fast)
         for videoId in videoIds {
             do {
                 try store.setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
@@ -63,14 +61,30 @@ extension OrganizerStore {
                 AppLogger.discovery.error("Failed to dismiss candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
-        // Reload ALL topic caches (not just the selected one) because
-        // the cross-topic dismiss filter means the video disappears from
-        // every topic's pool, not just the one the user is viewing.
-        reloadStoredCandidateCaches()
-        rebuildWatchPools()
+
+        // 2. Optimistic removal from in-memory pools (instant)
+        let dismissedSet = Set(videoIds)
+        for (tid, pool) in watchPoolByTopic {
+            let filtered = pool.filter { !dismissedSet.contains($0.videoId) }
+            if filtered.count != pool.count {
+                watchPoolByTopic[tid] = filtered
+            }
+        }
+        rankedWatchPool.removeAll { dismissedSet.contains($0.videoId) }
         candidateRefreshToken += 1
+
+        // 3. Clear selection so the next card can be auto-selected
         selectedVideoId = nil
         hoveredVideoId = nil
+
+        // 4. Debounced full rebuild (runs after rapid curation settles)
+        debouncedWatchRebuildTask?.cancel()
+        debouncedWatchRebuildTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            self?.reloadStoredCandidateCaches()
+            self?.rebuildWatchPools()
+        }
     }
 
     func excludeCreatorFromWatch(channelId: String?, channelName: String?, channelIconUrl: String? = nil) {

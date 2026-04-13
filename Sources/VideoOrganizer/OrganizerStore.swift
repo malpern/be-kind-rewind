@@ -153,10 +153,14 @@ final class OrganizerStore {
     private var apiFallbackPassApprovals: Set<DiscoveryTelemetryKind> = []
     private var apiFallbackPassUnitsSpent: Int = 0
     var apiFallbackPassActive: Bool = false
-    private(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
-    private(set) var rankedWatchPool: [CandidateVideoViewModel] = []
+    internal(set) var watchPoolByTopic: [Int64: [CandidateVideoViewModel]] = [:]
+    internal(set) var rankedWatchPool: [CandidateVideoViewModel] = []
     private(set) var storedCandidateVideosByTopic: [Int64: [CandidateVideoViewModel]] = [:]
     private(set) var candidateSourcesByTopic: [Int64: [String: [CandidateSourceRecord]]] = [:]
+
+    /// Debounced rebuild task for rapid curation — only runs the
+    /// expensive SQL reload + pool rebuild after 500ms of inactivity.
+    var debouncedWatchRebuildTask: Task<Void, Never>?
 
     /// Per-creator like/dislike counts from watch_feedback table.
     /// Loaded once on init, refreshed after each feedback action.
