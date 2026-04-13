@@ -87,9 +87,7 @@ struct CollectionGridView: View {
         .onChange(of: store.pageDisplayMode) { _, _ in loadAndFilter() }
         .onChange(of: store.watchPresentationMode) { _, _ in loadAndFilter() }
         .onChange(of: store.candidateRefreshToken) { _, _ in
-            if store.pageDisplayMode != .watchCandidates {
-                loadAndFilter()
-            }
+            loadAndFilter()
         }
         .onChange(of: store.watchPoolVersion) { _, _ in loadAndFilter() }
     }
