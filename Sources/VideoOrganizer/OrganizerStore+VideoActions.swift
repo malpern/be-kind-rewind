@@ -239,11 +239,11 @@ extension OrganizerStore {
             rebuildWatchPools()
             candidateRefreshToken += 1
             AppLogger.discovery.info("Queued add_to_playlist for candidate \(videoId, privacy: .public) -> \(playlist.playlistId, privacy: .public)")
-            if playlist.playlistId == "WL" {
-                processPendingBrowserSync(reason: "save-candidate-watch-later")
-            } else {
-                processPendingSync(reason: "save-candidate")
-            }
+            // All playlist saves (including Watch Later) go through the
+            // YouTube Data API path. The browser automation path was fragile
+            // (YouTube selector changes broke it regularly). The API's
+            // playlistItems.insert with playlistId "WL" works reliably.
+            processPendingSync(reason: playlist.playlistId == "WL" ? "save-candidate-watch-later" : "save-candidate")
         } catch {
             AppLogger.discovery.error("Failed to queue add_to_playlist for candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
@@ -289,11 +289,7 @@ extension OrganizerStore {
             // immediately on the card without waiting for a full reload.
             candidateRefreshToken += 1
             AppLogger.discovery.info("Queued add_to_playlist for \(videoIds.count, privacy: .public) saved videos -> \(playlist.playlistId, privacy: .public)")
-            if playlist.playlistId == "WL" {
-                processPendingBrowserSync(reason: "save-library-videos-watch-later")
-            } else {
-                processPendingSync(reason: "save-library-videos")
-            }
+            processPendingSync(reason: playlist.playlistId == "WL" ? "save-library-videos-watch-later" : "save-library-videos")
         } catch {
             AppLogger.discovery.error("Failed to queue add_to_playlist for saved videos: \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
