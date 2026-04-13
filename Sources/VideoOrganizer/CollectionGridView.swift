@@ -982,10 +982,19 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func handleSaveToWatchLaterShortcut() {
-            CollectionGridActionSupport.handleSaveToWatchLaterShortcut(selectedVideoIds: renderedSelectedVideoIds) {
-                contextSaveToWatchLater(nil)
-                showToast("Saved to Watch Later", "clock")
+            guard let store else { return }
+            let videoIds = Array(renderedSelectedVideoIds)
+            guard !videoIds.isEmpty else { return }
+            // Same direct pattern as dismiss — skip the gate, go straight
+            // to the store. The local membership + badge appear instantly;
+            // the YouTube API sync runs in the background.
+            if let topicId = store.selectedTopicId,
+               videoIds.allSatisfy(isCandidateVideo) {
+                store.saveCandidatesToWatchLater(topicId: topicId, videoIds: videoIds)
+            } else {
+                store.saveVideosToWatchLater(videoIds: videoIds)
             }
+            showToast("Saved to Watch Later", "clock")
         }
 
         private func handleSaveToPlaylistShortcut() {
