@@ -989,23 +989,56 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func handleDismissShortcut() {
-            guard let store, let topicId = store.selectedTopicId else { return }
+            guard let store else {
+                AppLogger.commands.info("Dismiss: no store")
+                return
+            }
+            guard let topicId = store.selectedTopicId else {
+                AppLogger.commands.info("Dismiss: no selectedTopicId")
+                return
+            }
             let videoIds = Array(renderedSelectedVideoIds)
-            guard !videoIds.isEmpty else { return }
+            guard !videoIds.isEmpty else {
+                AppLogger.commands.info("Dismiss: no selected videos")
+                return
+            }
+            AppLogger.commands.info("Dismiss: \(videoIds.count) videos in topic \(topicId)")
             store.dismissCandidates(topicId: topicId, videoIds: videoIds)
         }
 
         private func handleNotInterestedShortcut() {
-            guard let store, let topicId = store.selectedTopicId else { return }
+            guard let store else {
+                AppLogger.commands.info("NotInterested: no store")
+                return
+            }
+            guard let topicId = store.selectedTopicId else {
+                AppLogger.commands.info("NotInterested: no selectedTopicId")
+                return
+            }
             let videoIds = Array(renderedSelectedVideoIds)
-            guard !videoIds.isEmpty else { return }
+            guard !videoIds.isEmpty else {
+                AppLogger.commands.info("NotInterested: no selected videos")
+                return
+            }
+            AppLogger.commands.info("NotInterested: \(videoIds.count) videos in topic \(topicId)")
             store.markCandidatesNotInterested(topicId: topicId, videoIds: videoIds)
         }
 
         private func handleNotForMeShortcut() {
-            guard let store, let topicId = store.selectedTopicId else { return }
+            guard let store else {
+                AppLogger.commands.info("NotForMe: no store")
+                return
+            }
+            guard let topicId = store.selectedTopicId else {
+                AppLogger.commands.info("NotForMe: no selectedTopicId")
+                return
+            }
             let videoIds = Array(renderedSelectedVideoIds)
-            guard !videoIds.isEmpty else { return }
+            guard !videoIds.isEmpty else {
+                AppLogger.commands.info("NotForMe: no selected videos")
+                return
+            }
+            AppLogger.commands.info("NotForMe: \(videoIds.count) videos in topic \(topicId)")
             for videoId in videoIds {
                 let video = videoById(videoId)
                 store.notForMe(

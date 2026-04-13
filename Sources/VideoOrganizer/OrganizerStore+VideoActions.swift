@@ -11,7 +11,20 @@ extension OrganizerStore {
     /// per-creator ranking penalties over time.
     func notForMe(topicId: Int64, videoId: String, channelId: String?, duration: String?) {
         recordFeedback(videoId: videoId, signal: "dislike", channelId: channelId, duration: duration, topicId: topicId)
-        setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
+        do {
+            try store.setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
+        } catch {
+            AppLogger.discovery.error("Failed to dismiss for notForMe \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+        reloadStoredCandidateCaches()
+        rebuildWatchPools()
+        candidateRefreshToken += 1
+        selectedVideoId = nil
+        hoveredVideoId = nil
+        alert = AppAlertState(
+            title: "Not for me",
+            message: "Video dismissed. Your preference has been recorded."
+        )
     }
 
     /// Record implicit like when user opens a video on YouTube.
@@ -47,10 +60,6 @@ extension OrganizerStore {
     }
 
     func dismissCandidates(topicId: Int64, videoIds: [String]) {
-        // Batch: write all state rows first, then rebuild once.
-        // The previous version called dismissCandidate per-video,
-        // triggering N full SQL reloads + N pool rebuilds + N
-        // impression counter increments.
         for videoId in videoIds {
             do {
                 try store.setCandidateState(topicId: topicId, videoId: videoId, state: .dismissed)
@@ -58,9 +67,20 @@ extension OrganizerStore {
                 AppLogger.discovery.error("Failed to dismiss candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
-        reloadStoredCandidateCache(for: topicId)
+        // Reload ALL topic caches (not just the selected one) because
+        // the cross-topic dismiss filter means the video disappears from
+        // every topic's pool, not just the one the user is viewing.
+        reloadStoredCandidateCaches()
         rebuildWatchPools()
         candidateRefreshToken += 1
+        // Clear selection so the dismissed card doesn't linger visually
+        selectedVideoId = nil
+        hoveredVideoId = nil
+        let count = videoIds.count
+        alert = AppAlertState(
+            title: "Dismissed",
+            message: count == 1 ? "Video dismissed from Watch." : "\(count) videos dismissed from Watch."
+        )
     }
 
     func excludeCreatorFromWatch(channelId: String?, channelName: String?, channelIconUrl: String? = nil) {

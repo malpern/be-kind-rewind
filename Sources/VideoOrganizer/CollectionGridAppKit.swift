@@ -462,6 +462,7 @@ final class ClickableCollectionView: NSCollectionView {
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let key = event.charactersIgnoringModifiers?.lowercased()
+        AppLogger.commands.debug("keyDown: key=\(key ?? "nil", privacy: .public) code=\(event.keyCode, privacy: .public) modifiers=\(modifiers.rawValue, privacy: .public)")
 
         // Vim navigation: hjkl → move selection left/down/up/right.
         // Uses NSResponder's move* methods which NSCollectionView
