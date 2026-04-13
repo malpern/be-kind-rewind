@@ -829,7 +829,16 @@ enum CandidateDiscoveryCoordinator {
         return assigned
     }
 
+    /// Pre-fetches seen summaries in one bulk SQL query, then reranks.
+    /// Eliminates ~1000 per-video SQLite queries that were blocking the
+    /// main thread for 1-3 seconds during rebuildWatchPools.
     static func rerankWatchVideos(_ videos: [CandidateVideoViewModel], store: OrganizerStore) -> [CandidateVideoViewModel] {
+        let videoIds = Set(videos.map(\.videoId))
+        let seenCache = (try? store.store.seenSummaries(videoIds: videoIds)) ?? [:]
+        return rerankWatchVideos(videos, store: store, seenCache: seenCache)
+    }
+
+    static func rerankWatchVideos(_ videos: [CandidateVideoViewModel], store: OrganizerStore, seenCache: [String: SeenVideoSummary]) -> [CandidateVideoViewModel] {
         let prelim = videos.sorted { lhs, rhs in
             if lhs.score == rhs.score {
                 let lhsDate = CreatorAnalytics.parseISO8601Date(lhs.publishedAt ?? "")
@@ -861,7 +870,7 @@ enum CandidateDiscoveryCoordinator {
 
         for video in prelim {
             let creatorKey = (video.channelId?.isEmpty == false ? video.channelId : video.channelName) ?? "unknown"
-            let seenPenalty = appSeenPenalty(for: video, store: store)
+            let seenPenalty = appSeenPenalty(for: video, seenCache: seenCache)
             let repeatPenalty = creatorRepeatPenalty(for: video, currentCount: creatorCounts[creatorKey] ?? 0)
             let pinnedBoost: Double = (video.channelId.map { favoriteIds.contains($0) } ?? false) ? favoriteBoost : 0
             let recencyBoost = recencyBoostForReranking(publishedAt: video.publishedAt)
@@ -1096,8 +1105,8 @@ enum CandidateDiscoveryCoordinator {
         }
     }
 
-    private static func appSeenPenalty(for video: CandidateVideoViewModel, store: OrganizerStore) -> Double {
-        guard let summary = store.seenSummary(for: video.videoId) else { return 0 }
+    private static func appSeenPenalty(for video: CandidateVideoViewModel, seenCache: [String: SeenVideoSummary]) -> Double {
+        guard let summary = seenCache[video.videoId] else { return 0 }
         guard summary.latestSource == .app else { return 0 }
         let countPenalty = Double(min(summary.eventCount, 3)) * 18
         return countPenalty

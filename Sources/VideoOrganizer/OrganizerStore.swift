@@ -1144,20 +1144,24 @@ final class OrganizerStore {
 
         let assigned = CandidateDiscoveryCoordinator.assignWatchVideosToTopics(perTopic)
 
+        // Bulk-fetch seen summaries ONCE for all candidates. This replaces
+        // ~1000 per-video SQLite queries that were blocking the main thread
+        // for 1-3 seconds during reranking.
+        let allVideoIds = Set(assigned.values.flatMap { $0.map(\.videoId) })
+        let seenCache = (try? store.seenSummaries(videoIds: allVideoIds)) ?? [:]
+
         // Rerank the global pool (Show All mode)
         rankedWatchPool = CandidateDiscoveryCoordinator.rerankWatchVideos(
             topics.flatMap { assigned[$0.id] ?? [] },
-            store: self
+            store: self,
+            seenCache: seenCache
         )
 
-        // Rerank each per-topic pool using the same impression/recency/
-        // penalty logic as the global pool. Without this, "By Topic" mode
-        // used raw SQL scores and the impression penalty never applied —
-        // stale videos stayed at the top of per-topic views indefinitely.
+        // Rerank each per-topic pool using the same cache
         var rerankedByTopic: [Int64: [CandidateVideoViewModel]] = [:]
         for (topicId, pool) in assigned {
             rerankedByTopic[topicId] = CandidateDiscoveryCoordinator.rerankWatchVideos(
-                pool, store: self
+                pool, store: self, seenCache: seenCache
             )
         }
 

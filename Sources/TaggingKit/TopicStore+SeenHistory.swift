@@ -54,6 +54,40 @@ extension TopicStore {
         return SeenVideoSummary(videoId: videoId, eventCount: count, latestSeenAt: latestSeenAt, latestSource: latestSource)
     }
 
+    /// Bulk fetch seen summaries for a set of video IDs in one SQL pass.
+    /// Returns a dictionary keyed by videoId. Videos with no seen history
+    /// are omitted (not present in the result).
+    public func seenSummaries(videoIds: Set<String>) throws -> [String: SeenVideoSummary] {
+        guard !videoIds.isEmpty else { return [:] }
+        // Single query with GROUP BY instead of N individual queries
+        let placeholders = videoIds.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+            SELECT video_id, COUNT(*) as cnt,
+                   MAX(seen_at) as latest_at,
+                   (SELECT source FROM seen_videos sv2
+                    WHERE sv2.video_id = sv.video_id
+                    ORDER BY seen_at DESC LIMIT 1) as latest_source
+            FROM seen_videos sv
+            WHERE video_id IN (\(placeholders))
+            GROUP BY video_id
+        """
+        let bindings: [Binding] = videoIds.map { $0 as Binding }
+        var result: [String: SeenVideoSummary] = [:]
+        for row in try db.prepare(sql).bind(bindings) {
+            guard let videoId = row[0] as? String,
+                  let count = row[1] as? Int64 else { continue }
+            let latestAt = row[2] as? String
+            let latestSource = (row[3] as? String).flatMap(SeenVideoSource.init(rawValue:))
+            result[videoId] = SeenVideoSummary(
+                videoId: videoId,
+                eventCount: Int(count),
+                latestSeenAt: latestAt,
+                latestSource: latestSource
+            )
+        }
+        return result
+    }
+
     public func seenVideoCount() throws -> Int {
         try db.scalar(seenVideos.count)
     }
