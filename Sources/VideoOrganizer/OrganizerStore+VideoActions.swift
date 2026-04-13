@@ -219,12 +219,17 @@ extension OrganizerStore {
         }
     }
 
+    /// Fast playlist save for rapid curation. Writes the membership to
+    /// SQLite and optimistically updates the in-memory playlist cache
+    /// so the badge appears instantly. The expensive full rebuild is
+    /// debounced (same pattern as dismissCandidates).
     func saveCandidateToPlaylist(topicId: Int64, videoId: String, playlist: PlaylistRecord) {
         do {
             if playlistsByVideoId[videoId]?.contains(where: { $0.playlistId == playlist.playlistId }) == true {
                 return
             }
 
+            // 1. SQLite writes (fast)
             try store.upsertPlaylist(playlist)
             try store.addPlaylistMembership(PlaylistMembershipRecord(
                 playlistId: playlist.playlistId,
@@ -235,15 +240,21 @@ extension OrganizerStore {
             try store.queueCommit(action: "add_to_playlist", videoId: videoId, playlist: playlist.playlistId)
             try store.setCandidateState(topicId: topicId, videoId: videoId, state: .saved)
 
-            rebuildPlaylistMaps()
-            rebuildWatchPools()
+            // 2. Optimistic in-memory update (instant badge)
+            playlistsByVideoId[videoId, default: []].append(playlist)
             candidateRefreshToken += 1
+
             AppLogger.discovery.info("Queued add_to_playlist for candidate \(videoId, privacy: .public) -> \(playlist.playlistId, privacy: .public)")
-            // All playlist saves (including Watch Later) go through the
-            // YouTube Data API path. The browser automation path was fragile
-            // (YouTube selector changes broke it regularly). The API's
-            // playlistItems.insert with playlistId "WL" works reliably.
+
+            // 3. Background: API sync + debounced full rebuild
             processPendingSync(reason: playlist.playlistId == "WL" ? "save-candidate-watch-later" : "save-candidate")
+            debouncedWatchRebuildTask?.cancel()
+            debouncedWatchRebuildTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                self?.rebuildPlaylistMaps()
+                self?.rebuildWatchPools()
+            }
         } catch {
             AppLogger.discovery.error("Failed to queue add_to_playlist for candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
@@ -282,14 +293,20 @@ extension OrganizerStore {
                     verifiedAt: now
                 ))
                 try store.queueCommit(action: "add_to_playlist", videoId: videoId, playlist: playlist.playlistId)
+                // Optimistic in-memory update
+                playlistsByVideoId[videoId, default: []].append(playlist)
             }
 
-            rebuildPlaylistMaps()
-            // Trigger grid refresh so the "Watch Later" badge appears
-            // immediately on the card without waiting for a full reload.
             candidateRefreshToken += 1
             AppLogger.discovery.info("Queued add_to_playlist for \(videoIds.count, privacy: .public) saved videos -> \(playlist.playlistId, privacy: .public)")
             processPendingSync(reason: playlist.playlistId == "WL" ? "save-library-videos-watch-later" : "save-library-videos")
+            debouncedWatchRebuildTask?.cancel()
+            debouncedWatchRebuildTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                self?.rebuildPlaylistMaps()
+                self?.rebuildWatchPools()
+            }
         } catch {
             AppLogger.discovery.error("Failed to queue add_to_playlist for saved videos: \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
