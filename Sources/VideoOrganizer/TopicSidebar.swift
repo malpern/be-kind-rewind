@@ -130,26 +130,35 @@ struct TopicSidebar: View {
                     .offset(y: collapsedSearchOffset)
                     .padding(.bottom, collapsedSearchOffset)
 
-                    HStack(spacing: 6) {
-                        if store.watchRefreshTotalTopics > 0 {
-                            ProgressView()
-                                .controlSize(.mini)
-                            Text("Refreshing \(store.watchRefreshCompletedTopics)/\(store.watchRefreshTotalTopics)")
-                                .font(.subheadline.weight(.medium).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("\(filteredTopics.count) Topics")
-                                .font(.subheadline.weight(.medium))
+                    VStack(spacing: 4) {
+                        HStack(spacing: 6) {
+                            if store.watchRefreshTotalTopics > 0 {
+                                Text("Refreshing \(store.watchRefreshCompletedTopics)/\(store.watchRefreshTotalTopics)")
+                                    .font(.subheadline.weight(.medium).monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("\(filteredTopics.count) Topics")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            Spacer()
+                            if store.parsedQuery.isEmpty {
+                                Text("\(store.totalVideoCount) videos")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.tertiary)
+                            } else {
+                                Text("\(store.searchResultCount) results")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(Color.accentColor)
+                            }
                         }
-                        Spacer()
-                        if store.parsedQuery.isEmpty {
-                            Text("\(store.totalVideoCount) videos")
-                                .font(.subheadline)
-                                .foregroundStyle(.tertiary)
-                        } else {
-                            Text("\(store.searchResultCount) results")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(Color.accentColor)
+
+                        if store.watchRefreshTotalTopics > 0 {
+                            ProgressView(
+                                value: Double(store.watchRefreshCompletedTopics),
+                                total: Double(max(store.watchRefreshTotalTopics, 1))
+                            )
+                            .progressViewStyle(.linear)
+                            .tint(.accentColor)
                         }
                     }
                     .padding(.horizontal, 6)
