@@ -94,7 +94,9 @@ extension OrganizerStore {
 
                 if let firstFailure = result.failures.first {
                     AppLogger.sync.error("Browser sync failure: \(firstFailure.message, privacy: .public)")
-                    alert = AppAlertState(title: "Could Not Sync Browser Actions", message: firstFailure.message)
+                    // Non-blocking: log the error and surface via the sidebar
+                    // status footer instead of a modal alert that interrupts
+                    // rapid curation. The actions remain queued for retry.
                     lastSyncErrorMessage = firstFailure.message
                     lastSyncErrorIsBrowser = true
                 }
@@ -102,7 +104,6 @@ extension OrganizerStore {
                 refreshSyncQueueSummary()
             } catch {
                 AppLogger.sync.error("Pending browser sync run failed: \(error.localizedDescription, privacy: .public)")
-                alert = AppAlertState(title: "Could Not Sync Browser Actions", message: error.localizedDescription)
                 lastSyncErrorMessage = error.localizedDescription
                 lastSyncErrorIsBrowser = true
                 refreshSyncQueueSummary()
