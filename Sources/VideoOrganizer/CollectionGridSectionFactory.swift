@@ -57,10 +57,7 @@ enum CollectionGridSectionFactory {
                 },
                 videoIsInSelectedPlaylist: { store.videoIsInSelectedPlaylist($0) },
                 handleForChannelId: { channelId in
-                    store.topicChannels.values
-                        .lazy
-                        .flatMap { $0 }
-                        .first(where: { $0.channelId == channelId })?.handle
+                    store.knownChannelsById[channelId]?.handle
                 }
             )
         )

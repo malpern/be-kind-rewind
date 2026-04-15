@@ -91,6 +91,12 @@ extension OrganizerStore {
                 lastFullHistoryLoadCount[channelId] = newOnly.count
                 AppLogger.app.info("Full history load added \(newOnly.count) new videos for \(channelId, privacy: .public)")
                 AppLogger.file.log("loadFullChannelHistory(\(channelId)) added \(newOnly.count) new videos", category: "discovery")
+
+                // Trigger theme classification now that the archive is populated.
+                // Previously handled by a view-layer .onChange that could miss
+                // the fire when its host view (emptyArchiveBanner) unmounted on
+                // archive completion.
+                classifyCreatorThemesIfNeeded(channelId: channelId, channelName: channelName)
             } catch {
                 let reason = error.localizedDescription
                 AppLogger.app.error("Full history load failed for \(channelId, privacy: .public): \(reason, privacy: .public)")

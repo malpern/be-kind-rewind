@@ -159,8 +159,22 @@ extension OrganizerStore {
             async let aboutResult = Task {
                 try await classifier.generateAbout(creatorName: channelName, videos: inputs)
             }.value
-            await persistThemes(try? themesResult, channelId: channelId, channelName: channelName)
-            await persistAbout(try? aboutResult, channelId: channelId, channelName: channelName, inputCount: inputs.count)
+            let themesValue: CreatorThemeClassifier.ClassificationResult?
+            do {
+                themesValue = try await themesResult
+            } catch {
+                AppLogger.app.error("Theme classification failed for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                themesValue = nil
+            }
+            let aboutValue: String?
+            do {
+                aboutValue = try await aboutResult
+            } catch {
+                AppLogger.app.error("About generation failed for \(channelName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                aboutValue = nil
+            }
+            await persistThemes(themesValue, channelId: channelId, channelName: channelName)
+            await persistAbout(aboutValue, channelId: channelId, channelName: channelName, inputCount: inputs.count)
         } else if generateThemes {
             do {
                 let result = try await classifier.classifyThemes(creatorName: channelName, videos: inputs)

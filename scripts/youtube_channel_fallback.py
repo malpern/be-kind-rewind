@@ -113,21 +113,31 @@ def main():
     except Exception as exc:
         rss_error = str(exc)
 
-    # If both sources failed, surface both errors and exit non-zero so the
-    # caller's failure-pattern detector can pick it up.
+    # Only fail (exit 1) when BOTH sources threw an error. A real scrape
+    # failure looks like "scrapetube raised + RSS raised". When one source
+    # runs cleanly but returns zero videos, and the other 404s (common for
+    # small/new/unlisted channels that don't expose an RSS feed), that's
+    # "channel has no recent public content" — not a scrape failure. Emit
+    # empty JSON and exit 0 so Swift treats it as a silent no-op instead
+    # of popping the API-approval alert.
+    if scrapetube_error and rss_error:
+        print(
+            f"Fallback discovery failed. scrapetube: {scrapetube_error}. rss: {rss_error}",
+            file=sys.stderr,
+        )
+        return 1
+
     if not scrapetube_videos and not rss_videos:
-        if scrapetube_error and rss_error:
+        # Log the partial-error detail to stderr for diagnostic breadcrumbs
+        # (Swift captures it), but exit 0 since neither source actually failed
+        # in a way that warrants user intervention.
+        if scrapetube_error or rss_error:
             print(
-                f"Fallback discovery failed. scrapetube: {scrapetube_error}. rss: {rss_error}",
+                f"Discovery empty (scrapetube: {scrapetube_error or 'ok, 0 videos'}; rss: {rss_error or 'ok, 0 videos'})",
                 file=sys.stderr,
             )
-        elif scrapetube_error:
-            print(f"Fallback discovery failed: {scrapetube_error}", file=sys.stderr)
-        elif rss_error:
-            print(f"Fallback discovery failed: {rss_error}", file=sys.stderr)
-        else:
-            print("Fallback discovery returned no videos", file=sys.stderr)
-        return 1
+        print(json.dumps({"source": "empty", "videos": []}))
+        return 0
 
     # Merge: RSS first (newest, accurate timestamps), then scrapetube fills in
     # the historical tail. Dedupe by videoId — first occurrence wins so RSS

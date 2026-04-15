@@ -18,6 +18,14 @@ struct CollectionGridHeaderModelBuilder {
     }
 
     func headerModel(for section: TopicSection, at sectionIndex: Int?) -> CollectionSectionHeaderModel {
+        let startedAt = ContinuousClock.now
+        defer {
+            let duration = startedAt.duration(to: .now)
+            let millis = Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+            if millis >= 50 {
+                AppLogger.file.log("⏱ headerModel topic=\(section.topicId) name=\(section.topicName) mode=\(section.displayMode.rawValue) took \(Int(millis))ms", category: "perf")
+            }
+        }
         let scrollProgress: Double
         if section.creatorName != nil || isTopicMarkerInCreatorGrouping(section) {
             scrollProgress = topicScrollProgress(section.topicId)

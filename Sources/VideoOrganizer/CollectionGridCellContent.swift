@@ -51,6 +51,7 @@ struct VideoCellContent: View {
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
 
                 if let stateTag = video.stateTag {
+                    let badgeColor: Color = stateTag == "Dismissed" ? .red : .accentColor
                     VStack {
                         HStack {
                             Text(stateTag)
@@ -58,7 +59,7 @@ struct VideoCellContent: View {
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 4)
-                                .background(Color.accentColor.opacity(0.92), in: Capsule())
+                                .background(badgeColor.opacity(0.92), in: Capsule())
                             Spacer(minLength: 0)
                         }
                         Spacer(minLength: 0)
@@ -78,13 +79,13 @@ struct VideoCellContent: View {
             }
 
             if showMetadata {
-                Text(video.title)
+                HighlightedText(video.title, terms: highlightTerms)
                     .font(GridConstants.titleFont(for: thumbnailSize))
                     .lineLimit(2)
                     .foregroundStyle(.primary)
 
                 if let channel = video.channelName {
-                    Text(channel)
+                    HighlightedText(channel, terms: highlightTerms)
                         .font(GridConstants.channelFont(for: thumbnailSize))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

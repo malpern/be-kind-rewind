@@ -85,17 +85,46 @@ extension OrganizerStore {
 
                 AppLogger.sync.info("Syncing \(pendingActions.count, privacy: .public) pending browser actions for \(reason, privacy: .public)")
                 try store.markInProgress(ids: pendingActions.map(\.id))
-                let result = try await BrowserSyncService(environment: runtimeEnvironment).execute(actions: pendingActions)
-                try store.markSynced(ids: result.syncedActionIDs)
-                let retryDelay = SyncCoordinator.retryDelay(for: result.failures)
-                try store.markFailed(result.failures, retryAfter: retryDelay)
+                do {
+                    let result = try await BrowserSyncService(environment: runtimeEnvironment).execute(actions: pendingActions)
+                    try store.markSynced(ids: result.syncedActionIDs)
+                    // Mark any action that didn't show up in successes OR
+                    // failures as failed-for-retry. Otherwise a partially-
+                    // returning script leaves rows stuck in `inProgress`,
+                    // which stale-recovery replays next launch — causing the
+                    // user to see the same action executed twice.
+                    let accountedFor = Set(result.syncedActionIDs)
+                        .union(result.failures.map(\.id))
+                    let unaccounted = pendingActions
+                        .map(\.id)
+                        .filter { !accountedFor.contains($0) }
+                    let combinedFailures = result.failures + unaccounted.map { id in
+                        SyncFailureRecord(id: id, message: "Browser sync returned no status for this action.")
+                    }
+                    let retryDelay = SyncCoordinator.retryDelay(for: combinedFailures)
+                    try store.markFailed(combinedFailures, retryAfter: retryDelay)
 
-                if let firstFailure = result.failures.first {
-                    AppLogger.sync.error("Browser sync failure: \(firstFailure.message, privacy: .public)")
-                    // Non-blocking: log the error and surface via the sidebar
-                    // status footer instead of a modal alert that interrupts
-                    // rapid curation. The actions remain queued for retry.
-                    lastSyncErrorMessage = firstFailure.message
+                    if let firstFailure = combinedFailures.first {
+                        AppLogger.sync.error("Browser sync failure: \(firstFailure.message, privacy: .public)")
+                        // Non-blocking: log the error and surface via the sidebar
+                        // status footer instead of a modal alert that interrupts
+                        // rapid curation. The actions remain queued for retry.
+                        lastSyncErrorMessage = firstFailure.message
+                        lastSyncErrorIsBrowser = true
+                    }
+                } catch {
+                    // Exception during browser execution (timeout, JSON parse,
+                    // process crash). Rows are still `inProgress` at this
+                    // point; without marking them failed here, stale-recovery
+                    // will replay them on next launch even though the browser
+                    // may have already completed the work.
+                    AppLogger.sync.error("Browser sync execution failed: \(error.localizedDescription, privacy: .public)")
+                    let failures = pendingActions.map { action in
+                        SyncFailureRecord(id: action.id, message: error.localizedDescription)
+                    }
+                    let retryDelay = SyncCoordinator.retryDelay(for: failures)
+                    try? store.markFailed(failures, retryAfter: retryDelay)
+                    lastSyncErrorMessage = error.localizedDescription
                     lastSyncErrorIsBrowser = true
                 }
 

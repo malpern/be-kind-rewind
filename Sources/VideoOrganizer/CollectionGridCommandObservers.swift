@@ -11,7 +11,8 @@ final class CollectionGridCommandObservers {
         dismissCandidates: @escaping @MainActor () -> Void,
         notInterested: @escaping @MainActor () -> Void,
         openOnYouTube: @escaping @MainActor () -> Void,
-        clearSelection: @escaping @MainActor () -> Void
+        clearSelection: @escaping @MainActor () -> Void,
+        toggleShowDismissed: @escaping @MainActor () -> Void
     ) {
         guard tokens.isEmpty else { return }
         let center = NotificationCenter.default
@@ -36,6 +37,9 @@ final class CollectionGridCommandObservers {
             },
             center.addObserver(forName: AppCommandBridge.clearSelection, object: nil, queue: .main) { _ in
                 Task { @MainActor in clearSelection() }
+            },
+            center.addObserver(forName: AppCommandBridge.toggleShowDismissed, object: nil, queue: .main) { _ in
+                Task { @MainActor in toggleShowDismissed() }
             }
         ]
     }

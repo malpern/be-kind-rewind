@@ -28,10 +28,23 @@ struct TopicSidebar: View {
 
     private var filteredTopics: [TopicViewModel] {
         let query = store.parsedQuery
-        guard !query.isEmpty else { return store.topics }
-        return store.topics.filter { topic in
-            store.topicMatchesSearch(topic, query: query)
+        let base: [TopicViewModel]
+        if query.isEmpty {
+            base = store.topics
+        } else {
+            // Keep topics that have actual video matches (published by
+            // loadAndFilter), plus any whose own name/metadata matches the query.
+            base = store.topics.filter { topic in
+                if (store.searchMatchesByTopic[topic.id] ?? 0) > 0 { return true }
+                return store.topicMatchesSearch(topic, query: query)
+            }
         }
+        // In Watch mode, hide topics with no eligible candidate videos so
+        // the rail only shows topics the user can actually watch.
+        if isWatchMode {
+            return base.filter { displayedCount(for: $0) > 0 }
+        }
+        return base
     }
 
     /// In Watch mode, selection is topic-only; in Saved mode, subtopic selection takes priority.
@@ -703,9 +716,15 @@ struct TopicSidebar: View {
     }
 
     /// Returns the count shown next to a topic row — saved video count or watch candidate count.
+    /// When a search is active (library mode), shows the count of matching videos in this topic.
     private func displayedCount(for topic: TopicViewModel) -> Int {
-        guard isWatchMode else { return topic.videoCount }
-        return store.recentCandidateVideosForTopic(topic.id).count
+        if isWatchMode {
+            return store.recentCandidateVideosForTopic(topic.id).count
+        }
+        if !store.parsedQuery.isEmpty {
+            return store.searchMatchesByTopic[topic.id] ?? 0
+        }
+        return topic.videoCount
     }
 
     private func displayedCount(forSubtopic subtopic: TopicViewModel, parentTopicId: Int64) -> Int {

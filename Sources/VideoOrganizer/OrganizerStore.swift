@@ -88,6 +88,10 @@ final class OrganizerStore {
     var searchText: String = ""
     var parsedQuery: SearchQuery { SearchQuery(searchText) }
     var searchResultCount: Int = 0
+    /// Per-topic counts of videos matching the current search query.
+    /// Populated by CollectionGridView.loadAndFilter whenever the filter runs.
+    /// Empty when no search is active.
+    var searchMatchesByTopic: [Int64: Int] = [:]
 
     // Page-level center-pane mode (persisted across launches)
     var pageDisplayMode: TopicDisplayMode = {
@@ -100,6 +104,9 @@ final class OrganizerStore {
     }() {
         didSet { UserDefaults.standard.set(watchPresentationMode.rawValue, forKey: "watchPresentationMode") }
     }
+    /// When true, the Watch grid includes dismissed candidates (shown
+    /// with a red "Dismissed" badge). Pressing 'd' on one restores it.
+    var showDismissedCandidates: Bool = false
     var candidateErrors: [Int64: String] = [:]
     var candidateLoadingTopics: Set<Int64> = []
     var candidateProgressByTopic: [Int64: Double] = [:]
@@ -701,6 +708,10 @@ final class OrganizerStore {
     }
 
     func badgeTagForVideo(_ videoId: String, candidateState: String? = nil, topicId: Int64? = nil, channelId: String? = nil, candidateReason: String? = nil) -> String? {
+        // Dismissed badge takes highest priority when showing dismissed videos
+        if candidateState == CandidateState.dismissed.rawValue {
+            return "Dismissed"
+        }
         let playlists = playlistsByVideoId[videoId] ?? []
         if playlists.contains(where: { $0.playlistId == "WL" }) {
             return "Watch Later"
@@ -1130,7 +1141,12 @@ final class OrganizerStore {
     /// the top-12, causing 20+ impressions per refresh cycle).
     func rebuildWatchPools(trackImpressions: Bool = false) {
         let startedAt = ContinuousClock.now
-        let perTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
+
+        // Only iterate topics that have stored candidates — skips ~162
+        // library-only topics that never participate in Watch mode.
+        let watchTopics = topics.filter { storedCandidateVideosByTopic[$0.id]?.isEmpty == false }
+
+        let perTopic = Dictionary(uniqueKeysWithValues: watchTopics.map { topic in
             (
                 topic.id,
                 CandidateDiscoveryCoordinator.recentEligibleWatchVideos(
@@ -1152,7 +1168,7 @@ final class OrganizerStore {
 
         // Rerank the global pool (Show All mode)
         rankedWatchPool = CandidateDiscoveryCoordinator.rerankWatchVideos(
-            topics.flatMap { assigned[$0.id] ?? [] },
+            watchTopics.flatMap { assigned[$0.id] ?? [] },
             store: self,
             seenCache: seenCache
         )
@@ -1197,22 +1213,35 @@ final class OrganizerStore {
         watchPoolVersion &+= 1
         let duration = startedAt.duration(to: .now)
         AppLogger.discovery.info(
-            "Rebuilt Watch pools for \(self.topics.count, privacy: .public) topics in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public); ranked candidates: \(self.rankedWatchPool.count, privacy: .public)"
+            "Rebuilt Watch pools for \(watchTopics.count, privacy: .public)/\(self.topics.count, privacy: .public) topics in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public); ranked candidates: \(self.rankedWatchPool.count, privacy: .public)"
         )
     }
 
     func reloadStoredCandidateCaches() {
-        storedCandidateVideosByTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
+        let startedAt = ContinuousClock.now
+        // Only query topics that actually have candidates in the DB.
+        // With 185 topics but only ~23 having candidates, this skips
+        // ~324 pointless SQLite queries (162 topics × 2 queries each).
+        let activeIds: Set<Int64>
+        do {
+            activeIds = try store.watchActiveTopicIds()
+        } catch {
+            AppLogger.discovery.error("Failed to load watch-active topic IDs, falling back to all topics: \(error.localizedDescription, privacy: .public)")
+            activeIds = Set(topics.map(\.id))
+        }
+        let watchTopics = topics.filter { activeIds.contains($0.id) }
+
+        storedCandidateVideosByTopic = Dictionary(uniqueKeysWithValues: watchTopics.map { topic in
             let candidates: [TopicCandidate]
             do {
-                candidates = try store.candidatesForTopic(id: topic.id, limit: 36)
+                candidates = try store.candidatesForTopic(id: topic.id, limit: 36, includingDismissed: showDismissedCandidates)
             } catch {
                 AppLogger.discovery.error("Failed to load candidates for topic \(topic.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 candidates = []
             }
             return (topic.id, candidates.map(CandidateVideoViewModel.init(from:)))
         })
-        candidateSourcesByTopic = Dictionary(uniqueKeysWithValues: topics.map { topic in
+        candidateSourcesByTopic = Dictionary(uniqueKeysWithValues: watchTopics.map { topic in
             let sources: [String: [CandidateSourceRecord]]
             do {
                 sources = try store.candidateSourcesForTopic(id: topic.id)
@@ -1222,12 +1251,14 @@ final class OrganizerStore {
             }
             return (topic.id, sources)
         })
+        let duration = startedAt.duration(to: .now)
+        AppLogger.file.log("⏱ reloadStoredCandidateCaches: \(watchTopics.count)/\(self.topics.count) topics in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)))", category: "perf")
     }
 
     func reloadStoredCandidateCache(for topicId: Int64) {
         let candidates: [TopicCandidate]
         do {
-            candidates = try store.candidatesForTopic(id: topicId, limit: 36)
+            candidates = try store.candidatesForTopic(id: topicId, limit: 36, includingDismissed: showDismissedCandidates)
         } catch {
             AppLogger.discovery.error("Failed to reload candidates for topic \(topicId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             candidates = []

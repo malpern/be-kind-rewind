@@ -77,14 +77,10 @@ extension OrganizerStore {
         selectedVideoId = nil
         hoveredVideoId = nil
 
-        // 4. Debounced full rebuild (runs after rapid curation settles)
-        debouncedWatchRebuildTask?.cancel()
-        debouncedWatchRebuildTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            self?.reloadStoredCandidateCaches()
-            self?.rebuildWatchPools()
-        }
+        // No debounced rebuild — the optimistic in-memory removal above
+        // is sufficient. Full rebuilds happen on page switch, refresh,
+        // and app launch; doing one here blocks the main thread for
+        // ~250ms and causes a visible hitch.
     }
 
     func excludeCreatorFromWatch(channelId: String?, channelName: String?, channelIconUrl: String? = nil) {
@@ -224,6 +220,7 @@ extension OrganizerStore {
     /// so the badge appears instantly. The expensive full rebuild is
     /// debounced (same pattern as dismissCandidates).
     func saveCandidateToPlaylist(topicId: Int64, videoId: String, playlist: PlaylistRecord) {
+        let t0 = ContinuousClock.now
         do {
             if playlistsByVideoId[videoId]?.contains(where: { $0.playlistId == playlist.playlistId }) == true {
                 return
@@ -239,6 +236,7 @@ extension OrganizerStore {
             ))
             try store.queueCommit(action: "add_to_playlist", videoId: videoId, playlist: playlist.playlistId)
             try store.setCandidateState(topicId: topicId, videoId: videoId, state: .saved)
+            let afterSql = ContinuousClock.now
 
             // 2. Optimistic in-memory update (instant badge)
             playlistsByVideoId[videoId, default: []].append(playlist)
@@ -246,15 +244,10 @@ extension OrganizerStore {
 
             AppLogger.discovery.info("Queued add_to_playlist for candidate \(videoId, privacy: .public) -> \(playlist.playlistId, privacy: .public)")
 
-            // 3. Background: API sync + debounced full rebuild
+            // 3. Background: API sync (no debounced rebuild — optimistic
+            // update is sufficient, rebuild happens on page switch/refresh)
             processPendingSync(reason: playlist.playlistId == "WL" ? "save-candidate-watch-later" : "save-candidate")
-            debouncedWatchRebuildTask?.cancel()
-            debouncedWatchRebuildTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(500))
-                guard !Task.isCancelled else { return }
-                self?.rebuildPlaylistMaps()
-                self?.rebuildWatchPools()
-            }
+            AppLogger.file.log("⏱ saveCandidateToPlaylist: sql=\((t0.duration(to: afterSql)).formatted(.units(allowed: [.milliseconds], width: .narrow))) total=\((t0.duration(to: .now)).formatted(.units(allowed: [.milliseconds], width: .narrow)))", category: "perf")
         } catch {
             AppLogger.discovery.error("Failed to queue add_to_playlist for candidate \(videoId, privacy: .public): \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
@@ -300,13 +293,6 @@ extension OrganizerStore {
             candidateRefreshToken += 1
             AppLogger.discovery.info("Queued add_to_playlist for \(videoIds.count, privacy: .public) saved videos -> \(playlist.playlistId, privacy: .public)")
             processPendingSync(reason: playlist.playlistId == "WL" ? "save-library-videos-watch-later" : "save-library-videos")
-            debouncedWatchRebuildTask?.cancel()
-            debouncedWatchRebuildTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .milliseconds(500))
-                guard !Task.isCancelled else { return }
-                self?.rebuildPlaylistMaps()
-                self?.rebuildWatchPools()
-            }
         } catch {
             AppLogger.discovery.error("Failed to queue add_to_playlist for saved videos: \(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription

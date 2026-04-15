@@ -231,7 +231,7 @@ public struct BrowserSyncService: Sendable {
         return formatter.string(from: Date())
     }
 
-    private func runProcess(arguments: [String]) async throws -> ProcessExecutionResult {
+    private func runProcess(arguments: [String], timeout: Duration = .seconds(180)) async throws -> ProcessExecutionResult {
         let process = Process()
         process.currentDirectoryURL = environment.repoRoot()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -243,16 +243,43 @@ public struct BrowserSyncService: Sendable {
         process.standardError = stderr
         try process.run()
 
-        return try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { process in
-                let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-                continuation.resume(returning: ProcessExecutionResult(
-                    terminationStatus: process.terminationStatus,
-                    stdout: stdoutData,
-                    stderr: stderrData
-                ))
+        // Drain pipes concurrently while the process runs. Reading only in
+        // terminationHandler deadlocks when stderr exceeds the pipe buffer
+        // (~64KB on macOS): Playwright is chatty, child blocks on write,
+        // never exits, Swift hangs forever.
+        let stdoutReader = Task.detached {
+            (try? stdout.fileHandleForReading.readToEnd()) ?? Data()
+        }
+        let stderrReader = Task.detached {
+            (try? stderr.fileHandleForReading.readToEnd()) ?? Data()
+        }
+
+        return try await withThrowingTaskGroup(of: ProcessExecutionResult.self) { group in
+            group.addTask {
+                await withCheckedContinuation { continuation in
+                    process.terminationHandler = { process in
+                        Task {
+                            let stdoutData = await stdoutReader.value
+                            let stderrData = await stderrReader.value
+                            continuation.resume(returning: ProcessExecutionResult(
+                                terminationStatus: process.terminationStatus,
+                                stdout: stdoutData,
+                                stderr: stderrData
+                            ))
+                        }
+                    }
+                }
             }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                process.terminate()
+                stdoutReader.cancel()
+                stderrReader.cancel()
+                throw BrowserSyncError.executionFailed("Browser sync timed out after \(timeout)")
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 

@@ -30,7 +30,8 @@ struct HighlightedText: View {
             ) {
                 if let attrStart = AttributedString.Index(range.lowerBound, within: attributed),
                    let attrEnd = AttributedString.Index(range.upperBound, within: attributed) {
-                    attributed[attrStart..<attrEnd].foregroundColor = .accentColor
+                    attributed[attrStart..<attrEnd].backgroundColor = .yellow
+                    attributed[attrStart..<attrEnd].foregroundColor = .black
                     attributed[attrStart..<attrEnd].inlinePresentationIntent = .stronglyEmphasized
                 }
                 searchStart = range.upperBound

@@ -158,6 +158,13 @@ extension OrganizerStore {
         )
     }
 
+    func toggleShowDismissedCandidates() {
+        showDismissedCandidates.toggle()
+        reloadStoredCandidateCaches()
+        rebuildWatchPools()
+        candidateRefreshToken += 1
+    }
+
     func setCandidateState(topicId: Int64, videoId: String, state: CandidateState) {
         do {
             try store.setCandidateState(topicId: topicId, videoId: videoId, state: state)
@@ -1261,6 +1268,8 @@ enum CandidateDiscoveryCoordinator {
             return try store.store.archivedVideosForChannels([channel.channelId], perChannelLimit: 200)
         } catch {
             // Scraper failed — fall back to YouTube API if available
+            AppLogger.discovery.error("Channel archive scrape failed for \(channel.name, privacy: .public) (\(channel.channelId, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+            AppLogger.file.log("refreshChannelArchive(\(channel.name) / \(channel.channelId)) scrape FAILED: \(error.localizedDescription)", category: "discovery")
             guard let youtubeClient else { throw error }
 
             let approved = await store.requestAPIFallbackApproval(

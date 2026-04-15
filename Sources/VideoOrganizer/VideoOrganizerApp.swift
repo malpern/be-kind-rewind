@@ -433,6 +433,13 @@ private struct AppMenuCommands: Commands {
                 AppCommandBridge.post(AppCommandBridge.clearSelection)
             }
             .keyboardShortcut(.escape, modifiers: [])
+
+            Divider()
+
+            Button("Show Dismissed Videos") {
+                AppCommandBridge.post(AppCommandBridge.toggleShowDismissed)
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
         }
 
         CommandGroup(replacing: .help) {

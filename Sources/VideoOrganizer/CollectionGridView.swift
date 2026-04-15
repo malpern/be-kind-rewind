@@ -103,21 +103,40 @@ struct CollectionGridView: View {
             store: store,
             displaySettings: displaySettings
         )
+        let afterBuild = ContinuousClock.now
 
         let sectionsChanged = result.sections != sections
+        let afterCompare = ContinuousClock.now
         let searchCountChanged = result.searchResultCount != store.searchResultCount
 
         if searchCountChanged {
             store.searchResultCount = result.searchResultCount
         }
 
+        // Publish per-topic match counts so the sidebar can filter to topics
+        // with hits and show matching counts instead of raw totals.
+        if store.parsedQuery.isEmpty {
+            if !store.searchMatchesByTopic.isEmpty {
+                store.searchMatchesByTopic = [:]
+            }
+        } else {
+            var counts: [Int64: Int] = [:]
+            for section in result.sections where section.topicId > 0 {
+                counts[section.topicId, default: 0] += section.videos.count
+            }
+            if counts != store.searchMatchesByTopic {
+                store.searchMatchesByTopic = counts
+            }
+        }
+
         if sectionsChanged {
             sections = result.sections
             sectionGeneration += 1
         }
-        let duration = startedAt.duration(to: .now)
-        AppLogger.discovery.debug(
-            "loadAndFilter mode=\(self.store.pageDisplayMode.rawValue, privacy: .public) watchMode=\(self.store.watchPresentationMode.rawValue, privacy: .public) sections=\(result.sections.count, privacy: .public) results=\(result.searchResultCount, privacy: .public) changed=\(sectionsChanged, privacy: .public) in \(duration.formatted(.units(allowed: [.milliseconds], width: .narrow)), privacy: .public)"
+        let totalVideos = result.sections.reduce(0) { $0 + $1.videos.count }
+        AppLogger.file.log(
+            "⏱ loadAndFilter build=\((startedAt.duration(to: afterBuild)).formatted(.units(allowed: [.milliseconds], width: .narrow))) compare=\((afterBuild.duration(to: afterCompare)).formatted(.units(allowed: [.milliseconds], width: .narrow))) total=\((startedAt.duration(to: .now)).formatted(.units(allowed: [.milliseconds], width: .narrow))) sections=\(result.sections.count) videos=\(totalVideos) changed=\(sectionsChanged)",
+            category: "perf"
         )
     }
 
@@ -286,6 +305,9 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             container.collectionView.onClearSelectionShortcut = { [weak self] in
                 self?.handleClearSelectionShortcut()
             }
+            container.collectionView.onToggleShowDismissedShortcut = { [weak self] in
+                self?.handleToggleShowDismissedShortcut()
+            }
             container.onReadyForFlush = { [weak self] in
                 self?.flushIfReady()
             }
@@ -318,6 +340,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             if pendingGeneration != generation {
                 pendingSections = sections
                 pendingGeneration = generation
+                AppLogger.file.log("⏱ applySnapshot: new generation=\(generation) sections=\(sections.count) videos=\(sections.reduce(0) { $0 + $1.videos.count })", category: "perf")
             }
 
             if self.thumbnailSize != thumbnailSize || self.showMetadata != showMetadata {
@@ -362,6 +385,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 renderedGeneration = pendingGeneration
                 collectionView.reloadData()
             }
+            let afterReload = ContinuousClock.now
 
             let shouldInvalidateLayout = needsLayoutInvalidation || widthChanged
             if shouldInvalidateLayout {
@@ -370,9 +394,11 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 container.flowLayout.invalidateLayout()
             }
 
-            if shouldReload || shouldInvalidateLayout {
-                collectionView.layoutSubtreeIfNeeded()
-            }
+            // Skip forced synchronous layout — it takes ~950ms with 400
+            // items because every NSHostingView<VideoCellContent> must
+            // evaluate its SwiftUI body. Let AppKit schedule layout
+            // naturally in the next display cycle instead.
+            let afterLayout = ContinuousClock.now
 
             var didApplyScroll = false
             if let topicId = pendingScrollTopicId {
@@ -416,12 +442,8 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             refreshTopicScrollProgress()
             refreshViewportContext()
 
-            let duration = startedAt.duration(to: .now)
-            let millis = Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1_000_000_000_000_000
-            if millis >= 20 {
-                AppLogger.discovery.debug(
-                    "flushIfReady reload=\(shouldReload, privacy: .public) invalidate=\(shouldInvalidateLayout, privacy: .public) scroll=\(didApplyScroll, privacy: .public) sections=\(self.renderedSections.count, privacy: .public) took \(Int(millis), privacy: .public)ms"
-                )
+            if shouldReload || shouldInvalidateLayout {
+                AppLogger.file.log("⏱ flushIfReady reload=\(shouldReload) reloadData=\((startedAt.duration(to: afterReload)).formatted(.units(allowed: [.milliseconds], width: .narrow))) layout=\((afterReload.duration(to: afterLayout)).formatted(.units(allowed: [.milliseconds], width: .narrow))) total=\((startedAt.duration(to: .now)).formatted(.units(allowed: [.milliseconds], width: .narrow))) items=\(self.renderedSections.reduce(0) { $0 + $1.videos.count })", category: "perf")
             }
         }
 
@@ -982,6 +1004,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func handleSaveToWatchLaterShortcut() {
+            let t0 = ContinuousClock.now
             guard let store else { return }
             let videoIds = Array(renderedSelectedVideoIds)
             guard !videoIds.isEmpty else { return }
@@ -995,6 +1018,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 store.saveVideosToWatchLater(videoIds: videoIds)
             }
             showToast("Saved to Watch Later", "clock")
+            AppLogger.file.log("⏱ handleWatchLater: total=\((t0.duration(to: .now)).formatted(.units(allowed: [.milliseconds], width: .narrow)))", category: "perf")
         }
 
         private func handleSaveToPlaylistShortcut() {
@@ -1010,6 +1034,7 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
         }
 
         private func handleDismissShortcut() {
+            let t0 = ContinuousClock.now
             guard let store else {
                 AppLogger.commands.info("Dismiss: no store")
                 return
@@ -1023,10 +1048,28 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 AppLogger.commands.info("Dismiss: no selected videos")
                 return
             }
+
+            // If showing dismissed videos, 'd' on a dismissed video restores it
+            if store.showDismissedCandidates {
+                let dismissedVideoIds = videoIds.filter { id in
+                    renderedSections.flatMap(\.videos).first(where: { $0.id == id })?.stateTag == "Dismissed"
+                }
+                if !dismissedVideoIds.isEmpty {
+                    for videoId in dismissedVideoIds {
+                        store.setCandidateState(topicId: topicId, videoId: videoId, state: .candidate)
+                    }
+                    showToast("Restored", "arrow.uturn.backward.circle")
+                    return
+                }
+            }
+
             AppLogger.commands.info("Dismiss: \(videoIds.count) videos in topic \(topicId)")
             store.dismissCandidates(topicId: topicId, videoIds: videoIds)
+            let t1 = ContinuousClock.now
             autoAdvanceSelection()
+            let t2 = ContinuousClock.now
             showToast("Dismissed", "xmark.circle")
+            AppLogger.file.log("⏱ handleDismiss: store=\((t0.duration(to: t1)).formatted(.units(allowed: [.milliseconds], width: .narrow))) autoAdvance=\((t1.duration(to: t2)).formatted(.units(allowed: [.milliseconds], width: .narrow))) total=\((t0.duration(to: .now)).formatted(.units(allowed: [.milliseconds], width: .narrow)))", category: "perf")
         }
 
         private func handleNotInterestedShortcut() {
@@ -1076,15 +1119,20 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             showToast("Not for me", "xmark.circle.fill")
         }
 
-        /// After dismissing a video, auto-select the next card so the user
-        /// can keep hammering d/x/n without having to click between each.
+        /// After dismissing a video, auto-select the card that fills the
+        /// dismissed position so the user can keep hammering d without the
+        /// selection jumping to the start of the grid.
         private func autoAdvanceSelection() {
-            guard let collectionView else { return }
-            // Find the first non-placeholder video after the current selection
+            guard collectionView != nil else { return }
             let allVideos = renderedSections.flatMap(\.videos).filter { !$0.isPlaceholder }
             let dismissedIds = renderedSelectedVideoIds
+            // Find where the first dismissed video sat in the list
+            let dismissedIndex = allVideos.firstIndex { dismissedIds.contains($0.id) }
             let remaining = allVideos.filter { !dismissedIds.contains($0.id) }
-            if let next = remaining.first {
+            // Pick the video that fills the same position (or the last one if we dismissed the tail)
+            let targetIndex = min(dismissedIndex ?? 0, remaining.count - 1)
+            if targetIndex >= 0, targetIndex < remaining.count {
+                let next = remaining[targetIndex]
                 let nextId = next.id
                 // Brief delay so the pool removal propagates before we select
                 DispatchQueue.main.async { [weak self] in
@@ -1104,6 +1152,13 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
             CollectionGridActionSupport.handleOpenSelectedShortcut(selectedVideoIds: renderedSelectedVideoIds) {
                 contextOpenOnYouTube(nil)
             }
+        }
+
+        private func handleToggleShowDismissedShortcut() {
+            guard let store else { return }
+            store.toggleShowDismissedCandidates()
+            let showing = store.showDismissedCandidates
+            showToast(showing ? "Showing Dismissed" : "Hiding Dismissed", showing ? "eye" : "eye.slash")
         }
 
         private func handleClearSelectionShortcut() {
@@ -1199,7 +1254,8 @@ private struct CollectionGridRepresentable: NSViewRepresentable {
                 dismissCandidates: { [weak self] in self?.handleDismissShortcut() },
                 notInterested: { [weak self] in self?.handleNotInterestedShortcut() },
                 openOnYouTube: { [weak self] in self?.handleOpenSelectedShortcut() },
-                clearSelection: { [weak self] in self?.handleClearSelectionShortcut() }
+                clearSelection: { [weak self] in self?.handleClearSelectionShortcut() },
+                toggleShowDismissed: { [weak self] in self?.handleToggleShowDismissedShortcut() }
             )
         }
 

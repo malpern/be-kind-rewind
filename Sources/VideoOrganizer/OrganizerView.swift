@@ -14,6 +14,14 @@ struct OrganizerView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @Environment(\.openSettings) private var openSettings
 
+    /// False when the sidebar would only display topics the user can't
+    /// interact with (Watch + Show All ignores topic selection). True in
+    /// every other mode combination.
+    private var sidebarIsFunctional: Bool {
+        !(store.pageDisplayMode == .watchCandidates
+          && store.watchPresentationMode == .allTogether)
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             TopicSidebar(store: store, displaySettings: displaySettings, thumbnailCache: thumbnailCache)
@@ -72,10 +80,17 @@ struct OrganizerView: View {
                 // popping back to the grid root. The user's manual toggles via ⌘0 still
                 // work — we only flip on path transitions, not on every render.
                 if newPath.isEmpty {
-                    columnVisibility = .all
+                    columnVisibility = sidebarIsFunctional ? .all : .detailOnly
                 } else {
                     columnVisibility = .detailOnly
                 }
+            }
+            .onChange(of: sidebarIsFunctional) { _, newValue in
+                // Watch + Show All ignores topic selection, so the topic rail
+                // is just visual weight. Auto-collapse when entering that combo,
+                // restore when leaving. User can still override with ⌘0.
+                guard store.detailPath.isEmpty else { return }
+                columnVisibility = newValue ? .all : .detailOnly
             }
         }
         .overlay(alignment: .top) {

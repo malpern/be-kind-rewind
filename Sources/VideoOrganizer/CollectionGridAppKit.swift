@@ -413,6 +413,7 @@ final class ClickableCollectionView: NSCollectionView {
     var onNotForMeShortcut: (() -> Void)?
     var onOpenSelectedShortcut: (() -> Void)?
     var onClearSelectionShortcut: (() -> Void)?
+    var onToggleShowDismissedShortcut: (() -> Void)?
 
     private let marqueeLayer = CAShapeLayer()
     private var marqueeStartPoint: NSPoint?
@@ -515,6 +516,11 @@ final class ClickableCollectionView: NSCollectionView {
         if modifiers.isEmpty,
            event.keyCode == 36 || event.keyCode == 76 {
             onOpenSelectedShortcut?()
+            return
+        }
+        // Shift+Command+A → toggle showing dismissed candidates
+        if modifiers == [.shift, .command], key == "a" {
+            onToggleShowDismissedShortcut?()
             return
         }
         // Escape → clear selection

@@ -421,6 +421,9 @@ public final class TopicStore: Sendable {
         try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_candidates_topic_video ON topic_candidates(topic_id, video_id)")
         try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_sources_unique ON candidate_sources(topic_id, video_id, source_kind, source_ref)")
         try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_candidate_state_unique ON candidate_state(topic_id, video_id)")
+        // Covers the cross-topic dismiss subquery in candidatesForTopic:
+        // NOT EXISTS (SELECT 1 FROM candidate_state WHERE video_id = ? AND state IN (...))
+        try db.run("CREATE INDEX IF NOT EXISTS idx_candidate_state_video ON candidate_state(video_id, state)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_topic_candidates_topic_score ON topic_candidates(topic_id, score DESC)")
         try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_discovery_archive_unique ON channel_discovery_archive(channel_id, video_id)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_channel_discovery_archive_channel_published ON channel_discovery_archive(channel_id, published_at DESC)")
@@ -1300,34 +1303,57 @@ public final class TopicStore: Sendable {
         }
     }
 
-    public func candidatesForTopic(id topicId: Int64, limit: Int? = nil) throws -> [TopicCandidate] {
-        var query = """
-            SELECT c.topic_id, c.video_id, c.title, c.channel_id, c.channel_name, c.video_url,
-                   c.view_count, c.published_at, c.duration, c.channel_icon_url, c.score, c.reason,
-                   COALESCE(s.state, 'candidate') AS state, c.discovered_at
-            FROM topic_candidates c
-            LEFT JOIN candidate_state s
-              ON s.topic_id = c.topic_id AND s.video_id = c.video_id
-            WHERE c.topic_id = ?
-              AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched')
-              -- Also exclude videos dismissed in ANY topic, not just this one.
-              -- Without this, dismissing a video in topic A still shows it in
-              -- topic B because candidate_state is keyed on (topic_id, video_id).
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM candidate_state cs2
-                  WHERE cs2.video_id = c.video_id
-                    AND cs2.state IN ('dismissed', 'watched')
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM seen_videos sv
-                  WHERE sv.video_id = c.video_id
-                    AND sv.video_id IS NOT NULL
-                    AND sv.source != 'app'
-              )
-            ORDER BY c.score DESC, c.published_at DESC
-        """
+    public func candidatesForTopic(id topicId: Int64, limit: Int? = nil, includingDismissed: Bool = false) throws -> [TopicCandidate] {
+        var query: String
+        if includingDismissed {
+            // Show all candidates including dismissed ones (but still exclude watched/seen).
+            query = """
+                SELECT c.topic_id, c.video_id, c.title, c.channel_id, c.channel_name, c.video_url,
+                       c.view_count, c.published_at, c.duration, c.channel_icon_url, c.score, c.reason,
+                       COALESCE(s.state, 'candidate') AS state, c.discovered_at
+                FROM topic_candidates c
+                LEFT JOIN candidate_state s
+                  ON s.topic_id = c.topic_id AND s.video_id = c.video_id
+                WHERE c.topic_id = ?
+                  AND COALESCE(s.state, 'candidate') NOT IN ('watched')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM seen_videos sv
+                      WHERE sv.video_id = c.video_id
+                        AND sv.video_id IS NOT NULL
+                        AND sv.source != 'app'
+                  )
+                ORDER BY c.score DESC, c.published_at DESC
+            """
+        } else {
+            query = """
+                SELECT c.topic_id, c.video_id, c.title, c.channel_id, c.channel_name, c.video_url,
+                       c.view_count, c.published_at, c.duration, c.channel_icon_url, c.score, c.reason,
+                       COALESCE(s.state, 'candidate') AS state, c.discovered_at
+                FROM topic_candidates c
+                LEFT JOIN candidate_state s
+                  ON s.topic_id = c.topic_id AND s.video_id = c.video_id
+                WHERE c.topic_id = ?
+                  AND COALESCE(s.state, 'candidate') NOT IN ('dismissed', 'watched')
+                  -- Also exclude videos dismissed in ANY topic, not just this one.
+                  -- Without this, dismissing a video in topic A still shows it in
+                  -- topic B because candidate_state is keyed on (topic_id, video_id).
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM candidate_state cs2
+                      WHERE cs2.video_id = c.video_id
+                        AND cs2.state IN ('dismissed', 'watched')
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM seen_videos sv
+                      WHERE sv.video_id = c.video_id
+                        AND sv.video_id IS NOT NULL
+                        AND sv.source != 'app'
+                  )
+                ORDER BY c.score DESC, c.published_at DESC
+            """
+        }
         if let limit {
             query += " LIMIT \(limit)"
         }
@@ -1437,6 +1463,20 @@ public final class TopicStore: Sendable {
             return row[0] as? String
         }
         return nil
+    }
+
+    /// Returns the set of topic IDs that have at least one row in
+    /// `topic_candidates`. Used to scope rebuild queries to only the
+    /// topics that participate in Watch mode.
+    public func watchActiveTopicIds() throws -> Set<Int64> {
+        let query = "SELECT DISTINCT topic_id FROM topic_candidates"
+        var ids = Set<Int64>()
+        for row in try db.prepare(query) {
+            if let id = row[0] as? Int64 {
+                ids.insert(id)
+            }
+        }
+        return ids
     }
 
     public func upsertChannelDiscoveryArchive(channelId: String, videos: [ArchivedChannelVideo], scannedAt: String) throws {

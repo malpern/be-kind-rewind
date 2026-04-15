@@ -896,9 +896,10 @@ struct CreatorDetailView: View {
     @ViewBuilder
     private var avatar: some View {
         Group {
-            if page.avatarData != nil {
-                avatarLowResOrFallback
-            } else if let url = page.avatarUrl {
+            if let url = page.avatarUrl {
+                // Progressive load: show cached low-res blob as a
+                // placeholder (avoids blank flash), swap to high-res when
+                // network returns, fall back to blob on failure/offline.
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .empty:

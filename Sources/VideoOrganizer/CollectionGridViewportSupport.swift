@@ -104,6 +104,9 @@ enum CollectionGridViewportSupport {
                 "refreshVisibleHeaders count=\(refreshedCount, privacy: .public) took \(Int(millis), privacy: .public)ms"
             )
         }
+        if millis >= 50 {
+            AppLogger.file.log("⏱ refreshVisibleHeaders count=\(refreshedCount) took \(Int(millis))ms", category: "perf")
+        }
     }
 
     static func refreshTopicScrollProgress(

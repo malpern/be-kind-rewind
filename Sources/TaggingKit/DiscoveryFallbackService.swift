@@ -264,23 +264,37 @@ public struct DiscoveryFallbackService: Sendable {
         process.standardError = stderr
         try process.run()
 
+        // Drain pipes concurrently while the process runs. Reading only in
+        // terminationHandler deadlocks when output exceeds the pipe buffer
+        // (~64KB on macOS): child blocks on write, never exits, timeout fires.
+        let stdoutReader = Task.detached {
+            (try? stdout.fileHandleForReading.readToEnd()) ?? Data()
+        }
+        let stderrReader = Task.detached {
+            (try? stderr.fileHandleForReading.readToEnd()) ?? Data()
+        }
+
         return try await withThrowingTaskGroup(of: ProcessExecutionResult.self) { group in
             group.addTask {
                 await withCheckedContinuation { continuation in
                     process.terminationHandler = { process in
-                        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-                        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-                        continuation.resume(returning: ProcessExecutionResult(
-                            terminationStatus: process.terminationStatus,
-                            stdout: stdoutData,
-                            stderr: stderrData
-                        ))
+                        Task {
+                            let stdoutData = await stdoutReader.value
+                            let stderrData = await stderrReader.value
+                            continuation.resume(returning: ProcessExecutionResult(
+                                terminationStatus: process.terminationStatus,
+                                stdout: stdoutData,
+                                stderr: stderrData
+                            ))
+                        }
                     }
                 }
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
                 process.terminate()
+                stdoutReader.cancel()
+                stderrReader.cancel()
                 throw DiscoveryFallbackError.executionFailed("Process timed out after \(timeout)")
             }
             let result = try await group.next()!
